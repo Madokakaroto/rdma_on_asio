@@ -1,0 +1,6 @@
+[submodule "third_party/asio"]
+	path = third_party/asio
+	url = https://github.com/chriskohlhoff/asio.git
+[submodule "third_party/networkdirect"]
+	path = third_party/networkdirect
+	url = https://github.com/microsoft/NetworkDirect.git

@@ -7,6 +7,36 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# NetworkDirect
+set(ND_DIR ${CMAKE_SOURCE_DIR}/third_party/networkdirect/src/ndutil)
+
+find_program(MC_EXE mc.exe
+    HINTS "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64"
+)
+
+add_custom_command(
+    OUTPUT ${ND_DIR}/ndstatus.h
+    COMMAND ${MC_EXE} -h ${ND_DIR} ${ND_DIR}/ndstatus.mc
+    DEPENDS ${ND_DIR}/ndstatus.mc
+    COMMENT "Generating ndstatus.h from ndstatus.mc"
+)
+
+add_library(ndutil STATIC
+    ${ND_DIR}/ndaddr.cpp
+    ${ND_DIR}/ndfrmwrk.cpp
+    ${ND_DIR}/ndprov.cpp
+    ${ND_DIR}/ndstatus.h
+)
+target_include_directories(ndutil PUBLIC ${ND_DIR})
+target_link_libraries(ndutil PUBLIC ws2_32)
+
+# Main executable
 add_executable(${PROJECT_NAME} src/main.cpp)
 
-target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_include_directories(${PROJECT_NAME} PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party/asio/asio/include
+)
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE ASIO_STANDALONE)
+target_link_libraries(${PROJECT_NAME} PRIVATE ndutil)
