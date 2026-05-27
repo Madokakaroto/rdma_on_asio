@@ -9,14 +9,16 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # NetworkDirect
 set(ND_DIR ${CMAKE_SOURCE_DIR}/third_party/networkdirect/src/ndutil)
+set(ND_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/networkdirect)
+file(MAKE_DIRECTORY ${ND_GENERATED_DIR})
 
 find_program(MC_EXE mc.exe
     HINTS "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64"
 )
 
 add_custom_command(
-    OUTPUT ${ND_DIR}/ndstatus.h
-    COMMAND ${MC_EXE} -h ${ND_DIR} ${ND_DIR}/ndstatus.mc
+    OUTPUT ${ND_GENERATED_DIR}/ndstatus.h
+    COMMAND ${MC_EXE} -h ${ND_GENERATED_DIR} ${ND_DIR}/ndstatus.mc
     DEPENDS ${ND_DIR}/ndstatus.mc
     COMMENT "Generating ndstatus.h from ndstatus.mc"
 )
@@ -25,9 +27,9 @@ add_library(ndutil STATIC
     ${ND_DIR}/ndaddr.cpp
     ${ND_DIR}/ndfrmwrk.cpp
     ${ND_DIR}/ndprov.cpp
-    ${ND_DIR}/ndstatus.h
+    ${ND_GENERATED_DIR}/ndstatus.h
 )
-target_include_directories(ndutil PUBLIC ${ND_DIR})
+target_include_directories(ndutil PUBLIC ${ND_DIR} ${ND_GENERATED_DIR})
 target_link_libraries(ndutil PUBLIC ws2_32)
 
 # Main executable
