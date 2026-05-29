@@ -88,7 +88,7 @@ public:
     return 0;
   }
 
-  IND2CompletionQueue* native_handle() const noexcept { return cq_.Get(); }
+  detail::native_cq_t* native_handle() const noexcept { return cq_.Get(); }
 
 private:
   static void dispatch_completion(detail::native_wc_t const& wc) {

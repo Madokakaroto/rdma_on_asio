@@ -3,7 +3,7 @@
 #include <system_error>
 
 #include "nd/nd_device.hpp"
-#include "nd/nd_portspace.hpp"
+#include "rdma/tcp.hpp"
 
 void test_singleton() {
   auto const& mgr1 = asio::rdma::nd_device_manager_t::instance();
@@ -16,7 +16,7 @@ void test_get_first_available_device_v4() {
   auto const& mgr = asio::rdma::nd_device_manager_t::instance();
   asio::rdma::nd_config_t config{};
   auto device =
-      mgr.get_first_available_device(asio::rdma::roce::v2::tcp::v4(), config);
+      mgr.get_first_available_device(asio::rdma::tcp::v4(), config);
   if (device) {
     assert(device->adapter_ != nullptr);
     assert(!device->name_.empty());
@@ -33,7 +33,7 @@ void test_get_first_available_device_v6() {
   auto const& mgr = asio::rdma::nd_device_manager_t::instance();
   asio::rdma::nd_config_t config{};
   auto device =
-      mgr.get_first_available_device(asio::rdma::roce::v2::tcp::v6(), config);
+      mgr.get_first_available_device(asio::rdma::tcp::v6(), config);
   if (device) {
     assert(device->adapter_ != nullptr);
     assert(!device->name_.empty());
@@ -52,7 +52,7 @@ void test_get_device_with_strict_config() {
   config.cqe_ = 0xFFFFFFFF;
   config.max_send_wr_ = 0xFFFFFFFF;
   auto device =
-      mgr.get_first_available_device(asio::rdma::roce::v2::tcp::v4(), config);
+      mgr.get_first_available_device(asio::rdma::tcp::v4(), config);
   assert(device == nullptr);
   std::cout << "[PASS] get_first_available_device: impossible config returns "
                "nullptr\n";

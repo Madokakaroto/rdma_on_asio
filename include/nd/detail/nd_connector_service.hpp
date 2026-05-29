@@ -7,7 +7,6 @@
 #include "nd/detail/nd_service_base.hpp"
 #include "nd/detail/nd_io_completion_service.hpp"
 #include "nd/detail/nd_ops_cm.hpp"
-#include "nd/detail/nd_ops_verbs.hpp"
 #include "nd/detail/nd_op_connect.hpp"
 #include "nd/detail/nd_config_derive.hpp"
 
@@ -38,7 +37,7 @@ public:
   struct implementation_type : nd_service_base::base_implementation_type {
     nd2_connector_ptr connector_;
     unique_handle_t connector_handle_;
-    IND2QueuePair* qp_ = nullptr;
+    native_qp_t* qp_ = nullptr;
     nd_adapter_ptr adapter_;
     nd_config_t config_;
   };
@@ -103,7 +102,7 @@ public:
   }
 
   // open (client: create new connector)
-  void open(implementation_type& impl, IND2QueuePair* qp,
+  void open(implementation_type& impl, native_qp_t* qp,
             nd_config_t const& config, asio::error_code& ec) {
     if (impl.connector_) {
       ec = asio::error::already_open;
@@ -156,7 +155,7 @@ public:
 
   // open (server: from native connector handle)
   void open(implementation_type& impl, nd_connector_handle_t&& handle,
-            IND2QueuePair* qp, nd_config_t const& config,
+            native_qp_t* qp, nd_config_t const& config,
             asio::error_code& ec) {
     if (impl.connector_) {
       ec = asio::error::already_open;

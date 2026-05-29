@@ -44,13 +44,28 @@ using nd2_connector_ptr = Microsoft::WRL::ComPtr<IND2Connector>;
 using nd2_listener_ptr = Microsoft::WRL::ComPtr<IND2Listener>;
 using nd2_queue_pair_ptr = Microsoft::WRL::ComPtr<IND2QueuePair>;
 using nd2_completion_queue_ptr = Microsoft::WRL::ComPtr<IND2CompletionQueue>;
-using nd2_overlapped_ptr = Microsoft::WRL::ComPtr<IND2Overlapped>;
 using nd2_memory_region_ptr = Microsoft::WRL::ComPtr<IND2MemoryRegion>;
 using class_factory_ptr = Microsoft::WRL::ComPtr<IClassFactory>;
 
 using dll_can_unload_now = HRESULT (*)(void);
 using dll_get_class_object = HRESULT (*)(REFCLSID rclsid, REFIID rrid,
                                          LPVOID* ppv);
+
+// native type aliases for the { windows, network-direct } platform
+using native_context_t = IND2Adapter;
+using native_connector_t = IND2Connector;
+using native_listener_t = IND2Listener;
+using native_qp_t = IND2QueuePair;
+using native_cq_t = IND2CompletionQueue;
+using native_mr_t = IND2MemoryRegion;
+using native_sge_t = ND2_SGE;
+using native_wc_t = ND2_RESULT;
+using native_context_config_t = ND2_ADAPTER_INFO;
+
+struct native_pd_t {
+  native_context_t* context_;
+  unique_handle_t sync_handle_;
+};
 
 struct nd2_sockaddr_t {
   union {
@@ -75,8 +90,8 @@ struct nd2_cq_notify_attr {
 
 struct nd2_qp_init_attr {
   void* qp_context_;
-  IND2CompletionQueue* rcq_;  // receive completion queue
-  IND2CompletionQueue* icq_;  // initiator completion queue
+  native_cq_t* rcq_;         // receive completion queue
+  native_cq_t* icq_;         // initiator completion queue
   ULONG max_send_wr_;         // max send work requests
   ULONG max_recv_wr_;         // max recv work requests
   ULONG max_send_sge_;        // max send num of scatter/gather elements
@@ -84,21 +99,9 @@ struct nd2_qp_init_attr {
   ULONG max_inline_data_;     // max payload data size in a packet
 };
 
-// native type definition for the { windows, network-direct } platform
-using native_context_t = IND2Adapter;
-struct native_pd_t {
-  native_context_t* context_;
-  unique_handle_t sync_handle_;
-};
-using native_qp_t = IND2QueuePair;
-using native_cq_t = IND2CompletionQueue;
-using native_mr_t = IND2MemoryRegion;
-using native_sge_t = ND2_SGE;
-using native_wc_t = ND2_RESULT;
 using native_qp_init_attr = nd2_qp_init_attr;
 using native_cq_init_attr = nd2_cq_init_attr;
 using native_cq_notify_attr = nd2_cq_notify_attr;
-using native_context_config_t = ND2_ADAPTER_INFO;
 
 // factory type
 struct nd_provider_factory_t {
@@ -143,18 +146,6 @@ struct nd_connector_state_t {
 };
 using nd_connector_state_ptr = std::shared_ptr<nd_connector_state_t>;
 
-// shared state for listener
-struct nd_listener_state_t {
-  // overlapped handle to receive IO completion
-  unique_handle_t overlapped_handle_;
-  // the network-direct listener interface 
-  nd2_listener_ptr listener_;
-  // configuration to create this shared state
-  nd_config_t config_;
-  // device that creates this state
-  nd_adapter_ptr adapter_;
-};
-using nd_listener_state_ptr = std::shared_ptr<nd_listener_state_t>;
 
 }
 

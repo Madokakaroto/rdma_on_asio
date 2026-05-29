@@ -11,14 +11,11 @@
 #include "asio/as_tuple.hpp"
 
 #include "nd/nd_use_device.hpp"
-#include "nd/nd_queue_pair.hpp"
-#include "nd/nd_connection.hpp"
-#include "nd/nd_listener.hpp"
 #include "nd/nd_mr.hpp"
-#include "nd/nd_portspace.hpp"
+#include "rdma/tcp.hpp"
 
 namespace rdma = asio::rdma;
-using tcp = rdma::roce::v2::tcp;
+using tcp = rdma::tcp;
 
 constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
 constexpr std::size_t kBufSize = 4096;
@@ -44,7 +41,7 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   }
   std::cout << "[server] connection request received\n";
 
-  rdma::nd_connection<tcp> conn(io_ctx);
+  rdma::nd_connector<tcp> conn(io_ctx);
   conn.open(std::move(connector), qp);
 
   auto [ec_accept] = co_await conn.async_accept({}, use_nothrow);
@@ -87,7 +84,7 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
   std::cout << "[client] connecting to " << host << ":" << port << "\n";
 
   rdma::nd_queue_pair<tcp> qp(io_ctx);
-  rdma::nd_connection<tcp> conn(io_ctx);
+  rdma::nd_connector<tcp> conn(io_ctx);
   conn.open(qp);
 
   tcp::endpoint endpoint(asio::ip::make_address(host), port);

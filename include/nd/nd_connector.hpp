@@ -9,21 +9,21 @@
 namespace asio::rdma {
 
 template <typename PortSpace>
-class nd_connection {
+class nd_connector {
 public:
   using service_type = detail::nd_connector_service<PortSpace>;
   using endpoint_type = typename PortSpace::endpoint;
   using native_connector_type = detail::nd_connector_handle_t;
 
-  explicit nd_connection(asio::io_context& io_ctx)
+  explicit nd_connector(asio::io_context& io_ctx)
       : impl_(0, 0, io_ctx) {
   }
 
-  ~nd_connection() = default;
-  nd_connection(nd_connection&&) = default;
-  nd_connection& operator=(nd_connection&&) = default;
-  nd_connection(nd_connection const&) = delete;
-  nd_connection& operator=(nd_connection const&) = delete;
+  ~nd_connector() = default;
+  nd_connector(nd_connector&&) = default;
+  nd_connector& operator=(nd_connector&&) = default;
+  nd_connector(nd_connector const&) = delete;
+  nd_connector& operator=(nd_connector const&) = delete;
 
   // client open
   void open(nd_queue_pair<PortSpace>& qp, nd_config_t const& config = {}) {

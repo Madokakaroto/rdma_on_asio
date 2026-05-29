@@ -73,7 +73,7 @@ public:
                          pimpl_->get_implementation());
   }
 
-  IND2QueuePair* native_handle() const noexcept {
+  detail::native_qp_t* native_handle() const noexcept {
     if (!pimpl_) return nullptr;
     return pimpl_->get_service().native_handle(pimpl_->get_implementation());
   }

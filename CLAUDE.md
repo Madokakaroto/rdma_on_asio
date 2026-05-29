@@ -46,9 +46,12 @@ This project provides a cross-platform RDMA abstraction layer with two goals:
 ### IO Object Layering
 
 ```
-User-facing IO objects (include/nd/)
+Public portspace (include/rdma/)
+└── tcp.hpp                  — asio::rdma::tcp portspace, nested aliases: connector, listener, queue_pair
+
+Platform IO objects (include/nd/)
 ├── nd_queue_pair.hpp        — data plane: async_send / async_recv / async_read / async_write
-├── nd_connection.hpp        — control plane: open / async_connect / async_accept / async_disconnect
+├── nd_connector.hpp        — control plane: open / async_connect / async_accept / async_disconnect
 ├── nd_listener.hpp          — server: open / bind / listen / async_get_connection_request
 └── nd_completion_queue.hpp  — standalone poll-mode CQ (no IOCP)
 
@@ -72,7 +75,6 @@ Device / Init
 ├── nd_device.hpp / nd_device_impl.hpp  — nd_device_manager_t singleton, adapter discovery
 ├── nd_use_device.hpp     — use_device() free functions (config or selector overload)
 ├── nd_config_derive.hpp  — derive_effective_config() + is_config_compatible()
-├── nd_portspace.hpp      — roce::v2::tcp portspace definition
 └── nd_types.hpp          — nd_config_t, nd_remote_addr_t, type aliases
 ```
 

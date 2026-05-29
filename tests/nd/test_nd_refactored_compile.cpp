@@ -3,13 +3,10 @@
 #include "asio/io_context.hpp"
 #include "nd/nd_use_device.hpp"
 #include "nd/nd_completion_queue.hpp"
-#include "nd/nd_queue_pair.hpp"
-#include "nd/nd_connection.hpp"
-#include "nd/nd_listener.hpp"
-#include "nd/nd_portspace.hpp"
+#include "rdma/tcp.hpp"
 
 namespace rdma = asio::rdma;
-using tcp = rdma::roce::v2::tcp;
+using tcp = rdma::tcp;
 
 void test_type_sizes() {
   std::cout << "sizeof(nd_config_t) = " << sizeof(rdma::nd_config_t) << "\n";
@@ -31,8 +28,8 @@ void test_io_objects_construct() {
   // nd_queue_pair (IOCP mode)
   rdma::nd_queue_pair<tcp> qp(io_ctx);
 
-  // nd_connection
-  rdma::nd_connection<tcp> conn(io_ctx);
+  // nd_connector
+  rdma::nd_connector<tcp> conn(io_ctx);
   conn.open(qp);
 
   // nd_listener

@@ -6,6 +6,7 @@
 #include "nd/nd_types.hpp"
 #include "nd/nd_error.hpp"
 #include "nd/detail/nd_impl_types.hpp"
+#include "nd/detail/nd_device_impl.hpp"
 #include "nd/detail/nd_ops_verbs.hpp"
 #include "nd/detail/nd_config_derive.hpp"
 
@@ -85,7 +86,7 @@ public:
 
   nd_adapter_ptr const& get_device() const noexcept { return device_; }
 
-  IND2CompletionQueue* get_cq() const noexcept { return cq_.Get(); }
+  native_cq_t* get_cq() const noexcept { return cq_.Get(); }
 
   nd_config_t const& get_effective_config() const noexcept {
     return effective_config_;

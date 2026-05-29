@@ -1,7 +1,8 @@
 #pragma once
 
 #include "nd/nd_types.hpp"
-#include "nd/detail/nd_ops_verbs.hpp"
+#include "nd/nd_error.hpp"
+#include "nd/detail/nd_impl_types.hpp"
 
 namespace asio::rdma::detail {
 
@@ -45,9 +46,19 @@ inline bool is_valid_adapter(nd_adapter_ptr const& adapter,
 inline bool is_valid_adapter(nd_adapter_ptr const& adapter,
                              nd_config_t const& config);
 inline bool is_valid_adapter(nd_adapter_ptr const& adapter);
+inline HANDLE create_overlapped_file(native_context_t* context,
+                                     asio::error_code& ec);
 }
 
 namespace asio::rdma::detail {
+
+HANDLE create_overlapped_file(native_context_t* context, asio::error_code& ec) {
+  assert(context);
+  HANDLE result;
+  auto const hr = context->CreateOverlappedFile(&result);
+  ec = static_cast<nd_errc>(hr);
+  return result;
+}
 
 bool is_valid_addr(SOCKADDR const& addr) {
   switch (addr.sa_family) {

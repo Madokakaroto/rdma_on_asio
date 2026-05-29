@@ -2,18 +2,7 @@
 
 #include "nd/nd_types.hpp"
 #include "nd/nd_error.hpp"
-
-namespace asio::rdma::detail {
-
-HANDLE create_overlapped_file(native_context_t* context, asio::error_code& ec) {
-  assert(context);
-  HANDLE result;
-  auto const hr = context->CreateOverlappedFile(&result);
-  ec = static_cast<nd_errc>(hr);
-  return result;
-}
-
-}
+#include "nd/detail/nd_device_impl.hpp"
 
 namespace asio::rdma::detail::verbs_ops {
 

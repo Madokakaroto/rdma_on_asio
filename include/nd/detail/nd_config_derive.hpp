@@ -1,6 +1,7 @@
 #pragma once
 
 #include "nd/nd_types.hpp"
+#include "nd/detail/nd_impl_types.hpp"
 
 namespace asio::rdma::detail {
 
@@ -11,7 +12,7 @@ inline constexpr size_type default_max_send_sge = 4;
 inline constexpr size_type default_max_recv_sge = 4;
 
 inline nd_config_t derive_effective_config(nd_config_t const& user_config,
-                                           ND2_ADAPTER_INFO const& caps) {
+                                           native_context_config_t const& caps) {
   nd_config_t effective = user_config;
 
   if (effective.cqe_ == 0) {
@@ -47,7 +48,7 @@ inline nd_config_t derive_effective_config(nd_config_t const& user_config,
 }
 
 inline bool is_config_compatible(nd_config_t const& config,
-                                 ND2_ADAPTER_INFO const& caps) {
+                                 native_context_config_t const& caps) {
   if (config.cqe_ != 0 && config.cqe_ > caps.MaxCompletionQueueDepth) {
     return false;
   }

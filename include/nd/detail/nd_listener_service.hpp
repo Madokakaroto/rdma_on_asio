@@ -7,7 +7,6 @@
 #include "nd/detail/nd_service_base.hpp"
 #include "nd/detail/nd_io_completion_service.hpp"
 #include "nd/detail/nd_ops_cm.hpp"
-#include "nd/detail/nd_ops_verbs.hpp"
 #include "nd/detail/nd_op_get_connection_request.hpp"
 #include "nd/detail/nd_config_derive.hpp"
 

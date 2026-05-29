@@ -28,7 +28,7 @@ public:
 
   struct implementation_type : nd_service_base::base_implementation_type {
     nd2_queue_pair_ptr qp_;
-    IND2CompletionQueue* cq_ = nullptr;
+    native_cq_t* cq_ = nullptr;
     bool iocp_mode_ = false;
     nd_config_t config_;
   };
@@ -129,7 +129,7 @@ public:
   }
 
   // open (Poll mode): uses external CQ
-  void open(implementation_type& impl, IND2CompletionQueue* external_cq,
+  void open(implementation_type& impl, native_cq_t* external_cq,
             nd_config_t const& config, asio::error_code& ec) {
     if (impl.qp_) {
       ec = asio::error::already_open;
@@ -178,7 +178,7 @@ public:
     return impl.qp_ != nullptr;
   }
 
-  IND2QueuePair* native_handle(implementation_type const& impl) const noexcept {
+  native_qp_t* native_handle(implementation_type const& impl) const noexcept {
     return impl.qp_.Get();
   }
 
@@ -347,7 +347,7 @@ private:
 
   nd_connector_state_ptr get_notify_state(implementation_type& impl) {
     // nd_notify_wr_op currently requires nd_connector_state_ptr to access cq.
-    // TODO: refactor nd_notify_wr_op to accept IND2CompletionQueue* directly
+    // TODO: refactor nd_notify_wr_op to accept native_cq_t* directly
     // For now, create a minimal shared state to satisfy the interface.
     auto state = std::make_shared<nd_connector_state_t>();
     state->cq_ = nd2_completion_queue_ptr{};
