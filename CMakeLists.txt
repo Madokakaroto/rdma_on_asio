@@ -7,30 +7,39 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# NetworkDirect
-set(ND_DIR ${CMAKE_SOURCE_DIR}/third_party/networkdirect/src/ndutil)
-set(ND_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/networkdirect)
-file(MAKE_DIRECTORY ${ND_GENERATED_DIR})
+# RDMA backend detection
+if(WIN32)
+  set(RDMA_BACKEND "nd" CACHE STRING "RDMA backend (nd, ibv)")
+else()
+  set(RDMA_BACKEND "ibv" CACHE STRING "RDMA backend (nd, ibv)")
+endif()
 
-find_program(MC_EXE mc.exe
-    HINTS "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64"
-)
+# NetworkDirect backend
+if(RDMA_BACKEND STREQUAL "nd")
+  set(ND_DIR ${CMAKE_SOURCE_DIR}/third_party/networkdirect/src/ndutil)
+  set(ND_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/networkdirect)
+  file(MAKE_DIRECTORY ${ND_GENERATED_DIR})
 
-add_custom_command(
-    OUTPUT ${ND_GENERATED_DIR}/ndstatus.h
-    COMMAND ${MC_EXE} -h ${ND_GENERATED_DIR} ${ND_DIR}/ndstatus.mc
-    DEPENDS ${ND_DIR}/ndstatus.mc
-    COMMENT "Generating ndstatus.h from ndstatus.mc"
-)
+  find_program(MC_EXE mc.exe
+      HINTS "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64"
+  )
 
-add_library(ndutil STATIC
-    ${ND_DIR}/ndaddr.cpp
-    ${ND_DIR}/ndfrmwrk.cpp
-    ${ND_DIR}/ndprov.cpp
-    ${ND_GENERATED_DIR}/ndstatus.h
-)
-target_include_directories(ndutil PUBLIC ${ND_DIR} ${ND_GENERATED_DIR})
-target_link_libraries(ndutil PUBLIC ws2_32)
+  add_custom_command(
+      OUTPUT ${ND_GENERATED_DIR}/ndstatus.h
+      COMMAND ${MC_EXE} -h ${ND_GENERATED_DIR} ${ND_DIR}/ndstatus.mc
+      DEPENDS ${ND_DIR}/ndstatus.mc
+      COMMENT "Generating ndstatus.h from ndstatus.mc"
+  )
+
+  add_library(ndutil STATIC
+      ${ND_DIR}/ndaddr.cpp
+      ${ND_DIR}/ndfrmwrk.cpp
+      ${ND_DIR}/ndprov.cpp
+      ${ND_GENERATED_DIR}/ndstatus.h
+  )
+  target_include_directories(ndutil PUBLIC ${ND_DIR} ${ND_GENERATED_DIR})
+  target_link_libraries(ndutil PUBLIC ws2_32)
+endif()
 
 # Main executable
 add_executable(${PROJECT_NAME} src/main.cpp)
@@ -41,7 +50,12 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE ASIO_STANDALONE)
-target_link_libraries(${PROJECT_NAME} PRIVATE ndutil)
+
+if(RDMA_BACKEND STREQUAL "nd")
+  target_link_libraries(${PROJECT_NAME} PRIVATE ndutil)
+endif()
 
 # Tests
-add_subdirectory(tests)
+if(RDMA_BACKEND STREQUAL "nd")
+  add_subdirectory(tests/nd)
+endif()
