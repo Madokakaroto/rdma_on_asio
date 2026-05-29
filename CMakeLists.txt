@@ -37,8 +37,11 @@ add_executable(${PROJECT_NAME} src/main.cpp)
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/third_party/asio/asio/include
+    ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE ASIO_STANDALONE)
 target_link_libraries(${PROJECT_NAME} PRIVATE ndutil)
+
+# Tests
+add_subdirectory(tests)
