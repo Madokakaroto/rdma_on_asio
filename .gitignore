@@ -1,5 +1,6 @@
 # Build directories
 build/
+build_clangd/
 cmake-build-*/
 out/
 bin/
@@ -9,6 +10,7 @@ install/
 # IDE and editors
 .vs/
 .vscode/
+.claude/
 .idea/
 *.user
 *.suo
