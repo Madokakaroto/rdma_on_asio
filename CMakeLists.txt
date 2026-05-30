@@ -41,6 +41,14 @@ if(RDMA_BACKEND STREQUAL "nd")
   target_link_libraries(ndutil PUBLIC ws2_32)
 endif()
 
+# libibverbs backend (Linux rdma-core: libibverbs + librdmacm)
+if(RDMA_BACKEND STREQUAL "ibv")
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(IBVERBS REQUIRED IMPORTED_TARGET libibverbs)
+  pkg_check_modules(RDMACM  REQUIRED IMPORTED_TARGET librdmacm)
+  message(STATUS "RDMA backend: ibv (libibverbs ${IBVERBS_VERSION}, librdmacm ${RDMACM_VERSION})")
+endif()
+
 # Main executable
 add_executable(${PROJECT_NAME} src/main.cpp)
 
@@ -53,9 +61,13 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE ASIO_STANDALONE)
 
 if(RDMA_BACKEND STREQUAL "nd")
   target_link_libraries(${PROJECT_NAME} PRIVATE ndutil)
+elseif(RDMA_BACKEND STREQUAL "ibv")
+  target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
 endif()
 
 # Tests
 if(RDMA_BACKEND STREQUAL "nd")
   add_subdirectory(tests/nd)
+elseif(RDMA_BACKEND STREQUAL "ibv")
+  add_subdirectory(tests/ibv)
 endif()
