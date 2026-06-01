@@ -13,10 +13,9 @@ namespace asio::rdma {
 // the connector during connect/accept (rdma_cm requires cm_id + resolved
 // context); the qp here sets up CQ binding + config and exposes a create-qp
 // callback that the connector calls to back-fill the QP.
-template <typename PortSpace>
 class ibv_queue_pair {
 public:
-  using service_type = detail::ibv_verbs_service<PortSpace>;
+  using service_type = detail::ibv_verbs_service;
 
   ibv_queue_pair() = default;
   ~ibv_queue_pair() = default;

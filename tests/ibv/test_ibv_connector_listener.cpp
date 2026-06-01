@@ -43,7 +43,7 @@ void test_listener_open_bind_listen() {
 void test_connector_open() {
   asio::io_context io;
   asio::rdma::use_device(io);  // shared CQ needed by the queue_pair
-  asio::rdma::ibv_queue_pair<tcp> qp(io);
+  asio::rdma::ibv_queue_pair qp(io);
   asio::rdma::ibv_connector<tcp> connector(io);
 
   asio::error_code ec;

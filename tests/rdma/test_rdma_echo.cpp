@@ -1,3 +1,6 @@
+// Cross-platform RDMA echo test. Written entirely against the backend-agnostic
+// public surface (rdma/rdma.hpp + rdma_* aliases + tcp port space), so the same
+// source compiles and runs on either backend (NetworkDirect / libibverbs).
 #include <array>
 #include <iostream>
 #include <string>
@@ -10,9 +13,7 @@
 #include "asio/use_awaitable.hpp"
 #include "asio/as_tuple.hpp"
 
-#include "nd/nd_use_device.hpp"
-#include "nd/nd_mr.hpp"
-#include "rdma/tcp.hpp"
+#include "rdma/rdma.hpp"
 
 namespace rdma = asio::rdma;
 using tcp = rdma::tcp;
@@ -22,12 +23,12 @@ constexpr std::size_t kBufSize = 4096;
 constexpr int kEchoCount = 10;
 
 asio::awaitable<void> run_server(asio::io_context& io_ctx,
-                                  rdma::nd_device_ptr const& device,
-                                  uint16_t port) {
+                                 rdma::rdma_device_ptr const& device,
+                                 uint16_t port) {
   std::cout << "[server] listening on port " << port << "\n";
 
-  rdma::nd_queue_pair qp(io_ctx);
-  rdma::nd_listener<tcp> listener(io_ctx);
+  rdma::rdma_queue_pair qp(io_ctx);
+  rdma::rdma_listener<tcp> listener(io_ctx);
   listener.open();
   listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
   listener.listen();
@@ -41,7 +42,7 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   }
   std::cout << "[server] connection request received\n";
 
-  rdma::nd_connector<tcp> conn(io_ctx);
+  rdma::rdma_connector<tcp> conn(io_ctx);
   conn.open(std::move(connector), qp);
 
   auto [ec_accept] = co_await conn.async_accept({}, use_nothrow);
@@ -52,13 +53,16 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   std::cout << "[server] connection accepted\n";
 
   std::array<char, kBufSize> raw_buf{};
-  rdma::nd_memory_region mr(device, raw_buf.data(), raw_buf.size());
+  rdma::rdma_memory_region mr(device, raw_buf.data(), raw_buf.size());
 
-  for (;;) {
+  // Fixed-count ping-pong: each iteration recv one message and echo it back.
+  // (RC QPs don't flush a pending recv on peer disconnect, so we don't rely on
+  // a recv error to terminate.)
+  for (int i = 0; i < kEchoCount; ++i) {
     auto recv_buf = mr.slice(std::size_t{0}, kBufSize);
     auto [ec_recv, n] = co_await qp.async_recv(recv_buf, use_nothrow);
     if (ec_recv || n == 0) {
-      if (ec_recv) {
+      if (ec_recv && ec_recv != asio::error::operation_aborted) {
         std::cerr << "[server] recv error: " << ec_recv.message() << "\n";
       }
       break;
@@ -75,16 +79,17 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   }
 
   auto [ec_disc] = co_await conn.async_disconnect(use_nothrow);
+  (void)ec_disc;
   std::cout << "[server] disconnected\n";
 }
 
 asio::awaitable<void> run_client(asio::io_context& io_ctx,
-                                  rdma::nd_device_ptr const& device,
-                                  std::string const& host, uint16_t port) {
+                                 rdma::rdma_device_ptr const& device,
+                                 std::string const& host, uint16_t port) {
   std::cout << "[client] connecting to " << host << ":" << port << "\n";
 
-  rdma::nd_queue_pair qp(io_ctx);
-  rdma::nd_connector<tcp> conn(io_ctx);
+  rdma::rdma_queue_pair qp(io_ctx);
+  rdma::rdma_connector<tcp> conn(io_ctx);
   conn.open(qp);
 
   tcp::endpoint endpoint(asio::ip::make_address(host), port);
@@ -96,7 +101,7 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
   std::cout << "[client] connected\n";
 
   std::array<char, kBufSize> raw_buf{};
-  rdma::nd_memory_region mr(device, raw_buf.data(), raw_buf.size());
+  rdma::rdma_memory_region mr(device, raw_buf.data(), raw_buf.size());
 
   for (int i = 0; i < kEchoCount; ++i) {
     std::string msg = "Hello RDMA #" + std::to_string(i);
@@ -120,6 +125,7 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
   }
 
   auto [ec_disc] = co_await conn.async_disconnect(use_nothrow);
+  (void)ec_disc;
   std::cout << "[client] disconnected\n";
 }
 

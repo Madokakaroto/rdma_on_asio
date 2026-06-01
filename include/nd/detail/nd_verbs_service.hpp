@@ -17,14 +17,14 @@
 
 namespace asio::rdma::detail {
 
-template <typename PortSpace>
+// Data plane is portspace-agnostic (QP/CQ/MR only), so this service is not
+// templated on PortSpace. One instance per io_context; all state is per-impl.
 class nd_verbs_service
-    : public asio::detail::execution_context_service_base<
-          nd_verbs_service<PortSpace>>
+    : public asio::detail::execution_context_service_base<nd_verbs_service>
     , public nd_service_base {
 public:
-  using base_type = asio::detail::execution_context_service_base<
-      nd_verbs_service<PortSpace>>;
+  using base_type =
+      asio::detail::execution_context_service_base<nd_verbs_service>;
 
   struct implementation_type : nd_service_base::base_implementation_type {
     nd2_queue_pair_ptr qp_;

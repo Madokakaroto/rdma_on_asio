@@ -71,3 +71,6 @@ if(RDMA_BACKEND STREQUAL "nd")
 elseif(RDMA_BACKEND STREQUAL "ibv")
   add_subdirectory(tests/ibv)
 endif()
+
+# Cross-platform tests (backend-agnostic rdma_* API), built for either backend.
+add_subdirectory(tests/rdma)

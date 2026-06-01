@@ -1,52 +1,54 @@
 #pragma once
 
-#include <cstdint>
+// Backend-agnostic public type aliases. Selects the active backend's concrete
+// types (nd_* on Windows, ibv_* on Linux) behind a single set of rdma_* names,
+// so application code can be written portably (further reduced via rdma.hpp).
+//
+// tcp.hpp sets ASIO_RDMA_BACKEND_{ND,VERBS} and pulls in connector/listener/
+// queue_pair; here we add the remaining backend headers and define the aliases.
+#include "rdma/tcp.hpp"
 
-// Backend-independent RDMA types shared by the nd (Windows NetworkDirect) and
-// ibv (Linux libibverbs) backends. Only one backend compiles per platform, but
-// these definitions are identical for both, so they live in one place. Each
-// backend aliases its prefixed names (nd_config_t / ibv_config_t, etc.) to
-// these for source compatibility.
+#if defined(ASIO_RDMA_BACKEND_ND)
+#  include "nd/nd_completion_queue.hpp"
+#  include "nd/nd_mr.hpp"
+#  include "nd/nd_device.hpp"
+#  include "nd/nd_use_device.hpp"
+#elif defined(ASIO_RDMA_BACKEND_VERBS)
+#  include "ibv/ibv_completion_queue.hpp"
+#  include "ibv/ibv_mr.hpp"
+#  include "ibv/ibv_device.hpp"
+#  include "ibv/ibv_use_device.hpp"
+#endif
+
 namespace asio::rdma {
 
-// command types
-enum mr_acccess_flag_t {
-  mr_access_local_write,
-  mr_access_remote_read,
-  mr_access_remote_write,
-};
+#if defined(ASIO_RDMA_BACKEND_ND)
 
-// configuration to initialize the shared state.
-// 0 = auto-derive from device capabilities using min(device_max, default).
-struct rdma_config_t {
-  // CQ configuration
-  std::uint32_t cqe_ = 0;                // 0 = min(device_max, 4096)
+// connector/listener remain templated on the port space.
+template <typename PortSpace>
+using rdma_connector = nd_connector<PortSpace>;
+template <typename PortSpace>
+using rdma_listener = nd_listener<PortSpace>;
 
-  // QP configuration
-  std::uint32_t max_send_wr_ = 0;        // 0 = min(device_max, 128)
-  std::uint32_t max_recv_wr_ = 0;        // 0 = min(device_max, 128)
-  std::uint32_t max_send_sge_ = 0;       // 0 = min(device_max, 4)
-  std::uint32_t max_recv_sge_ = 0;       // 0 = min(device_max, 4)
-  std::uint32_t max_inline_data_ = 0;    // 0 = device default
+using rdma_queue_pair = nd_queue_pair;
+using rdma_completion_queue = nd_completion_queue;
+using rdma_memory_region = nd_memory_region;
+using rdma_device = nd_device_t;
+using rdma_device_ptr = nd_device_ptr;
 
-  // Connection configuration
-  std::uint32_t inbound_read_limit_ = 0;  // 0 = device default
-  std::uint32_t outbound_read_limit_ = 0; // 0 = device default
+#elif defined(ASIO_RDMA_BACKEND_VERBS)
 
-  // Listener configuration
-  int backlog_ = 128;
-};
+template <typename PortSpace>
+using rdma_connector = ibv_connector<PortSpace>;
+template <typename PortSpace>
+using rdma_listener = ibv_listener<PortSpace>;
 
-// Remote memory region handle (address + remote key/token) for RDMA read/write.
-struct rdma_remote_addr_t {
-  std::uint64_t addr_;
-  std::uint32_t token_;
-};
+using rdma_queue_pair = ibv_queue_pair;
+using rdma_completion_queue = ibv_completion_queue;
+using rdma_memory_region = ibv_memory_region;
+using rdma_device = ibv_device_t;
+using rdma_device_ptr = ibv_device_ptr;
 
-namespace detail {
-// buffer kind tags used by the buffer concepts and the MR buffer types
-struct rdma_const_buffer_tag {};
-struct rdma_mutable_buffer_tag {};
-}
+#endif
 
 }

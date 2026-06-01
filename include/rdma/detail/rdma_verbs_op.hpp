@@ -6,7 +6,7 @@
 #include "asio/detail/op_queue.hpp"
 #include "asio/error.hpp"
 #include "rdma/rdma_buffer.hpp"
-#include "rdma/rdma_types.hpp"
+#include "rdma/rdma_commons.hpp"
 
 // Backend-independent data-plane op hierarchy shared by nd and ibv. These types
 // hold no native handles: completion is dispatched by each backend's CQ poller

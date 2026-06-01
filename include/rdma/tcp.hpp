@@ -25,11 +25,11 @@ public:
   using resolver = asio::ip::basic_resolver<asio::ip::tcp>;
 
 #if defined(ASIO_RDMA_BACKEND_ND)
-  using queue_pair = nd_queue_pair<tcp>;
+  using queue_pair  = nd_queue_pair;
   using connector = nd_connector<tcp>;
   using listener  = nd_listener<tcp>;
 #elif defined(ASIO_RDMA_BACKEND_VERBS)
-  using queue_pair = ibv_queue_pair<tcp>;
+  using queue_pair = ibv_queue_pair;
   using connector  = ibv_connector<tcp>;
   using listener   = ibv_listener<tcp>;
 

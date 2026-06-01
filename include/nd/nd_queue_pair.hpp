@@ -7,10 +7,9 @@
 
 namespace asio::rdma {
 
-template <typename PortSpace>
 class nd_queue_pair {
 public:
-  using service_type = detail::nd_verbs_service<PortSpace>;
+  using service_type = detail::nd_verbs_service;
 
   nd_queue_pair() = default;
   ~nd_queue_pair() = default;

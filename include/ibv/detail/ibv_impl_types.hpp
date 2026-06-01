@@ -11,11 +11,11 @@
 #include <rdma/rdma_cma.h>
 
 #include "asio/error_code.hpp"
-#include "rdma/rdma_types.hpp"
+#include "rdma/rdma_commons.hpp"
 
 namespace asio::rdma::detail {
 
-// buffer tags are shared (rdma/rdma_types.hpp); keep ibv-prefixed aliases.
+// buffer tags are shared (rdma/rdma_commons.hpp); keep ibv-prefixed aliases.
 using ibv_const_buffer_tag = rdma_const_buffer_tag;
 using ibv_mutable_buffer_tag = rdma_mutable_buffer_tag;
 

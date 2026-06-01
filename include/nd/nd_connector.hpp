@@ -26,13 +26,13 @@ public:
   nd_connector& operator=(nd_connector const&) = delete;
 
   // client open
-  void open(nd_queue_pair<PortSpace>& qp, nd_config_t const& config = {}) {
+  void open(nd_queue_pair& qp, nd_config_t const& config = {}) {
     asio::error_code ec;
     open(qp, config, ec);
     asio::detail::throw_error(ec);
   }
 
-  void open(nd_queue_pair<PortSpace>& qp, nd_config_t const& config,
+  void open(nd_queue_pair& qp, nd_config_t const& config,
             asio::error_code& ec) {
     impl_.get_service().open(impl_.get_implementation(),
                              qp.native_handle(), config, ec);
@@ -40,7 +40,7 @@ public:
 
   // server open (from listener's native connector)
   void open(native_connector_type&& connector,
-            nd_queue_pair<PortSpace>& qp,
+            nd_queue_pair& qp,
             nd_config_t const& config = {}) {
     asio::error_code ec;
     open(std::move(connector), qp, config, ec);
@@ -48,7 +48,7 @@ public:
   }
 
   void open(native_connector_type&& connector,
-            nd_queue_pair<PortSpace>& qp,
+            nd_queue_pair& qp,
             nd_config_t const& config, asio::error_code& ec) {
     impl_.get_service().open(impl_.get_implementation(),
                              std::move(connector), qp.native_handle(),

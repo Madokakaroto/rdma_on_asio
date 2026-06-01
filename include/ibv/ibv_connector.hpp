@@ -29,13 +29,13 @@ public:
 
   // client open: fresh cm_id + event channel; binds the qp so its QP is created
   // on this cm_id during connect.
-  void open(ibv_queue_pair<PortSpace>& qp, ibv_config_t const& config = {}) {
+  void open(ibv_queue_pair& qp, ibv_config_t const& config = {}) {
     asio::error_code ec;
     open(qp, config, ec);
     asio::detail::throw_error(ec);
   }
 
-  void open(ibv_queue_pair<PortSpace>& qp, ibv_config_t const& config,
+  void open(ibv_queue_pair& qp, ibv_config_t const& config,
             asio::error_code& ec) {
     impl_.get_service().open(impl_.get_implementation(),
                              qp.make_create_qp_fn(), config, ec);
@@ -43,14 +43,14 @@ public:
 
   // server open: adopt a connector handle from the listener; bind the qp so its
   // QP is created on the adopted cm_id during accept.
-  void open(native_connector_type&& connector, ibv_queue_pair<PortSpace>& qp,
+  void open(native_connector_type&& connector, ibv_queue_pair& qp,
             ibv_config_t const& config = {}) {
     asio::error_code ec;
     open(std::move(connector), qp, config, ec);
     asio::detail::throw_error(ec);
   }
 
-  void open(native_connector_type&& connector, ibv_queue_pair<PortSpace>& qp,
+  void open(native_connector_type&& connector, ibv_queue_pair& qp,
             ibv_config_t const& config, asio::error_code& ec) {
     impl_.get_service().open(impl_.get_implementation(), std::move(connector),
                              qp.make_create_qp_fn(), config, ec);

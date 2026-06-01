@@ -4,7 +4,7 @@
 #include <numeric>
 #include <ranges>
 
-#include "rdma/rdma_types.hpp"
+#include "rdma/rdma_commons.hpp"
 
 // Backend-independent memory-region buffer concepts and helpers shared by nd
 // and ibv. The only platform-specific piece is buffers2sglist (it fills the

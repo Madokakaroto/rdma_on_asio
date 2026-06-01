@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rdma/rdma_types.hpp"
+#include "rdma/rdma_commons.hpp"
 
 namespace asio::rdma::detail {
 

@@ -26,7 +26,7 @@ void test_io_objects_construct() {
   }
 
   // nd_queue_pair (IOCP mode)
-  rdma::nd_queue_pair<tcp> qp(io_ctx);
+  rdma::nd_queue_pair qp(io_ctx);
 
   // nd_connector
   rdma::nd_connector<tcp> conn(io_ctx);
@@ -50,7 +50,7 @@ void test_queue_pair_deferred() {
     return;
   }
 
-  rdma::nd_queue_pair<tcp> qp;
+  rdma::nd_queue_pair qp;
   qp.open(io_ctx);
   assert(qp.is_open());
   std::cout << "[PASS] deferred queue_pair open\n";

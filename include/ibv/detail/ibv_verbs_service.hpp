@@ -24,10 +24,10 @@ namespace asio::rdma::detail {
 // connect/accept) and owned by the connector; this service holds a raw pointer
 // for posting. Completions are dispatched through the shared CQ poller (service
 // mode) or the user's poll() (explicit-CQ mode). Mirrors nd_verbs_service.
-template <typename PortSpace>
+// Data plane is portspace-agnostic (QP/CQ/MR only), so this service is not
+// templated on PortSpace. One instance per io_context; all state is per-impl.
 class ibv_verbs_service
-    : public asio::detail::execution_context_service_base<
-          ibv_verbs_service<PortSpace>>
+    : public asio::detail::execution_context_service_base<ibv_verbs_service>
     , public ibv_service_base {
 public:
   struct implementation_type : ibv_service_base::base_implementation_type {
@@ -39,8 +39,7 @@ public:
   };
 
   explicit ibv_verbs_service(asio::execution_context& context)
-      : asio::detail::execution_context_service_base<
-            ibv_verbs_service<PortSpace>>(context)
+      : asio::detail::execution_context_service_base<ibv_verbs_service>(context)
       , ibv_service_base(context) {
   }
 

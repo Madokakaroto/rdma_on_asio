@@ -16,14 +16,14 @@
 #include <ndstatus.h>
 #include <ndspi.h>
 
-#include "rdma/rdma_types.hpp"
+#include "rdma/rdma_commons.hpp"
 
 namespace asio::rdma {
 
 using size_type = ULONG;
 using result_type = HRESULT;
 
-// mr_acccess_flag_t is shared (rdma/rdma_types.hpp).
+// mr_acccess_flag_t is shared (rdma/rdma_commons.hpp).
 
 // Backend config/remote-addr are backend-independent; alias the shared types.
 using nd_config_t = rdma_config_t;

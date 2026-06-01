@@ -7,7 +7,7 @@
 namespace asio::rdma {
 
 // memory region raii type
-class nd_mr_t {
+class nd_memory_region {
  private:
   detail::nd2_memory_region_ptr mr_;
   void* addr_;
@@ -16,7 +16,7 @@ class nd_mr_t {
   int extra_flag_;
 
  public:
-  explicit nd_mr_t(nd_device_ptr const& device, void* addr, std::size_t length,
+  explicit nd_memory_region(nd_device_ptr const& device, void* addr, std::size_t length,
                    mr_acccess_flag_t flag = mr_access_remote_write,
                    int extra_flag = 0)
       : mr_(throw_reg_mr(device, addr, length, flag, extra_flag))
@@ -25,7 +25,7 @@ class nd_mr_t {
       , flag_(flag)
       , extra_flag_(extra_flag) {}
 
-  ~nd_mr_t() {
+  ~nd_memory_region() {
     asio::error_code ec{};
     detail::verbs_ops::dereg_mr(mr_.Get(), ec);
     if (ec) {
@@ -34,10 +34,10 @@ class nd_mr_t {
     }
   }
 
-  nd_mr_t(nd_mr_t const&) = delete;
-  nd_mr_t& operator=(nd_mr_t const&) = delete;
-  nd_mr_t(nd_mr_t&&) = default;
-  nd_mr_t& operator=(nd_mr_t&&) = default;
+  nd_memory_region(nd_memory_region const&) = delete;
+  nd_memory_region& operator=(nd_memory_region const&) = delete;
+  nd_memory_region(nd_memory_region&&) = default;
+  nd_memory_region& operator=(nd_memory_region&&) = default;
 
   std::uint32_t local_key() const {
     if (!mr_) {
@@ -104,14 +104,14 @@ class nd_mr_t {
      using rdma_buffer_tag = detail::rdma_const_buffer_tag;
 
    private:
-    nd_mr_t const& mr_;
+    nd_memory_region const& mr_;
     void const* addr_;
     std::size_t length_;
 
    public:
-    explicit const_buffer(nd_mr_t const& mr)
+    explicit const_buffer(nd_memory_region const& mr)
         : mr_(mr), addr_(nullptr), length_(0) {}
-    const_buffer(nd_mr_t const& mr, void const* addr, std::size_t length)
+    const_buffer(nd_memory_region const& mr, void const* addr, std::size_t length)
         : mr_(mr), addr_(addr), length_(length) {}
     const_buffer(const_buffer const&) = default;
     const_buffer& operator=(const_buffer const&) = delete;
@@ -129,7 +129,7 @@ class nd_mr_t {
       return addr_ != nullptr && length_ >= 0 && mr_.is_in_mr(addr_, length_);
     }
 
-    nd_mr_t const& get_mr() const noexcept {
+    nd_memory_region const& get_mr() const noexcept {
       return mr_;
     }
 
@@ -157,14 +157,14 @@ class nd_mr_t {
     using rdma_buffer_tag = detail::rdma_mutable_buffer_tag;
 
    private:
-    nd_mr_t const& mr_;
+    nd_memory_region const& mr_;
     void* addr_;
     std::size_t length_;
 
    public:
-    explicit mutable_buffer(nd_mr_t const& mr)
+    explicit mutable_buffer(nd_memory_region const& mr)
         : mr_(mr), addr_(nullptr), length_(0) {}
-    mutable_buffer(nd_mr_t const& mr, void* addr, std::size_t length)
+    mutable_buffer(nd_memory_region const& mr, void* addr, std::size_t length)
         : mr_(mr), addr_(addr), length_(length) {}
     mutable_buffer(mutable_buffer const&) = default;
     mutable_buffer& operator=(mutable_buffer const&) = delete;
@@ -182,7 +182,7 @@ class nd_mr_t {
       return addr_ != nullptr && length_ >= 0 && mr_.is_in_mr(addr_, length_);
     }
 
-    nd_mr_t const& get_mr() const noexcept { 
+    nd_memory_region const& get_mr() const noexcept { 
       return mr_;
     }
 
@@ -242,7 +242,7 @@ public:
   }
 
   const_buffer cslice(std::size_t offset, std::size_t length) {
-    return const_cast<nd_mr_t const*>(this)->slice(offset, length);
+    return const_cast<nd_memory_region const*>(this)->slice(offset, length);
   }
 
   const_buffer cslice(std::size_t offset, std::size_t length) const {
@@ -250,7 +250,7 @@ public:
   }
 
   const_buffer cslice(void const* addr, size_t length) {
-    return const_cast<nd_mr_t const*>(this)->slice(addr, length);
+    return const_cast<nd_memory_region const*>(this)->slice(addr, length);
   }
 
   const_buffer cslice(void const* addr, size_t length) const {

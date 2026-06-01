@@ -26,7 +26,7 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
                                  uint16_t port) {
   std::cout << "[server] listening on port " << port << "\n";
 
-  rdma::ibv_queue_pair<tcp> qp(io_ctx);
+  rdma::ibv_queue_pair qp(io_ctx);
   rdma::ibv_listener<tcp> listener(io_ctx);
   listener.open();
   listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
@@ -52,7 +52,7 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   std::cout << "[server] connection accepted\n";
 
   std::array<char, kBufSize> raw_buf{};
-  rdma::ibv_mr_t mr(device, raw_buf.data(), raw_buf.size());
+  rdma::ibv_memory_region mr(device, raw_buf.data(), raw_buf.size());
 
   // Fixed-count ping-pong: each iteration recv one message and echo it back.
   // (RC QPs don't flush a pending recv on peer disconnect, so we don't rely on
@@ -86,7 +86,7 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
                                  std::string const& host, uint16_t port) {
   std::cout << "[client] connecting to " << host << ":" << port << "\n";
 
-  rdma::ibv_queue_pair<tcp> qp(io_ctx);
+  rdma::ibv_queue_pair qp(io_ctx);
   rdma::ibv_connector<tcp> conn(io_ctx);
   conn.open(qp);
 
@@ -99,7 +99,7 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
   std::cout << "[client] connected\n";
 
   std::array<char, kBufSize> raw_buf{};
-  rdma::ibv_mr_t mr(device, raw_buf.data(), raw_buf.size());
+  rdma::ibv_memory_region mr(device, raw_buf.data(), raw_buf.size());
 
   for (int i = 0; i < kEchoCount; ++i) {
     std::string msg = "Hello RDMA #" + std::to_string(i);
