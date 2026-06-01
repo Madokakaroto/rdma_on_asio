@@ -11,36 +11,62 @@ This project provides a cross-platform RDMA abstraction layer with two goals:
 
 ### Cross-Platform Design
 
-The public API lives in `include/rdma/`. Users include `rdma/tcp.hpp` and write
-platform-agnostic code against `asio::rdma::tcp::{queue_pair, connector, listener}`.
-Compile-time `#if` in `tcp.hpp` selects the backend:
+The public API lives in `include/rdma/`. Users **include `rdma/rdma.hpp`** (the single
+umbrella) and write fully backend-agnostic code against the `rdma_*` aliases + the `tcp`
+port space. Compile-time `#if` selects the backend:
 
 - **Windows** → `nd_*` (NetworkDirect, IOCP-based)
 - **Linux** → `ibv_*` (libibverbs + rdma_cm, epoll-based)
 
-Both backends expose identical public signatures:
+Two ways to spell the same types (both portable):
 
 ```cpp
-// Portspace (include/rdma/tcp.hpp)
-namespace asio::rdma {
-class tcp {
-  using queue_pair = {nd,ibv}_queue_pair<tcp>;
-  using connector = {nd,ibv}_connector<tcp>;
-  using listener  = {nd,ibv}_listener<tcp>;
-  using endpoint  = asio::ip::basic_endpoint<asio::ip::tcp>;
-  using resolver  = asio::ip::basic_resolver<asio::ip::tcp>;
-};
-}
+#include "rdma/rdma.hpp"
+using namespace asio::rdma;
+
+// (a) backend-agnostic aliases (rdma/rdma_types.hpp)
+rdma_queue_pair        qp(io);
+rdma_connector<tcp>    conn(io);     // connector/listener stay templated on the port space
+rdma_listener<tcp>     lis(io);
+rdma_completion_queue  cq(dev);
+rdma_memory_region     mr(dev, p, n);
+rdma_device_ptr        dev = use_device(io).get_device();
+
+// (b) the tcp port space (include/rdma/tcp.hpp) — equivalent
+tcp::queue_pair  qp(io);
+tcp::connector   conn(io);
+tcp::endpoint    ep(addr, port);
 ```
+
+`tcp.hpp` sets the backend macro and aliases `tcp::{queue_pair, connector, listener,
+endpoint, resolver}`; `rdma_types.hpp` defines the `rdma_*` names on top; `rdma.hpp`
+includes everything (incl. `use_device`, memory region, completion queue).
 
 ### Shared Layer (include/rdma/)
 
 ```
-rdma_types.hpp          — rdma_config_t, rdma_remote_addr_t, mr_acccess_flag_t, buffer tags
+rdma.hpp                — umbrella entry: pulls the active backend + all of the below
+rdma_commons.hpp        — rdma_config_t, rdma_remote_addr_t, mr_acccess_flag_t, buffer tags
+                          (backend-independent VALUES; both backends' impl types include it)
+rdma_types.hpp          — backend-agnostic ALIASES: rdma_connector<PS>/rdma_listener<PS>
+                          (template aliases), rdma_queue_pair, rdma_completion_queue,
+                          rdma_memory_region, rdma_device / rdma_device_ptr
 rdma_buffer.hpp         — mr_buffer / mr_adapted_buffer_sequence concepts, buffer_size()
+tcp.hpp                 — tcp port space + backend selection (ASIO_RDMA_BACKEND_{ND,VERBS})
 detail/rdma_verbs_op.hpp — rdma_verbs_op_base / rdma_two_sided_op / rdma_one_sided_op
 detail/rdma_op_{send,recv,read,write}.hpp — typed completion ops (shared by both backends)
 ```
+
+Header graph (no cycles): `rdma.hpp` → `rdma_commons.hpp` + `rdma_types.hpp`;
+`rdma_types.hpp` → `tcp.hpp` (backend macro + connector/listener/queue_pair) + the active
+backend's `{completion_queue, mr, device, use_device}` headers. Backend headers include
+`rdma_commons.hpp` (leaf), never `tcp.hpp`/`rdma_types.hpp`.
+
+**Data plane is portspace-agnostic.** `{nd,ibv}_queue_pair` and `{nd,ibv}_verbs_service`
+are **non-template** (they only touch QP/CQ/MR). Only the control plane
+(`{nd,ibv}_connector`/`listener`) is templated on `PortSpace` — it needs `PortSpace::endpoint`
+and `PortSpace::rdma_type()`. Hence `rdma_connector`/`rdma_listener` are *template* aliases
+while `rdma_queue_pair`/`rdma_completion_queue`/`rdma_memory_region`/`rdma_device` are plain.
 
 ### nd Backend (Windows, include/nd/)
 
@@ -50,7 +76,7 @@ IO objects:
   nd_connector.hpp        — open / async_connect / async_accept / async_disconnect
   nd_listener.hpp         — open / bind(endpoint) / listen / async_get_connection_request
   nd_completion_queue.hpp — standalone poll-mode CQ
-  nd_mr.hpp               — RAII memory region + const_buffer / mutable_buffer
+  nd_mr.hpp               — RAII memory region `nd_memory_region` + const_buffer / mutable_buffer
   nd_use_device.hpp       — use_device(io_ctx, config) / use_device(io_ctx, selector)
 
 Services (detail/):
@@ -73,7 +99,7 @@ IO objects:
   ibv_connector.hpp        — open / async_connect / async_accept / async_disconnect
   ibv_listener.hpp         — open / bind(endpoint) / listen / async_get_connection_request
   ibv_completion_queue.hpp — standalone poll-mode CQ
-  ibv_mr.hpp               — RAII memory region + const_buffer / mutable_buffer
+  ibv_mr.hpp               — RAII memory region `ibv_memory_region` + const_buffer / mutable_buffer
   ibv_use_device.hpp       — use_device(io_ctx, config)
 
 Services (detail/):
@@ -143,7 +169,19 @@ cmake -B build
 cmake --build build
 ```
 
-Tests are compile-only on dev machines (no RDMA hardware). Runtime testing happens on a separate RDMA-capable machine.
+Select the backend with `-DRDMA_BACKEND=ibv` (Linux, default) or `nd` (Windows).
+
+### Tests
+
+```
+tests/nd/    — NetworkDirect-specific tests (use nd_* types)
+tests/ibv/   — libibverbs-specific tests (use ibv_* types)
+tests/rdma/  — cross-platform tests (use only rdma_* aliases + rdma/rdma.hpp); built for either backend
+```
+
+`tests/rdma/test_rdma_echo.cpp` is the canonical portable example: one source, backend chosen
+by the build. Runtime testing needs RDMA hardware; on Linux the ibv + rdma echo tests have been
+verified end-to-end over RoCE (`--server` / `--client <ip>` / `--port`).
 
 ## Line Endings
 
