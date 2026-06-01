@@ -57,15 +57,12 @@ class nd_mr_t {
     if (!mr_) {
       return false;
     }
-    auto const diff = std::distance(static_cast<char const*>(addr_),
-                                    static_cast<char const*>(addr));
-    if (diff < 0 || diff >= length_) {
+    auto const diff = static_cast<char const*>(addr) -
+                      static_cast<char const*>(addr_);
+    if (diff < 0 || static_cast<std::size_t>(diff) >= length_) {
       return false;
     }
-    auto const length_from_addr = diff + length;
-    if (length_from_addr >= length_) {
-      return false;
-    }
+    return static_cast<std::size_t>(diff) + length <= length_;
   }
 
   bool is_in_mr(std::size_t offset, std::size_t length) const noexcept {
@@ -114,13 +111,10 @@ class nd_mr_t {
    public:
     explicit const_buffer(nd_mr_t const& mr)
         : mr_(mr), addr_(nullptr), length_(0) {}
-    const_buffer(nd_mr_t const& mr, void const* addr, size_t length)
+    const_buffer(nd_mr_t const& mr, void const* addr, std::size_t length)
         : mr_(mr), addr_(addr), length_(length) {}
-    ~const_buffer() = default;
     const_buffer(const_buffer const&) = default;
-    const_buffer& operator=(const_buffer const&) = default;
-    const_buffer(const_buffer&&) = default;
-    const_buffer& operator=(const_buffer&&) = default;
+    const_buffer& operator=(const_buffer const&) = delete;
 
    public:
     void const* addr() const noexcept {
@@ -170,13 +164,10 @@ class nd_mr_t {
    public:
     explicit mutable_buffer(nd_mr_t const& mr)
         : mr_(mr), addr_(nullptr), length_(0) {}
-    mutable_buffer(nd_mr_t const& mr, void* addr, size_t length)
+    mutable_buffer(nd_mr_t const& mr, void* addr, std::size_t length)
         : mr_(mr), addr_(addr), length_(length) {}
-    ~mutable_buffer() = default;
     mutable_buffer(mutable_buffer const&) = default;
-    mutable_buffer& operator=(mutable_buffer const&) = default;
-    mutable_buffer(mutable_buffer&&) = default;
-    mutable_buffer& operator=(mutable_buffer&&) = default;
+    mutable_buffer& operator=(mutable_buffer const&) = delete;
 
    public:
     void* addr() const noexcept { 

@@ -82,8 +82,6 @@ public:
 
   bool is_initialized() const noexcept { return initialized_; }
 
-  nd_adapter_ptr get_adapter() const noexcept { return device_; }
-
   nd_adapter_ptr const& get_device() const noexcept { return device_; }
 
   native_cq_t* get_cq() const noexcept { return cq_.Get(); }

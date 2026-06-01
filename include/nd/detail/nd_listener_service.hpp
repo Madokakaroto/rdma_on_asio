@@ -98,7 +98,7 @@ public:
       return;
     }
 
-    auto adapter = io_svc.get_adapter();
+    auto adapter = io_svc.get_device();
     impl.listener_handle_.reset(
         create_overlapped_file(adapter->adapter_.Get(), ec));
     if (ec) {
@@ -131,13 +131,13 @@ public:
     return impl.listener_ != nullptr;
   }
 
-  void bind(implementation_type& impl, uint16_t port, asio::error_code& ec) {
+  void bind(implementation_type& impl, endpoint_type const& endpoint,
+            asio::error_code& ec) {
     if (!is_open(impl)) {
       ec = nd_errc::ext_invalid_listener;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
-    endpoint_type endpoint{asio::ip::make_address(impl.adapter_->name_), port};
     bind_addr(impl.listener_.Get(), endpoint.data(), endpoint.size(), ec);
     if (ec) {
       ASIO_ERROR_LOCATION(ec);

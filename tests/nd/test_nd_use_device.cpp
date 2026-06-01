@@ -16,7 +16,7 @@ void test_use_device_default_config() {
     return;
   }
   assert(svc.is_initialized());
-  assert(svc.get_adapter() != nullptr);
+  assert(svc.get_device() != nullptr);
   assert(svc.get_cq() != nullptr);
   std::cout << "[PASS] use_device(default config)\n";
 }

@@ -4,10 +4,6 @@
 
 namespace asio::rdma::detail {
 
-// buffer tags are shared (rdma/rdma_types.hpp); keep nd-prefixed aliases.
-using nd_const_buffer_tag = rdma_const_buffer_tag;
-using nd_mutable_buffer_tag = rdma_mutable_buffer_tag;
-
 // raii handler
 struct handle_deleter {
   void operator()(HANDLE handle) const {
@@ -149,135 +145,64 @@ struct nd_connector_state_t {
 };
 using nd_connector_state_ptr = std::shared_ptr<nd_connector_state_t>;
 
+// Move-only transfer token handed from listener to a server-side connector
+// (mirrors ibv_connector_handle_t).
+struct nd_connector_handle_t {
+  nd2_connector_ptr connector_;
+  unique_handle_t overlapped_handle_;
+  nd_adapter_ptr adapter_;
+
+  nd_connector_handle_t() = default;
+  nd_connector_handle_t(nd_connector_handle_t&&) = default;
+  nd_connector_handle_t& operator=(nd_connector_handle_t&&) = default;
+  nd_connector_handle_t(nd_connector_handle_t const&) = delete;
+  nd_connector_handle_t& operator=(nd_connector_handle_t const&) = delete;
+};
+
 
 }
 
 namespace asio::rdma::detail {
 
-// scatter/gather list type
-// TODO ... just use the inplace_vector in C++26
+// Scatter-gather list with small-buffer optimization (mirrors ibv_sglist_t).
 class nd_sglist_t {
  public:
-  static constexpr size_t inline_sge_count = 4;
-  using inline_storage_type = std::array<native_sge_t, inline_sge_count>;
-  using value_type = inline_storage_type::value_type;
-  using pointer = inline_storage_type::pointer;
-  using size_type = inline_storage_type::size_type;
-  using reference = inline_storage_type::reference;
-  using const_reference = inline_storage_type::const_reference;
-  using iterator = inline_storage_type::iterator;
-  using const_iterator = inline_storage_type::const_iterator;
+  static constexpr std::size_t inline_sge_count = 8;
 
- private:
-  inline_storage_type storage_;
-  pointer sglist_;
-  size_type sge_count_;
+  nd_sglist_t() = default;
+  ~nd_sglist_t() { reset(); }
+  nd_sglist_t(nd_sglist_t const&) = delete;
+  nd_sglist_t& operator=(nd_sglist_t const&) = delete;
 
- public:
-  explicit nd_sglist_t(size_type sge_count)
-      : storage_(),
-        sglist_(initiate_sglist(sge_count)),
-        sge_count_(sge_count) {}
-
-  nd_sglist_t() : nd_sglist_t(0) {}
-  ~nd_sglist_t() { destroy(); }
-
-  nd_sglist_t(nd_sglist_t const& other)
-      : storage_(other.storage_),
-        sglist_(initiate_sglist(other.sge_count_)),
-        sge_count_(other.sge_count_) {
-    if (sge_count_ > inline_sge_count) {
-      std::memcpy(sglist_, other.sglist_, sizeof(native_sge_t) * sge_count_);
-    }
-  }
-
-  nd_sglist_t& operator=(nd_sglist_t const& other) {
-    nd_sglist_t temp{other};
-    *this = std::move(temp);
-    return *this;
-  };
-
-  nd_sglist_t(nd_sglist_t&& other) noexcept
-      : storage_(std::move(other.storage_)),
-        sglist_(other.sglist_),
-        sge_count_(other.sge_count_) {
-    other.sglist_ = nullptr;
-    other.sge_count_ = 0;
-  }
-
-  nd_sglist_t& operator=(nd_sglist_t&& other) {
-    destroy();
-
-    storage_ = std::move(other.storage_);
-    sge_count_ = other.sge_count_;
-    if (sge_count_ > inline_sge_count) {
-      sglist_ = other.sglist_;
+  void resize(std::size_t count) {
+    reset();
+    if (count > inline_sge_count) {
+      heap_ = new native_sge_t[count]{};
+      data_ = heap_;
     }
     else {
-      sglist_ = storage_.data();
+      data_ = inline_.data();
     }
-
-    other.sglist_ = nullptr;
-    other.sge_count_ = 0;
-    return *this;
-  };
-
- public:
-  reference operator[](size_type index) {
-    assert(index < sge_count_);
-    return sglist_[index];
+    size_ = count;
   }
 
-  const_reference operator[](size_type index) const {
-    assert(index < sge_count_);
-    return sglist_[index];
-  }
-
-  iterator begin() noexcept { return storage_.begin(); }
-  iterator end() noexcept { return begin() + sge_count_; }
-  const_iterator cbegin() const noexcept { return storage_.cbegin(); }
-  const_iterator cend() const noexcept { return cbegin() + sge_count_; }
-  pointer data() const noexcept { return sglist_; }
-  size_type size() const noexcept { return sge_count_; }
-  size_type total_buffer_size() const noexcept {
-    return std::reduce(
-        cbegin(), cend(), size_type{0},
-        [](size_type acc, const_reference operand) {
-          return acc + operand.BufferLength;
-        });
-  }
-
-  void resize(size_t size) {
-    if (size > storage_.size() && size > sge_count_) {
-      sglist_ = reinterpret_cast<native_sge_t*>(
-          std::realloc(sglist_, size * sizeof(native_sge_t)));
-      assert(sglist_);
-    }
-    sge_count_ = size;
-  }
+  native_sge_t* data() noexcept { return data_; }
+  native_sge_t const* data() const noexcept { return data_; }
+  std::size_t size() const noexcept { return size_; }
+  native_sge_t& operator[](std::size_t i) noexcept { return data_[i]; }
 
  private:
-  native_sge_t* initiate_sglist(size_type sge_count) {
-    if (sge_count <= inline_sge_count) {
-      return storage_.data();
-    }
-    else {
-      auto* sglist = reinterpret_cast<native_sge_t*>(
-          std::malloc(sge_count * sizeof(native_sge_t)));
-      std::memset(sglist, 0, sge_count * sizeof(native_sge_t));
-      return sglist;
-    }
+  void reset() noexcept {
+    delete[] heap_;
+    heap_ = nullptr;
+    data_ = nullptr;
+    size_ = 0;
   }
 
-  void destroy() {
-    if (sge_count_ > inline_sge_count) {
-      if (sglist_) {
-        std::free(sglist_);
-      }
-    }
-  }
+  std::array<native_sge_t, inline_sge_count> inline_{};
+  native_sge_t* heap_ = nullptr;
+  native_sge_t* data_ = nullptr;
+  std::size_t size_ = 0;
 };
-
-
 
 }

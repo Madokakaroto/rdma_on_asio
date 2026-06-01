@@ -66,14 +66,4 @@ private:
   }
 };
 
-// The verbs op base hierarchy is backend-independent
-// (rdma/detail/rdma_verbs_op.hpp); keep nd-prefixed aliases.
-using nd_verbs_op_base = rdma_verbs_op_base;
-
-template <typename BufferSequence>
-using nd_two_sided_op = rdma_two_sided_op<BufferSequence>;
-
-template <typename BufferSequence>
-using nd_one_sided_op = rdma_one_sided_op<BufferSequence>;
-
 }

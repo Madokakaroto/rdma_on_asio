@@ -93,7 +93,7 @@ public:
 private:
   static void dispatch_completion(detail::native_wc_t const& wc) {
     if (!wc.RequestContext) return;
-    auto* op = reinterpret_cast<detail::nd_verbs_op_base*>(wc.RequestContext);
+    auto* op = reinterpret_cast<detail::rdma_verbs_op_base*>(wc.RequestContext);
     op->ec_ = static_cast<nd_errc>(wc.Status);
     if (!op->ec_) {
       if (wc.RequestType != ND2_REQUEST_TYPE::Nd2RequestTypeSend &&

@@ -35,7 +35,7 @@ void test_io_objects_construct() {
   // nd_listener
   rdma::nd_listener<tcp> listener(io_ctx);
   listener.open();
-  listener.bind(5000);
+  listener.bind(tcp::endpoint(asio::ip::address_v4::any(), 5000));
   listener.listen();
 
   std::cout << "[PASS] all IO objects constructed\n";

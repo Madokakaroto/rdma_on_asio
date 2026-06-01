@@ -34,14 +34,14 @@ public:
     impl_.get_service().open(impl_.get_implementation(), config, ec);
   }
 
-  void bind(uint16_t port) {
+  void bind(endpoint_type const& endpoint) {
     asio::error_code ec;
-    bind(port, ec);
+    bind(endpoint, ec);
     asio::detail::throw_error(ec);
   }
 
-  void bind(uint16_t port, asio::error_code& ec) {
-    impl_.get_service().bind(impl_.get_implementation(), port, ec);
+  void bind(endpoint_type const& endpoint, asio::error_code& ec) {
+    impl_.get_service().bind(impl_.get_implementation(), endpoint, ec);
   }
 
   void listen(int backlog = 128) {

@@ -9,10 +9,10 @@
 #include "nd/detail/nd_op_base.hpp"
 #include "nd/detail/nd_op_notify_wr.hpp"
 #include "nd/detail/nd_op_complete.hpp"
-#include "nd/detail/nd_op_send.hpp"
-#include "nd/detail/nd_op_recv.hpp"
-#include "nd/detail/nd_op_read.hpp"
-#include "nd/detail/nd_op_write.hpp"
+#include "rdma/detail/rdma_op_send.hpp"
+#include "rdma/detail/rdma_op_recv.hpp"
+#include "rdma/detail/rdma_op_read.hpp"
+#include "rdma/detail/rdma_op_write.hpp"
 #include "nd/nd_buffer.hpp"
 
 namespace asio::rdma::detail {
@@ -104,7 +104,7 @@ public:
       return;
     }
 
-    auto adapter = io_svc.get_adapter();
+    auto adapter = io_svc.get_device();
     auto const effective = derive_effective_config(config, adapter->info_);
 
     native_qp_init_attr qp_init_attr{
@@ -150,7 +150,7 @@ public:
       return;
     }
 
-    auto adapter = io_svc.get_adapter();
+    auto adapter = io_svc.get_device();
     auto const effective = derive_effective_config(config, adapter->info_);
 
     native_qp_init_attr qp_init_attr{
@@ -186,7 +186,7 @@ public:
   template <typename BufferSequence, typename Handler, typename IoExecutor>
   void async_send(implementation_type& impl, BufferSequence const& buffers,
                   Handler& handler, IoExecutor const& io_ex) {
-    using op = nd_send_op<BufferSequence, Handler, IoExecutor>;
+    using op = rdma_send_op<BufferSequence, Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{success_ec_, buffers, handler, io_ex};
@@ -197,7 +197,7 @@ public:
   template <typename BufferSequence, typename Handler, typename IoExecutor>
   void async_recv(implementation_type& impl, BufferSequence const& buffers,
                   Handler& handler, IoExecutor const& io_ex) {
-    using op = nd_recv_op<BufferSequence, Handler, IoExecutor>;
+    using op = rdma_recv_op<BufferSequence, Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{success_ec_, buffers, handler, io_ex};
@@ -209,7 +209,7 @@ public:
   void async_read(implementation_type& impl, BufferSequence const& buffers,
                   nd_remote_addr_t const& remote_addr,
                   Handler& handler, IoExecutor const& io_ex) {
-    using op = nd_read_op<BufferSequence, Handler, IoExecutor>;
+    using op = rdma_read_op<BufferSequence, Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{success_ec_, buffers, remote_addr, handler, io_ex};
@@ -221,7 +221,7 @@ public:
   void async_write(implementation_type& impl, BufferSequence const& buffers,
                    nd_remote_addr_t const& remote_addr,
                    Handler& handler, IoExecutor const& io_ex) {
-    using op = nd_write_op<BufferSequence, Handler, IoExecutor>;
+    using op = rdma_write_op<BufferSequence, Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{success_ec_, buffers, remote_addr, handler, io_ex};
@@ -321,7 +321,7 @@ private:
     }
   }
 
-  void work_started(implementation_type& impl, nd_verbs_op_base* op) {
+  void work_started(implementation_type& impl, rdma_verbs_op_base* op) {
     if (!impl.iocp_mode_) {
       return;
     }
@@ -336,7 +336,7 @@ private:
     p.v = p.p = nullptr;
   }
 
-  void post_immediate_completion(nd_verbs_op_base* error_op) {
+  void post_immediate_completion(rdma_verbs_op_base* error_op) {
     nd_complete_op::Handler handler{};
     nd_complete_op::ptr p = {asio::detail::addressof(handler),
                              nd_complete_op::ptr::allocate(handler), 0};

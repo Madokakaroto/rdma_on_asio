@@ -29,7 +29,7 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   rdma::nd_queue_pair<tcp> qp(io_ctx);
   rdma::nd_listener<tcp> listener(io_ctx);
   listener.open();
-  listener.bind(port);
+  listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
   listener.listen();
 
   auto [ec_req, connector, private_data] =

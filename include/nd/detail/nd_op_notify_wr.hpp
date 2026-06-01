@@ -22,10 +22,10 @@ public:
   }
 
  private:
-  static nd_verbs_op_base* resolve_wc(native_wc_t const& result) {
+  static rdma_verbs_op_base* resolve_wc(native_wc_t const& result) {
     assert(result.RequestContext);
-    nd_verbs_op_base* op =
-        reinterpret_cast<nd_verbs_op_base*>(result.RequestContext);
+    rdma_verbs_op_base* op =
+        reinterpret_cast<rdma_verbs_op_base*>(result.RequestContext);
     op->ec_ = static_cast<nd_errc>(result.Status);
     if (!op->ec_) {
       // send and write's bytes_transferred has been set in op
@@ -42,7 +42,7 @@ public:
 
   static void resolve_wcs(
       nd2_completion_queue_ptr& cq,
-      asio::detail::op_queue<nd_verbs_op_base>& verbs_op_queue) {
+      asio::detail::op_queue<rdma_verbs_op_base>& verbs_op_queue) {
     ULONG elem_retrived = 0UL;
     do {
       std::array<native_wc_t, poll_wcs_count> results{};
@@ -56,7 +56,7 @@ public:
   }
 
   static void process_wcs(
-      void* owner, asio::detail::op_queue<nd_verbs_op_base>& verbs_op_queue) {
+      void* owner, asio::detail::op_queue<rdma_verbs_op_base>& verbs_op_queue) {
     assert(owner);
     auto* wc_op = verbs_op_queue.front();
 
@@ -77,7 +77,7 @@ public:
 
   static void process_wcs(void* owner, nd2_completion_queue_ptr& cq) {
     assert(owner);
-    asio::detail::op_queue<nd_verbs_op_base> complete_ops{};
+    asio::detail::op_queue<rdma_verbs_op_base> complete_ops{};
     resolve_wcs(cq, complete_ops);
     process_wcs(owner, complete_ops);
   }

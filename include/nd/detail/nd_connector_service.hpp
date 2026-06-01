@@ -12,18 +12,6 @@
 
 namespace asio::rdma::detail {
 
-struct nd_connector_handle_t {
-  nd2_connector_ptr connector_;
-  unique_handle_t overlapped_handle_;
-  nd_adapter_ptr adapter_;
-
-  nd_connector_handle_t() = default;
-  nd_connector_handle_t(nd_connector_handle_t&&) = default;
-  nd_connector_handle_t& operator=(nd_connector_handle_t&&) = default;
-  nd_connector_handle_t(nd_connector_handle_t const&) = delete;
-  nd_connector_handle_t& operator=(nd_connector_handle_t const&) = delete;
-};
-
 template <typename PortSpace>
 class nd_connector_service
     : public asio::detail::execution_context_service_base<
@@ -123,7 +111,7 @@ public:
       return;
     }
 
-    auto adapter = io_svc.get_adapter();
+    auto adapter = io_svc.get_device();
     impl.connector_handle_.reset(
         create_overlapped_file(adapter->adapter_.Get(), ec));
     if (ec) {
