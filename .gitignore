@@ -67,3 +67,6 @@ core.*
 
 # Logs
 *.log
+
+# Deprecated reference implementation (kept locally for refactor reference only)
+include/deprecated/

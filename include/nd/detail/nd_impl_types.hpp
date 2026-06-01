@@ -1,9 +1,12 @@
 #pragma once
 
+#include "rdma/rdma_types.hpp"
+
 namespace asio::rdma::detail {
 
-struct nd_const_buffer_tag{};
-struct nd_mutable_buffer_tag{};
+// buffer tags are shared (rdma/rdma_types.hpp); keep nd-prefixed aliases.
+using nd_const_buffer_tag = rdma_const_buffer_tag;
+using nd_mutable_buffer_tag = rdma_mutable_buffer_tag;
 
 // raii handler
 struct handle_deleter {

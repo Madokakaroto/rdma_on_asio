@@ -104,7 +104,7 @@ class nd_mr_t {
  public:
   class const_buffer {
    public:
-     using nd_buffer_tag = detail::nd_const_buffer_tag;
+     using rdma_buffer_tag = detail::rdma_const_buffer_tag;
 
    private:
     nd_mr_t const& mr_;
@@ -160,7 +160,7 @@ class nd_mr_t {
 
   class mutable_buffer {
    public:
-    using nd_buffer_tag = detail::nd_mutable_buffer_tag;
+    using rdma_buffer_tag = detail::rdma_mutable_buffer_tag;
 
    private:
     nd_mr_t const& mr_;

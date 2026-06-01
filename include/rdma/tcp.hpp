@@ -8,6 +8,10 @@
 #  include "nd/nd_listener.hpp"
 #  define ASIO_RDMA_BACKEND_ND 1
 #elif defined(__linux__)
+#  include <rdma/rdma_cma.h>
+#  include "ibv/ibv_queue_pair.hpp"
+#  include "ibv/ibv_connector.hpp"
+#  include "ibv/ibv_listener.hpp"
 #  define ASIO_RDMA_BACKEND_VERBS 1
 #else
 #  error "Unsupported RDMA platform"
@@ -24,6 +28,13 @@ public:
   using queue_pair = nd_queue_pair<tcp>;
   using connector = nd_connector<tcp>;
   using listener  = nd_listener<tcp>;
+#elif defined(ASIO_RDMA_BACKEND_VERBS)
+  using queue_pair = ibv_queue_pair<tcp>;
+  using connector  = ibv_connector<tcp>;
+  using listener   = ibv_listener<tcp>;
+
+  // rdma_cm port space for create_id (control plane uses sockaddr like TCP).
+  static rdma_port_space rdma_type() noexcept { return RDMA_PS_TCP; }
 #endif
 
 private:
