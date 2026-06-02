@@ -81,9 +81,11 @@ public:
     impl.config_ = other_impl.config_;
   }
 
-  // open: create listener + overlapped handle
-  void open(implementation_type& impl, nd_config_t const& config,
-            asio::error_code& ec) {
+  // open: create listener + overlapped handle. PortSpace value is accepted for
+  // parity with ibv (and possible future v4/v6 selection); ND has no explicit
+  // RDMA port space.
+  void open(implementation_type& impl, PortSpace const& /*ps*/,
+            nd_config_t const& config, asio::error_code& ec) {
     if (impl.listener_) {
       ec = asio::error::already_open;
       ASIO_ERROR_LOCATION(ec);

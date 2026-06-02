@@ -1,5 +1,10 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
+#include <cstring>
+#include <span>
+
 #include "asio/detail/config.hpp"
 #include "asio/detail/handler_alloc_helpers.hpp"
 #include "asio/detail/memory.hpp"
@@ -12,6 +17,11 @@
 
 namespace asio::rdma::detail {
 
+// Control-plane service for nd_connector. Mirrors ibv_connector_service.
+//
+// Open creates the IND2Connector + overlapped handle (no QP).
+// The QP is supplied at async_connect/async_accept time and only borrowed —
+// the queue_pair owns it.
 template <typename PortSpace>
 class nd_connector_service
     : public asio::detail::execution_context_service_base<
@@ -21,13 +31,16 @@ public:
   using base_type = asio::detail::execution_context_service_base<
       nd_connector_service<PortSpace>>;
   using endpoint_type = typename PortSpace::endpoint;
+  using native_connector_type = nd_connector_handle_t;
 
   struct implementation_type : nd_service_base::base_implementation_type {
     nd2_connector_ptr connector_;
     unique_handle_t connector_handle_;
-    native_qp_t* qp_ = nullptr;
     nd_adapter_ptr adapter_;
     nd_config_t config_;
+    // Peer's private data (client request on server; server reply on client).
+    std::array<std::byte, max_cm_private_data> remote_pd_{};
+    std::size_t remote_pd_len_ = 0;
   };
 
   explicit nd_connector_service(asio::execution_context& ctx)
@@ -41,7 +54,6 @@ public:
     base_shutdown<implementation_type>([](implementation_type& impl) {
       impl.connector_.Reset();
       impl.connector_handle_.reset();
-      impl.qp_ = nullptr;
       impl.adapter_.reset();
     });
   }
@@ -51,14 +63,12 @@ public:
     nd_service_base::base_construct(impl);
     impl.connector_.Reset();
     impl.connector_handle_.reset();
-    impl.qp_ = nullptr;
     impl.adapter_.reset();
   }
 
   void destroy(implementation_type& impl) {
     impl.connector_.Reset();
     impl.connector_handle_.reset();
-    impl.qp_ = nullptr;
     impl.adapter_.reset();
     nd_service_base::base_destroy(impl);
   }
@@ -68,10 +78,10 @@ public:
     nd_service_base::base_move_construct(impl, other_impl);
     impl.connector_ = std::move(other_impl.connector_);
     impl.connector_handle_ = std::move(other_impl.connector_handle_);
-    impl.qp_ = other_impl.qp_;
     impl.adapter_ = std::move(other_impl.adapter_);
     impl.config_ = other_impl.config_;
-    other_impl.qp_ = nullptr;
+    impl.remote_pd_ = other_impl.remote_pd_;
+    impl.remote_pd_len_ = other_impl.remote_pd_len_;
   }
 
   void move_assign(implementation_type& impl,
@@ -83,22 +93,134 @@ public:
     nd_service_base::base_construct(impl);
     impl.connector_ = std::move(other_impl.connector_);
     impl.connector_handle_ = std::move(other_impl.connector_handle_);
-    impl.qp_ = other_impl.qp_;
     impl.adapter_ = std::move(other_impl.adapter_);
     impl.config_ = other_impl.config_;
-    other_impl.qp_ = nullptr;
+    impl.remote_pd_ = other_impl.remote_pd_;
+    impl.remote_pd_len_ = other_impl.remote_pd_len_;
   }
 
-  // open (client: create new connector)
-  void open(implementation_type& impl, native_qp_t* qp,
+  // open (client): create IND2Connector + overlapped handle. PortSpace value is
+  // accepted for parity with ibv; nd has no rdma port space, so it's ignored.
+  void open(implementation_type& impl, PortSpace const& /*ps*/,
             nd_config_t const& config, asio::error_code& ec) {
+    do_open(impl, config, ec);
+  }
+
+  // assign (server): adopt a connector handle from the listener and store the
+  // client's request private data so remote_private_data() can return it.
+  void assign(implementation_type& impl, native_connector_type&& handle,
+              std::span<const std::byte> remote_pd, nd_config_t const& config,
+              asio::error_code& ec) {
     if (impl.connector_) {
       ec = asio::error::already_open;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
-    if (!qp) {
+    if (!handle.connector_) {
       ec = nd_errc::ext_invalid_connector;
+      ASIO_ERROR_LOCATION(ec);
+      return;
+    }
+
+    this->scheduler_.register_handle(handle.overlapped_handle_.get(), ec);
+    if (ec) {
+      ASIO_ERROR_LOCATION(ec);
+      return;
+    }
+
+    impl.connector_ = std::move(handle.connector_);
+    impl.connector_handle_ = std::move(handle.overlapped_handle_);
+    impl.adapter_ = std::move(handle.adapter_);
+    impl.config_ = config;
+    store_remote_pd(impl, remote_pd);
+  }
+
+  bool is_open(implementation_type const& impl) const noexcept {
+    return impl.connector_ != nullptr;
+  }
+
+  std::span<const std::byte> remote_private_data(
+      implementation_type const& impl) const {
+    return {impl.remote_pd_.data(), impl.remote_pd_len_};
+  }
+
+  void cancel(implementation_type& impl) {
+    // TODO: cancel in-flight operations
+  }
+
+  // async connect: borrow qp from the queue_pair, auto-open if needed, then
+  // Bind + Connect. CompleteConnect captures the server's reply private data.
+  template <typename Handler, typename IoExecutor>
+  void async_connect(implementation_type& impl, native_qp_t* qp,
+                     endpoint_type const& endpoint,
+                     std::span<const std::byte> private_data,
+                     Handler& handler, IoExecutor const& io_ex) {
+    // Auto-open (mirrors asio socket.connect opening with the protocol).
+    asio::error_code open_ec;
+    if (!is_open(impl)) {
+      do_open(impl, nd_config_t{}, open_ec);
+    }
+
+    using op = nd_connect_op<Handler, IoExecutor>;
+    typename op::ptr p = {asio::detail::addressof(handler),
+                          op::ptr::allocate(handler), 0};
+    p.p = new (p.v) op{impl.connector_.Get(), pd_sink(impl), handler, io_ex};
+
+    if (open_ec) {
+      this->scheduler_.work_started();
+      this->scheduler_.on_completion(p.p, open_ec);
+      p.v = p.p = 0;
+      return;
+    }
+    if (!qp) {
+      asio::error_code ec = nd_errc::ext_invalid_qp;
+      this->scheduler_.work_started();
+      this->scheduler_.on_completion(p.p, ec);
+      p.v = p.p = 0;
+      return;
+    }
+    start_connect_op(impl, qp, endpoint, private_data, p.p);
+    p.v = p.p = 0;
+  }
+
+  // async accept: borrow qp from the queue_pair, then Accept.
+  template <typename Handler, typename IoExecutor>
+  void async_accept(implementation_type& impl, native_qp_t* qp,
+                    std::span<const std::byte> private_data,
+                    Handler& handler, IoExecutor const& io_ex) {
+    using op = nd_disconnect_op<Handler, IoExecutor>;
+    typename op::ptr p = {asio::detail::addressof(handler),
+                          op::ptr::allocate(handler), 0};
+    p.p = new (p.v) op{impl.connector_.Get(), handler, io_ex};
+    if (!qp) {
+      asio::error_code ec = nd_errc::ext_invalid_qp;
+      this->scheduler_.work_started();
+      this->scheduler_.on_completion(p.p, ec);
+      p.v = p.p = 0;
+      return;
+    }
+    start_accept_op(impl, qp, private_data, p.p);
+    p.v = p.p = 0;
+  }
+
+  // async disconnect
+  template <typename Handler, typename IoExecutor>
+  void async_disconnect(implementation_type& impl,
+                        Handler& handler, IoExecutor const& io_ex) {
+    using op = nd_disconnect_op<Handler, IoExecutor>;
+    typename op::ptr p = {asio::detail::addressof(handler),
+                          op::ptr::allocate(handler), 0};
+    p.p = new (p.v) op{impl.connector_.Get(), handler, io_ex};
+    start_disconnect_op(impl, p.p);
+    p.v = p.p = 0;
+  }
+
+private:
+  // Worker for both public open(ps, ...) and auto-open inside async_connect.
+  void do_open(implementation_type& impl, nd_config_t const& config,
+               asio::error_code& ec) {
+    if (impl.connector_) {
+      ec = asio::error::already_open;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
@@ -136,87 +258,23 @@ public:
       return;
     }
 
-    impl.qp_ = qp;
     impl.adapter_ = adapter;
     impl.config_ = config;
   }
 
-  // open (server: from native connector handle)
-  void open(implementation_type& impl, nd_connector_handle_t&& handle,
-            native_qp_t* qp, nd_config_t const& config,
-            asio::error_code& ec) {
-    if (impl.connector_) {
-      ec = asio::error::already_open;
-      ASIO_ERROR_LOCATION(ec);
-      return;
+  nd_pd_sink pd_sink(implementation_type& impl) {
+    return {impl.remote_pd_.data(), impl.remote_pd_.size(), &impl.remote_pd_len_};
+  }
+
+  void store_remote_pd(implementation_type& impl,
+                       std::span<const std::byte> pd) {
+    impl.remote_pd_len_ = (std::min)(pd.size(), impl.remote_pd_.size());
+    if (impl.remote_pd_len_) {
+      std::memcpy(impl.remote_pd_.data(), pd.data(), impl.remote_pd_len_);
     }
-    if (!qp || !handle.connector_) {
-      ec = nd_errc::ext_invalid_connector;
-      ASIO_ERROR_LOCATION(ec);
-      return;
-    }
-
-    this->scheduler_.register_handle(handle.overlapped_handle_.get(), ec);
-    if (ec) {
-      ASIO_ERROR_LOCATION(ec);
-      return;
-    }
-
-    impl.connector_ = std::move(handle.connector_);
-    impl.connector_handle_ = std::move(handle.overlapped_handle_);
-    impl.adapter_ = std::move(handle.adapter_);
-    impl.qp_ = qp;
-    impl.config_ = config;
   }
 
-  bool is_open(implementation_type const& impl) const noexcept {
-    return impl.connector_ != nullptr;
-  }
-
-  void cancel(implementation_type& impl) {
-    // TODO: cancel in-flight operations
-  }
-
-  // async connect
-  template <typename Handler, typename IoExecutor>
-  void async_connect(implementation_type& impl, endpoint_type const& endpoint,
-                     std::span<const std::byte> private_data,
-                     Handler& handler, IoExecutor const& io_ex) {
-    using op = nd_connect_op<Handler, IoExecutor>;
-    typename op::ptr p = {asio::detail::addressof(handler),
-                          op::ptr::allocate(handler), 0};
-    p.p = new (p.v) op{impl.connector_.Get(), handler, io_ex};
-    start_connect_op(impl, endpoint, private_data, p.p);
-    p.v = p.p = 0;
-  }
-
-  // async accept
-  template <typename Handler, typename IoExecutor>
-  void async_accept(implementation_type& impl,
-                    std::span<const std::byte> private_data,
-                    Handler& handler, IoExecutor const& io_ex) {
-    using op = nd_disconnect_op<Handler, IoExecutor>;
-    typename op::ptr p = {asio::detail::addressof(handler),
-                          op::ptr::allocate(handler), 0};
-    p.p = new (p.v) op{impl.connector_.Get(), handler, io_ex};
-    start_accept_op(impl, private_data, p.p);
-    p.v = p.p = 0;
-  }
-
-  // async disconnect
-  template <typename Handler, typename IoExecutor>
-  void async_disconnect(implementation_type& impl,
-                        Handler& handler, IoExecutor const& io_ex) {
-    using op = nd_disconnect_op<Handler, IoExecutor>;
-    typename op::ptr p = {asio::detail::addressof(handler),
-                          op::ptr::allocate(handler), 0};
-    p.p = new (p.v) op{impl.connector_.Get(), handler, io_ex};
-    start_disconnect_op(impl, p.p);
-    p.v = p.p = 0;
-  }
-
-private:
-  void start_connect_op(implementation_type& impl,
+  void start_connect_op(implementation_type& impl, native_qp_t* qp,
                         endpoint_type const& endpoint,
                         std::span<const std::byte> private_data,
                         nd_connect_op_base* op) {
@@ -232,7 +290,7 @@ private:
       return;
     }
 
-    connect(impl.connector_.Get(), impl.qp_,
+    connect(impl.connector_.Get(), qp,
             endpoint.data(), endpoint.size(),
             impl.config_.inbound_read_limit_,
             impl.config_.outbound_read_limit_,
@@ -246,12 +304,12 @@ private:
     this->scheduler_.on_pending(op);
   }
 
-  void start_accept_op(implementation_type& impl,
+  void start_accept_op(implementation_type& impl, native_qp_t* qp,
                        std::span<const std::byte> private_data,
                        nd_op_base* op) {
     this->scheduler_.work_started();
     asio::error_code ec{};
-    accept(impl.connector_.Get(), impl.qp_,
+    accept(impl.connector_.Get(), qp,
            impl.config_.inbound_read_limit_,
            impl.config_.outbound_read_limit_,
            private_data.empty() ? nullptr : private_data.data(),

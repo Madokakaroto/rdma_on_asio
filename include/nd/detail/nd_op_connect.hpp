@@ -1,5 +1,8 @@
 #pragma once
 
+#include <algorithm>
+#include <cstring>
+
 #include "asio/detail/bind_handler.hpp"
 #include "asio/detail/fenced_block.hpp"
 #include "asio/detail/handler_alloc_helpers.hpp"
@@ -22,11 +25,15 @@ protected:
 
 protected:
   stage_t stage_;
+  // Where to store the server's reply private data (after CompleteConnect).
+  nd_pd_sink remote_pd_;
 
 public:
-  nd_connect_op_base(IND2Connector* connector, func_type complete_func)
+  nd_connect_op_base(IND2Connector* connector, nd_pd_sink remote_pd,
+                     func_type complete_func)
      : nd_op_base(connector, &nd_connect_op_base::do_process, complete_func)
-     , stage_(stage_t::connecting) {
+     , stage_(stage_t::connecting)
+     , remote_pd_(remote_pd) {
   }
 
 protected:
@@ -40,6 +47,8 @@ protected:
       case stage_t::connecting:
         return o->process_complete_connect(owner, ec);
       case stage_t::connected:
+        // Capture server's reply private data into the connector's buffer.
+        o->capture_remote_pd();
         o->stage_ = stage_t::done;
         return status_t::completed;
       default:
@@ -60,6 +69,20 @@ protected:
     return status_t::continuation;
   }
 
+  void capture_remote_pd() {
+    if (!remote_pd_.buf || !remote_pd_.len || remote_pd_.cap == 0) {
+      return;
+    }
+    void const* pd_ptr = nullptr;
+    ULONG pd_size = 0;
+    auto const hr = get_connector()->GetPrivateData(&pd_ptr, &pd_size);
+    if (SUCCEEDED(hr) && pd_ptr && pd_size > 0) {
+      std::size_t n = (std::min)(static_cast<std::size_t>(pd_size),
+                                 remote_pd_.cap);
+      std::memcpy(remote_pd_.buf, pd_ptr, n);
+      *remote_pd_.len = n;
+    }
+  }
 };
 
 template <typename Handler, typename IoExecutor>
@@ -73,9 +96,9 @@ private:
   asio::detail::handler_work<Handler, IoExecutor> work_;
 
 public:
-  nd_connect_op(IND2Connector* conncetor, Handler& handler,
+  nd_connect_op(IND2Connector* conncetor, nd_pd_sink remote_pd, Handler& handler,
                 const IoExecutor& io_ex)
-      : nd_connect_op_base(conncetor, &nd_connect_op::do_complete)
+      : nd_connect_op_base(conncetor, remote_pd, &nd_connect_op::do_complete)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {}
 

@@ -30,11 +30,11 @@ void test_io_objects_construct() {
 
   // nd_connector
   rdma::nd_connector<tcp> conn(io_ctx);
-  conn.open(qp);
+  conn.open(tcp::v4());
 
   // nd_listener
   rdma::nd_listener<tcp> listener(io_ctx);
-  listener.open();
+  listener.open(tcp::v4());
   listener.bind(tcp::endpoint(asio::ip::address_v4::any(), 5000));
   listener.listen();
 
