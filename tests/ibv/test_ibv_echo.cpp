@@ -1,5 +1,6 @@
 #include <array>
 #include <iostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <cstring>
@@ -21,30 +22,34 @@ constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
 constexpr std::size_t kBufSize = 4096;
 constexpr int kEchoCount = 10;
 
+std::span<const std::byte> as_pd(std::string const& s) {
+  return std::as_bytes(std::span<const char>(s.data(), s.size()));
+}
+std::string_view pd_view(std::span<const std::byte> pd) {
+  return {reinterpret_cast<char const*>(pd.data()), pd.size()};
+}
+
 asio::awaitable<void> run_server(asio::io_context& io_ctx,
                                  rdma::ibv_device_ptr const& device,
                                  uint16_t port) {
   std::cout << "[server] listening on port " << port << "\n";
 
-  rdma::ibv_queue_pair qp(io_ctx);
   rdma::ibv_listener<tcp> listener(io_ctx);
-  listener.open();
+  listener.open(tcp::v4());
   listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
   listener.listen();
 
-  auto [ec_req, connector, private_data] =
-      co_await listener.async_get_connection_request(use_nothrow);
-  if (ec_req) {
-    std::cerr << "[server] get_connection_request failed: "
-              << ec_req.message() << "\n";
+  auto [ec_get, conn] = co_await listener.async_get_connection(use_nothrow);
+  if (ec_get) {
+    std::cerr << "[server] get_connection failed: " << ec_get.message() << "\n";
     co_return;
   }
-  std::cout << "[server] connection request received\n";
+  std::cout << "[server] client private data: \""
+            << pd_view(conn.remote_private_data()) << "\"\n";
 
-  rdma::ibv_connector<tcp> conn(io_ctx);
-  conn.open(std::move(connector), qp);
-
-  auto [ec_accept] = co_await conn.async_accept({}, use_nothrow);
+  rdma::ibv_queue_pair qp(io_ctx);
+  std::string reply_pd = "server-hello";
+  auto [ec_accept] = co_await conn.async_accept(qp, as_pd(reply_pd), use_nothrow);
   if (ec_accept) {
     std::cerr << "[server] accept failed: " << ec_accept.message() << "\n";
     co_return;
@@ -54,9 +59,6 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   std::array<char, kBufSize> raw_buf{};
   rdma::ibv_memory_region mr(device, raw_buf.data(), raw_buf.size());
 
-  // Fixed-count ping-pong: each iteration recv one message and echo it back.
-  // (RC QPs don't flush a pending recv on peer disconnect, so we don't rely on
-  // a recv error to terminate.)
   for (int i = 0; i < kEchoCount; ++i) {
     auto recv_buf = mr.slice(std::size_t{0}, kBufSize);
     auto [ec_recv, n] = co_await qp.async_recv(recv_buf, use_nothrow);
@@ -78,6 +80,7 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   }
 
   auto [ec_disc] = co_await conn.async_disconnect(use_nothrow);
+  (void)ec_disc;
   std::cout << "[server] disconnected\n";
 }
 
@@ -86,17 +89,20 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
                                  std::string const& host, uint16_t port) {
   std::cout << "[client] connecting to " << host << ":" << port << "\n";
 
-  rdma::ibv_queue_pair qp(io_ctx);
   rdma::ibv_connector<tcp> conn(io_ctx);
-  conn.open(qp);
+  conn.open(tcp::v4());
+  rdma::ibv_queue_pair qp(io_ctx);
 
   tcp::endpoint endpoint(asio::ip::make_address(host), port);
-  auto [ec_conn] = co_await conn.async_connect(endpoint, {}, use_nothrow);
+  std::string req_pd = "client-hello";
+  auto [ec_conn] =
+      co_await conn.async_connect(qp, endpoint, as_pd(req_pd), use_nothrow);
   if (ec_conn) {
     std::cerr << "[client] connect failed: " << ec_conn.message() << "\n";
     co_return;
   }
-  std::cout << "[client] connected\n";
+  std::cout << "[client] connected; server private data: \""
+            << pd_view(conn.remote_private_data()) << "\"\n";
 
   std::array<char, kBufSize> raw_buf{};
   rdma::ibv_memory_region mr(device, raw_buf.data(), raw_buf.size());
@@ -123,6 +129,7 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
   }
 
   auto [ec_disc] = co_await conn.async_disconnect(use_nothrow);
+  (void)ec_disc;
   std::cout << "[client] disconnected\n";
 }
 

@@ -110,6 +110,17 @@ using unique_rdma_cm_event_ptr =
 using cm_channel_holder = unique_rdma_event_channel_ptr;
 using cm_id_holder = unique_rdma_cm_id_ptr;
 
+// Upper bound for copied CM private data (transports cap this well below 256).
+inline constexpr std::size_t max_cm_private_data = 256;
+
+// Where an async op writes the peer's private data (the connector's buffer), so
+// it outlives the op. buf/len point into the connector's implementation_type.
+struct ibv_pd_sink {
+  std::byte* buf = nullptr;
+  std::size_t cap = 0;
+  std::size_t* len = nullptr;
+};
+
 // Scatter-gather list of ibv_sge with small-buffer optimization. SGE counts are
 // small in practice; spill to the heap only beyond the inline capacity.
 class ibv_sglist_t {

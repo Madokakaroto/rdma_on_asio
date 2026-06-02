@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <utility>
 
 #include "asio/detail/bind_handler.hpp"
@@ -41,18 +43,25 @@ protected:
   std::uint8_t private_data_len_;
   // Creates the QP on cm_id once it has a context (after ADDR_RESOLVED).
   ibv_create_qp_fn create_qp_;
+  // Where to store the server's reply private data (from ESTABLISHED).
+  ibv_pd_sink remote_pd_;
 
   ibv_connect_op_base(asio::error_code const& success_ec, native_cm_id_t* cm_id,
                       int timeout, void const* private_data,
                       std::size_t private_data_len,
-                      ibv_create_qp_fn create_qp, func_type complete_func)
-      : ibv_op_cm(success_ec, cm_id->channel, &do_perform, complete_func)
+                      ibv_create_qp_fn create_qp, ibv_pd_sink remote_pd,
+                      func_type complete_func)
+      // cm_id may be null if auto-open failed; that path posts an immediate
+      // completion (do_perform is never called), so a null channel is fine.
+      : ibv_op_cm(success_ec, cm_id ? cm_id->channel : nullptr, &do_perform,
+                  complete_func)
       , stage_(stage_t::begin)
       , cm_id_(cm_id)
       , timeout_(timeout)
       , private_data_(private_data)
       , private_data_len_(static_cast<std::uint8_t>(private_data_len))
-      , create_qp_(std::move(create_qp)) {
+      , create_qp_(std::move(create_qp))
+      , remote_pd_(remote_pd) {
   }
 
 private:
@@ -137,8 +146,19 @@ private:
 
   status do_process_connect(unique_rdma_cm_event_ptr const& event) {
     switch (event->event) {
-      case RDMA_CM_EVENT_ESTABLISHED:
+      case RDMA_CM_EVENT_ESTABLISHED: {
+        // Capture the server's reply private data into the connector's buffer.
+        auto const& cp = event->param.conn;
+        if (remote_pd_.buf && remote_pd_.len && cp.private_data &&
+            cp.private_data_len) {
+          std::size_t n =
+              (std::min)(static_cast<std::size_t>(cp.private_data_len),
+                         remote_pd_.cap);
+          std::memcpy(remote_pd_.buf, cp.private_data, n);
+          *remote_pd_.len = n;
+        }
         return status::done;
+      }
       case RDMA_CM_EVENT_CONNECT_ERROR:
         this->ec_ = asio::error::connection_aborted;
         return status::done;
@@ -168,9 +188,10 @@ public:
   ibv_connect_op(asio::error_code const& success_ec, native_cm_id_t* cm_id,
                  int timeout, void const* private_data,
                  std::size_t private_data_len, ibv_create_qp_fn create_qp,
-                 Handler& handler, IoExecutor const& io_ex)
+                 ibv_pd_sink remote_pd, Handler& handler,
+                 IoExecutor const& io_ex)
       : ibv_connect_op_base(success_ec, cm_id, timeout, private_data,
-                            private_data_len, std::move(create_qp),
+                            private_data_len, std::move(create_qp), remote_pd,
                             &ibv_connect_op::do_complete)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {

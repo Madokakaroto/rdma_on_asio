@@ -79,8 +79,8 @@ public:
 
   // --- open / bind / listen ---
 
-  void open(implementation_type& impl, ibv_config_t const& config,
-            asio::error_code& ec) {
+  void open(implementation_type& impl, rdma_port_space ps_type,
+            ibv_config_t const& config, asio::error_code& ec) {
     if (is_open(impl)) {
       ec = make_error_code(ibv_errc::ext_already_registered);
       return;
@@ -90,8 +90,7 @@ public:
       return;
     }
     native_cm_id_t* id = nullptr;
-    if (create_cm_id(channel.get(), &id, nullptr, PortSpace::rdma_type(), ec) !=
-        0) {
+    if (create_cm_id(channel.get(), &id, nullptr, ps_type, ec) != 0) {
       return;
     }
     cm_id_holder cm_id{ id };

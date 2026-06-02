@@ -1,6 +1,9 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cstring>
 #include <span>
 
 #include "asio/detail/reactor.hpp"
@@ -19,6 +22,9 @@ namespace asio::rdma::detail {
 // Control-plane service for ibv_connector: owns a cm_id + its event channel,
 // registered to the epoll reactor. Drives connect / accept / disconnect via
 // reactor_op state machines. Mirrors nd_connector_service (IOCP -> epoll).
+//
+// The QP is created on the cm_id during connect/accept using a create-qp
+// callback supplied by the queue_pair passed to async_connect/async_accept.
 template <typename PortSpace>
 class ibv_connector_service
     : public asio::detail::execution_context_service_base<
@@ -34,8 +40,9 @@ public:
     asio::detail::reactor::per_descriptor_data cm_reactor_data_;
     ibv_config_t config_;
     int timeout_ = default_cm_timeout_ms;
-    // Back-fills the bound queue_pair's QP on cm_id during connect/accept.
-    ibv_create_qp_fn create_qp_;
+    // Peer's private data (client request on server; server reply on client).
+    std::array<std::byte, max_cm_private_data> remote_pd_{};
+    std::size_t remote_pd_len_ = 0;
   };
 
   explicit ibv_connector_service(asio::execution_context& context)
@@ -67,6 +74,8 @@ public:
     impl.cm_id_ = std::move(other_impl.cm_id_);
     impl.config_ = other_impl.config_;
     impl.timeout_ = other_impl.timeout_;
+    impl.remote_pd_ = other_impl.remote_pd_;
+    impl.remote_pd_len_ = other_impl.remote_pd_len_;
     impl.cm_reactor_data_ = asio::detail::reactor::per_descriptor_data();
     if (impl.cm_channel_) {
       this->reactor_.move_descriptor(impl.cm_channel_->fd, impl.cm_reactor_data_,
@@ -82,16 +91,18 @@ public:
     impl.cm_id_ = std::move(other_impl.cm_id_);
     impl.config_ = other_impl.config_;
     impl.timeout_ = other_impl.timeout_;
+    impl.remote_pd_ = other_impl.remote_pd_;
+    impl.remote_pd_len_ = other_impl.remote_pd_len_;
     if (impl.cm_channel_) {
       this->reactor_.move_descriptor(impl.cm_channel_->fd, impl.cm_reactor_data_,
                                      other_impl.cm_reactor_data_);
     }
   }
 
-  // --- open ---
+  // --- open / assign (asio basic_socket::open(protocol) / assign) ---
 
-  // Client side: create a fresh event channel + cm_id for an outbound connect.
-  void open(implementation_type& impl, ibv_create_qp_fn create_qp,
+  // Create a fresh event channel + cm_id (client). ps_type = PortSpace::rdma_type().
+  void open(implementation_type& impl, rdma_port_space ps_type,
             ibv_config_t const& config, asio::error_code& ec) {
     if (is_open(impl)) {
       ec = make_error_code(ibv_errc::ext_already_registered);
@@ -102,8 +113,7 @@ public:
       return;
     }
     native_cm_id_t* id = nullptr;
-    if (create_cm_id(channel.get(), &id, nullptr, PortSpace::rdma_type(), ec) !=
-        0) {
+    if (create_cm_id(channel.get(), &id, nullptr, ps_type, ec) != 0) {
       return;
     }
     cm_id_holder cm_id{ id };
@@ -116,14 +126,14 @@ public:
     impl.cm_id_ = std::move(cm_id);
     impl.config_ = config;
     impl.timeout_ = default_cm_timeout_ms;
-    impl.create_qp_ = std::move(create_qp);
     ec.clear();
   }
 
-  // Server side: adopt a connector handle produced by the listener.
-  void open(implementation_type& impl, native_connector_type&& handle,
-            ibv_create_qp_fn create_qp, ibv_config_t const& config,
-            asio::error_code& ec) {
+  // Adopt a connector handle produced by the listener (server). Also store the
+  // client's request private data so remote_private_data() can return it.
+  void assign(implementation_type& impl, native_connector_type&& handle,
+              std::span<const std::byte> remote_pd, ibv_config_t const& config,
+              asio::error_code& ec) {
     if (is_open(impl)) {
       ec = make_error_code(ibv_errc::ext_already_registered);
       return;
@@ -141,12 +151,17 @@ public:
     impl.cm_id_ = std::move(handle.cm_id_);
     impl.config_ = config;
     impl.timeout_ = default_cm_timeout_ms;
-    impl.create_qp_ = std::move(create_qp);
+    store_remote_pd(impl, remote_pd);
     ec.clear();
   }
 
   bool is_open(implementation_type const& impl) const {
     return impl.cm_id_ != nullptr;
+  }
+
+  std::span<const std::byte> remote_private_data(
+      implementation_type const& impl) const {
+    return {impl.remote_pd_.data(), impl.remote_pd_len_};
   }
 
   void cancel(implementation_type& impl) {
@@ -158,28 +173,40 @@ public:
   // --- async operations ---
 
   template <typename Handler, typename IoExecutor>
-  void async_connect(implementation_type& impl, endpoint_type const& endpoint,
+  void async_connect(implementation_type& impl, ibv_create_qp_fn create_qp,
+                     endpoint_type const& endpoint,
                      std::span<const std::byte> private_data, Handler& handler,
                      IoExecutor const& io_ex) {
+    // Auto-open (asio socket.connect opens with the endpoint's protocol).
+    asio::error_code open_ec;
+    if (!is_open(impl)) {
+      open(impl, PortSpace::rdma_type(), ibv_config_t{}, open_ec);
+    }
     using op = ibv_connect_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{this->success_ec_, impl.cm_id_.get(), impl.timeout_,
                        private_data.data(), private_data.size(),
-                       impl.create_qp_, handler, io_ex};
-    start_connect_op(impl, endpoint, p.p);
+                       std::move(create_qp), pd_sink(impl), handler, io_ex};
+    if (open_ec) {
+      p.p->ec_ = open_ec;
+      this->reactor_.post_immediate_completion(p.p, false);
+    }
+    else {
+      start_connect_op(impl, endpoint, p.p);
+    }
     p.v = p.p = 0;
   }
 
   template <typename Handler, typename IoExecutor>
-  void async_accept(implementation_type& impl,
+  void async_accept(implementation_type& impl, ibv_create_qp_fn create_qp,
                     std::span<const std::byte> private_data, Handler& handler,
                     IoExecutor const& io_ex) {
     using op = ibv_accept_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{this->success_ec_, impl.cm_id_.get(), handler, io_ex};
-    start_accept_op(impl, private_data, p.p);
+    start_accept_op(impl, std::move(create_qp), private_data, p.p);
     p.v = p.p = 0;
   }
 
@@ -195,6 +222,18 @@ public:
   }
 
 private:
+  ibv_pd_sink pd_sink(implementation_type& impl) {
+    return {impl.remote_pd_.data(), impl.remote_pd_.size(), &impl.remote_pd_len_};
+  }
+
+  void store_remote_pd(implementation_type& impl,
+                       std::span<const std::byte> pd) {
+    impl.remote_pd_len_ = (std::min)(pd.size(), impl.remote_pd_.size());
+    if (impl.remote_pd_len_) {
+      std::memcpy(impl.remote_pd_.data(), pd.data(), impl.remote_pd_len_);
+    }
+  }
+
   void start_connect_op(implementation_type& impl,
                         endpoint_type const& endpoint,
                         asio::detail::reactor_op* op) {
@@ -211,12 +250,12 @@ private:
     }
   }
 
-  void start_accept_op(implementation_type& impl,
+  void start_accept_op(implementation_type& impl, ibv_create_qp_fn create_qp,
                        std::span<const std::byte> private_data,
                        asio::detail::reactor_op* op) {
     // The child cm_id already has a context: create the QP before accepting.
-    if (impl.create_qp_) {
-      op->ec_ = impl.create_qp_(impl.cm_id_.get());
+    if (create_qp) {
+      op->ec_ = create_qp(impl.cm_id_.get());
       if (op->ec_) {
         this->reactor_.post_immediate_completion(op, false);
         return;

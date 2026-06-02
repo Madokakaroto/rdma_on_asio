@@ -15,8 +15,7 @@
 
 namespace asio::rdma::detail {
 
-// Upper bound for copied CM private data (transports cap this well below 256).
-inline constexpr std::size_t max_cm_private_data = 256;
+// max_cm_private_data is defined in ibv_impl_types.hpp.
 
 // Listener side: wait on the listener's event channel for CONNECT_REQUEST. On
 // arrival, copy the client's private data, migrate the child cm_id (event->id)
