@@ -5,6 +5,7 @@
 #include <cstring>
 #include <span>
 
+#include "asio/buffer.hpp"
 #include "asio/detail/config.hpp"
 #include "asio/detail/handler_alloc_helpers.hpp"
 #include "asio/detail/memory.hpp"
@@ -39,8 +40,8 @@ public:
     nd_adapter_ptr adapter_;
     nd_config_t config_;
     // Peer's private data (client request on server; server reply on client).
-    std::array<std::byte, max_cm_private_data> remote_pd_{};
-    std::size_t remote_pd_len_ = 0;
+    std::array<std::byte, max_private_data_size> private_data_buffer_{};
+    std::size_t private_data_length_ = 0;
   };
 
   explicit nd_connector_service(asio::execution_context& ctx)
@@ -80,8 +81,8 @@ public:
     impl.connector_handle_ = std::move(other_impl.connector_handle_);
     impl.adapter_ = std::move(other_impl.adapter_);
     impl.config_ = other_impl.config_;
-    impl.remote_pd_ = other_impl.remote_pd_;
-    impl.remote_pd_len_ = other_impl.remote_pd_len_;
+    impl.private_data_buffer_ = other_impl.private_data_buffer_;
+    impl.private_data_length_ = other_impl.private_data_length_;
   }
 
   void move_assign(implementation_type& impl,
@@ -95,8 +96,8 @@ public:
     impl.connector_handle_ = std::move(other_impl.connector_handle_);
     impl.adapter_ = std::move(other_impl.adapter_);
     impl.config_ = other_impl.config_;
-    impl.remote_pd_ = other_impl.remote_pd_;
-    impl.remote_pd_len_ = other_impl.remote_pd_len_;
+    impl.private_data_buffer_ = other_impl.private_data_buffer_;
+    impl.private_data_length_ = other_impl.private_data_length_;
   }
 
   // open (client): create IND2Connector + overlapped handle. PortSpace value is
@@ -139,9 +140,9 @@ public:
     return impl.connector_ != nullptr;
   }
 
-  std::span<const std::byte> remote_private_data(
-      implementation_type const& impl) const {
-    return {impl.remote_pd_.data(), impl.remote_pd_len_};
+  asio::const_buffer get_remote_data(implementation_type const& impl) const {
+    return asio::buffer(impl.private_data_buffer_.data(),
+                        impl.private_data_length_);
   }
 
   void cancel(implementation_type& impl) {
@@ -153,7 +154,7 @@ public:
   template <typename Handler, typename IoExecutor>
   void async_connect(implementation_type& impl, native_qp_t* qp,
                      endpoint_type const& endpoint,
-                     std::span<const std::byte> private_data,
+                     asio::const_buffer private_data,
                      Handler& handler, IoExecutor const& io_ex) {
     // Auto-open (mirrors asio socket.connect opening with the protocol).
     asio::error_code open_ec;
@@ -186,7 +187,7 @@ public:
   // async accept: borrow qp from the queue_pair, then Accept.
   template <typename Handler, typename IoExecutor>
   void async_accept(implementation_type& impl, native_qp_t* qp,
-                    std::span<const std::byte> private_data,
+                    asio::const_buffer private_data,
                     Handler& handler, IoExecutor const& io_ex) {
     using op = nd_disconnect_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
@@ -263,20 +264,23 @@ private:
   }
 
   nd_pd_sink pd_sink(implementation_type& impl) {
-    return {impl.remote_pd_.data(), impl.remote_pd_.size(), &impl.remote_pd_len_};
+    return {impl.private_data_buffer_.data(), impl.private_data_buffer_.size(),
+            &impl.private_data_length_};
   }
 
   void store_remote_pd(implementation_type& impl,
                        std::span<const std::byte> pd) {
-    impl.remote_pd_len_ = (std::min)(pd.size(), impl.remote_pd_.size());
-    if (impl.remote_pd_len_) {
-      std::memcpy(impl.remote_pd_.data(), pd.data(), impl.remote_pd_len_);
+    impl.private_data_length_ =
+        (std::min)(pd.size(), impl.private_data_buffer_.size());
+    if (impl.private_data_length_) {
+      std::memcpy(impl.private_data_buffer_.data(), pd.data(),
+                  impl.private_data_length_);
     }
   }
 
   void start_connect_op(implementation_type& impl, native_qp_t* qp,
                         endpoint_type const& endpoint,
-                        std::span<const std::byte> private_data,
+                        asio::const_buffer private_data,
                         nd_connect_op_base* op) {
     this->scheduler_.work_started();
 
@@ -294,7 +298,7 @@ private:
             endpoint.data(), endpoint.size(),
             impl.config_.inbound_read_limit_,
             impl.config_.outbound_read_limit_,
-            private_data.empty() ? nullptr : private_data.data(),
+            private_data.size() == 0 ? nullptr : private_data.data(),
             static_cast<ULONG>(private_data.size()),
             op, ec);
     if (ec) {
@@ -305,14 +309,14 @@ private:
   }
 
   void start_accept_op(implementation_type& impl, native_qp_t* qp,
-                       std::span<const std::byte> private_data,
+                       asio::const_buffer private_data,
                        nd_op_base* op) {
     this->scheduler_.work_started();
     asio::error_code ec{};
     accept(impl.connector_.Get(), qp,
            impl.config_.inbound_read_limit_,
            impl.config_.outbound_read_limit_,
-           private_data.empty() ? nullptr : private_data.data(),
+           private_data.size() == 0 ? nullptr : private_data.data(),
            static_cast<ULONG>(private_data.size()),
            op, ec);
     if (ec) {

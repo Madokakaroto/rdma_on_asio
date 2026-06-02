@@ -1,8 +1,10 @@
 #pragma once
 
 #include <span>
-#include "asio/io_context.hpp"
+
+#include "asio/buffer.hpp"
 #include "asio/detail/io_object_impl.hpp"
+#include "asio/io_context.hpp"
 #include "nd/detail/nd_connector_service.hpp"
 #include "nd/nd_queue_pair.hpp"
 
@@ -75,8 +77,8 @@ public:
 
   // The peer's private data: the client's request data on the server side, the
   // server's reply data on the client side (after connect/accept completes).
-  std::span<const std::byte> remote_private_data() const noexcept {
-    return impl_.get_service().remote_private_data(impl_.get_implementation());
+  asio::const_buffer get_remote_data() const noexcept {
+    return impl_.get_service().get_remote_data(impl_.get_implementation());
   }
 
   void cancel() {
@@ -86,7 +88,7 @@ public:
   // async connect: Bind + Connect using qp.native_handle(). handler(error_code)
   template <typename ConnectToken>
   auto async_connect(nd_queue_pair& qp, endpoint_type const& endpoint,
-                     std::span<const std::byte> outgoing_private_data,
+                     asio::const_buffer outgoing_private_data,
                      ConnectToken&& token) {
     return asio::async_initiate<ConnectToken, void(asio::error_code)>(
         [this, &qp, &endpoint, outgoing_private_data](auto handler) {
@@ -101,7 +103,7 @@ public:
   // async accept: Accept using qp.native_handle(). handler(error_code)
   template <typename AcceptToken>
   auto async_accept(nd_queue_pair& qp,
-                    std::span<const std::byte> outgoing_private_data,
+                    asio::const_buffer outgoing_private_data,
                     AcceptToken&& token) {
     return asio::async_initiate<AcceptToken, void(asio::error_code)>(
         [this, &qp, outgoing_private_data](auto handler) {

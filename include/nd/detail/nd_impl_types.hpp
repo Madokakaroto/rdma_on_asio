@@ -160,7 +160,7 @@ struct nd_connector_handle_t {
 };
 
 // Upper bound for copied CM private data (mirrors ibv_impl_types.hpp).
-inline constexpr std::size_t max_cm_private_data = 256;
+inline constexpr std::size_t max_private_data_size = 256;
 
 // Where an async op writes the peer's private data (the connector's buffer), so
 // it outlives the op. buf/len point into the connector's implementation_type.
