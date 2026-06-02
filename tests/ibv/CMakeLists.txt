@@ -37,3 +37,16 @@ target_include_directories(test_ibv_echo PRIVATE
 
 target_compile_definitions(test_ibv_echo PRIVATE ASIO_STANDALONE)
 target_link_libraries(test_ibv_echo PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
+
+# Poll-mode echo: data plane runs against a user-owned CQ spun on its own thread.
+find_package(Threads REQUIRED)
+
+add_executable(test_ibv_echo_poll test_ibv_echo_poll.cpp)
+
+target_include_directories(test_ibv_echo_poll PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party/asio/include
+)
+
+target_compile_definitions(test_ibv_echo_poll PRIVATE ASIO_STANDALONE)
+target_link_libraries(test_ibv_echo_poll PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM Threads::Threads)
