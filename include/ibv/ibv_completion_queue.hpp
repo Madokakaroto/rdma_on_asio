@@ -8,7 +8,7 @@
 #include "ibv/ibv_types.hpp"
 #include "ibv/detail/ibv_config_derive.hpp"
 #include "ibv/detail/ibv_impl_types.hpp"
-#include "ibv/detail/ibv_op_cq_notify.hpp"
+#include "ibv/detail/ibv_op_complete.hpp"
 #include "ibv/detail/ibv_ops_verbs.hpp"
 
 namespace asio::rdma {
@@ -67,21 +67,10 @@ public:
 
 private:
   void dispatch(detail::native_wc_t const& wc) {
-    if (!wc.wr_id) {
-      return;
+    if (auto* op = detail::resolve_verbs_op(wc)) {
+      // Non-null owner so the handler upcall fires (nd passed nullptr here).
+      op->complete(this);
     }
-    auto* op = reinterpret_cast<detail::rdma_verbs_op_base*>(wc.wr_id);
-    if (wc.status == IBV_WC_SUCCESS) {
-      if (wc.opcode != IBV_WC_SEND && wc.opcode != IBV_WC_RDMA_WRITE) {
-        op->bytes_transferred_ = wc.byte_len;
-      }
-    }
-    else {
-      op->bytes_transferred_ = 0;
-      op->ec_ = detail::wc_status_to_ec(wc.status);
-    }
-    // Non-null owner so the handler upcall fires (nd passed nullptr here).
-    op->complete(this);
   }
 
   ibv_device_ptr device_;

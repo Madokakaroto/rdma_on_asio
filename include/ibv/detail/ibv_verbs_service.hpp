@@ -9,7 +9,7 @@
 #include "ibv/detail/ibv_config_derive.hpp"
 #include "ibv/detail/ibv_impl_types.hpp"
 #include "ibv/detail/ibv_io_completion_service.hpp"
-#include "ibv/detail/ibv_op_cq_notify.hpp"
+#include "ibv/detail/ibv_op_complete.hpp"
 #include "ibv/detail/ibv_ops_verbs.hpp"
 #include "rdma/detail/rdma_op_read.hpp"
 #include "rdma/detail/rdma_op_recv.hpp"
