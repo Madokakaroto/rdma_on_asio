@@ -22,10 +22,7 @@ constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
 constexpr std::size_t kBufSize = 4096;
 constexpr int kEchoCount = 10;
 
-std::span<const std::byte> as_pd(std::string const& s) {
-  return std::as_bytes(std::span<const char>(s.data(), s.size()));
-}
-std::string_view pd_view(std::span<const std::byte> pd) {
+std::string_view pd_view(asio::const_buffer pd) {
   return {reinterpret_cast<char const*>(pd.data()), pd.size()};
 }
 
@@ -45,11 +42,11 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
     co_return;
   }
   std::cout << "[server] client private data: \""
-            << pd_view(conn.remote_private_data()) << "\"\n";
+            << pd_view(conn.get_remote_data()) << "\"\n";
 
   rdma::ibv_queue_pair qp(io_ctx);
   std::string reply_pd = "server-hello";
-  auto [ec_accept] = co_await conn.async_accept(qp, as_pd(reply_pd), use_nothrow);
+  auto [ec_accept] = co_await conn.async_accept(qp, asio::buffer(reply_pd), use_nothrow);
   if (ec_accept) {
     std::cerr << "[server] accept failed: " << ec_accept.message() << "\n";
     co_return;
@@ -96,13 +93,13 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
   tcp::endpoint endpoint(asio::ip::make_address(host), port);
   std::string req_pd = "client-hello";
   auto [ec_conn] =
-      co_await conn.async_connect(qp, endpoint, as_pd(req_pd), use_nothrow);
+      co_await conn.async_connect(qp, endpoint, asio::buffer(req_pd), use_nothrow);
   if (ec_conn) {
     std::cerr << "[client] connect failed: " << ec_conn.message() << "\n";
     co_return;
   }
   std::cout << "[client] connected; server private data: \""
-            << pd_view(conn.remote_private_data()) << "\"\n";
+            << pd_view(conn.get_remote_data()) << "\"\n";
 
   std::array<char, kBufSize> raw_buf{};
   rdma::ibv_memory_region mr(device, raw_buf.data(), raw_buf.size());

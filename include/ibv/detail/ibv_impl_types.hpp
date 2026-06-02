@@ -111,7 +111,7 @@ using cm_channel_holder = unique_rdma_event_channel_ptr;
 using cm_id_holder = unique_rdma_cm_id_ptr;
 
 // Upper bound for copied CM private data (transports cap this well below 256).
-inline constexpr std::size_t max_cm_private_data = 256;
+inline constexpr std::size_t max_private_data_size = 256;
 
 // Where an async op writes the peer's private data (the connector's buffer), so
 // it outlives the op. buf/len point into the connector's implementation_type.

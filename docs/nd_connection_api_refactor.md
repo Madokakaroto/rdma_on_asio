@@ -113,10 +113,11 @@ Mirror `include/ibv/ibv_connector.hpp` exactly:
 
 ### 6. `include/nd/nd_listener.hpp`
 Mirror `include/ibv/ibv_listener.hpp`:
-- store `asio::io_context* io_ctx_` (set in ctor) to build the returned connector;
 - `open(PortSpace const& ps, config = {})`;
 - `async_get_connection(token)` → `void(ec, nd_connector<PortSpace>)`: wrap the service
-  `async_get_connection_request` op; in the wrapper handler build `nd_connector<PortSpace>(*io_ctx_)`,
+  `async_get_connection_request` op; obtain the io_context from the impl (no cached pointer):
+  `auto& io_ctx = impl_.get_executor().context();` (returns `io_context&`). In the wrapper handler
+  build `nd_connector<PortSpace>(io_ctx)`,
   `assign_with_private_data(std::move(handle), pd, {}, aec)`, then upcall `(ec, std::move(conn))`.
   **Bind the wrapper to a named local** before passing to the service op (the service takes
   `Handler&` and moves it — a temporary won't bind; this exact bug was hit on ibv).
@@ -156,5 +157,5 @@ Expect 10 echo round-trips + clean disconnect on both, and the private-data line
 - Keep LF line endings (`.gitattributes`); `.vcxproj`/`.sln` stay CRLF.
 - The connector owns the IND2Connector; the queue_pair owns the QP — so unlike ibv, after the
   connector dies the QP object is still alive (just disconnected). No ordering hazard.
-- If `async_get_connection`'s connector construction needs the io_context and only an executor is
-  available, store `asio::io_context*` in the listener (as ibv does) rather than querying.
+- `async_get_connection`'s connector construction needs the io_context: get it from
+  `impl_.get_executor().context()` (its `context()` returns `io_context&`) — don't cache a pointer.

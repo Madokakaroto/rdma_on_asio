@@ -64,13 +64,13 @@ void compile_only_async_surface(bool run) {
   asio::rdma::ibv_connector<tcp> connector(io);
   asio::rdma::ibv_listener<tcp> listener(io);
 
-  std::span<const std::byte> pd;
+  asio::const_buffer pd;
   tcp::endpoint ep(asio::ip::address_v4::loopback(), 0);
 
   connector.async_connect(qp, ep, pd, [](asio::error_code) {});
   connector.async_accept(qp, pd, [](asio::error_code) {});
   connector.async_disconnect([](asio::error_code) {});
-  (void)connector.remote_private_data();
+  (void)connector.get_remote_data();
 
   // return form: handler(error_code, connector)
   listener.async_get_connection(

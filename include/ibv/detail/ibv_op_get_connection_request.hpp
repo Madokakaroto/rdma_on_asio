@@ -15,7 +15,7 @@
 
 namespace asio::rdma::detail {
 
-// max_cm_private_data is defined in ibv_impl_types.hpp.
+// max_private_data_size is defined in ibv_impl_types.hpp.
 
 // Listener side: wait on the listener's event channel for CONNECT_REQUEST. On
 // arrival, copy the client's private data, migrate the child cm_id (event->id)
@@ -38,7 +38,7 @@ public:
 
 private:
   ibv_connector_handle_t connector_handle_;
-  std::array<std::byte, max_cm_private_data> private_data_buf_{};
+  std::array<std::byte, max_private_data_size> private_data_buf_{};
   std::size_t private_data_len_ = 0;
   Handler handler_;
   asio::detail::handler_work<Handler, IoExecutor> work_;
@@ -94,7 +94,7 @@ private:
 
     // Copy private data to a stack local: the op (and its buffer) is freed at
     // p.reset() below, but the span must stay valid for the upcall.
-    std::array<std::byte, max_cm_private_data> pd_buf = o->private_data_buf_;
+    std::array<std::byte, max_private_data_size> pd_buf = o->private_data_buf_;
     std::size_t const pd_len = o->private_data_len_;
 
     ibv_connector_handle_t handle = std::move(o->connector_handle_);

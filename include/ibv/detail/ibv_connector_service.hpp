@@ -6,6 +6,7 @@
 #include <cstring>
 #include <span>
 
+#include "asio/buffer.hpp"
 #include "asio/detail/reactor.hpp"
 #include "asio/execution_context.hpp"
 #include "asio/io_context.hpp"
@@ -41,8 +42,8 @@ public:
     ibv_config_t config_;
     int timeout_ = default_cm_timeout_ms;
     // Peer's private data (client request on server; server reply on client).
-    std::array<std::byte, max_cm_private_data> remote_pd_{};
-    std::size_t remote_pd_len_ = 0;
+    std::array<std::byte, max_private_data_size> private_data_buffer_{};
+    std::size_t private_data_length_ = 0;
   };
 
   explicit ibv_connector_service(asio::execution_context& context)
@@ -74,8 +75,8 @@ public:
     impl.cm_id_ = std::move(other_impl.cm_id_);
     impl.config_ = other_impl.config_;
     impl.timeout_ = other_impl.timeout_;
-    impl.remote_pd_ = other_impl.remote_pd_;
-    impl.remote_pd_len_ = other_impl.remote_pd_len_;
+    impl.private_data_buffer_ = other_impl.private_data_buffer_;
+    impl.private_data_length_ = other_impl.private_data_length_;
     impl.cm_reactor_data_ = asio::detail::reactor::per_descriptor_data();
     if (impl.cm_channel_) {
       this->reactor_.move_descriptor(impl.cm_channel_->fd, impl.cm_reactor_data_,
@@ -91,8 +92,8 @@ public:
     impl.cm_id_ = std::move(other_impl.cm_id_);
     impl.config_ = other_impl.config_;
     impl.timeout_ = other_impl.timeout_;
-    impl.remote_pd_ = other_impl.remote_pd_;
-    impl.remote_pd_len_ = other_impl.remote_pd_len_;
+    impl.private_data_buffer_ = other_impl.private_data_buffer_;
+    impl.private_data_length_ = other_impl.private_data_length_;
     if (impl.cm_channel_) {
       this->reactor_.move_descriptor(impl.cm_channel_->fd, impl.cm_reactor_data_,
                                      other_impl.cm_reactor_data_);
@@ -130,7 +131,7 @@ public:
   }
 
   // Adopt a connector handle produced by the listener (server). Also store the
-  // client's request private data so remote_private_data() can return it.
+  // client's request private data so get_remote_data() can return it.
   void assign(implementation_type& impl, native_connector_type&& handle,
               std::span<const std::byte> remote_pd, ibv_config_t const& config,
               asio::error_code& ec) {
@@ -159,9 +160,9 @@ public:
     return impl.cm_id_ != nullptr;
   }
 
-  std::span<const std::byte> remote_private_data(
-      implementation_type const& impl) const {
-    return {impl.remote_pd_.data(), impl.remote_pd_len_};
+  asio::const_buffer get_remote_data(implementation_type const& impl) const {
+    return asio::buffer(impl.private_data_buffer_.data(),
+                        impl.private_data_length_);
   }
 
   void cancel(implementation_type& impl) {
@@ -175,7 +176,7 @@ public:
   template <typename Handler, typename IoExecutor>
   void async_connect(implementation_type& impl, ibv_create_qp_fn create_qp,
                      endpoint_type const& endpoint,
-                     std::span<const std::byte> private_data, Handler& handler,
+                     asio::const_buffer private_data, Handler& handler,
                      IoExecutor const& io_ex) {
     // Auto-open (asio socket.connect opens with the endpoint's protocol).
     asio::error_code open_ec;
@@ -200,7 +201,7 @@ public:
 
   template <typename Handler, typename IoExecutor>
   void async_accept(implementation_type& impl, ibv_create_qp_fn create_qp,
-                    std::span<const std::byte> private_data, Handler& handler,
+                    asio::const_buffer private_data, Handler& handler,
                     IoExecutor const& io_ex) {
     using op = ibv_accept_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
@@ -223,14 +224,14 @@ public:
 
 private:
   ibv_pd_sink pd_sink(implementation_type& impl) {
-    return {impl.remote_pd_.data(), impl.remote_pd_.size(), &impl.remote_pd_len_};
+    return {impl.private_data_buffer_.data(), impl.private_data_buffer_.size(), &impl.private_data_length_};
   }
 
   void store_remote_pd(implementation_type& impl,
                        std::span<const std::byte> pd) {
-    impl.remote_pd_len_ = (std::min)(pd.size(), impl.remote_pd_.size());
-    if (impl.remote_pd_len_) {
-      std::memcpy(impl.remote_pd_.data(), pd.data(), impl.remote_pd_len_);
+    impl.private_data_length_ = (std::min)(pd.size(), impl.private_data_buffer_.size());
+    if (impl.private_data_length_) {
+      std::memcpy(impl.private_data_buffer_.data(), pd.data(), impl.private_data_length_);
     }
   }
 
@@ -251,7 +252,7 @@ private:
   }
 
   void start_accept_op(implementation_type& impl, ibv_create_qp_fn create_qp,
-                       std::span<const std::byte> private_data,
+                       asio::const_buffer private_data,
                        asio::detail::reactor_op* op) {
     // The child cm_id already has a context: create the QP before accepting.
     if (create_qp) {

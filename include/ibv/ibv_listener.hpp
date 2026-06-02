@@ -22,8 +22,7 @@ public:
   using connector_type = ibv_connector<PortSpace>;
   using native_connector_type = detail::ibv_connector_handle_t;
 
-  explicit ibv_listener(asio::io_context& io_ctx)
-      : io_ctx_(&io_ctx), impl_(0, 0, io_ctx) {
+  explicit ibv_listener(asio::io_context& io_ctx) : impl_(0, 0, io_ctx) {
   }
 
   ~ibv_listener() = default;
@@ -80,10 +79,11 @@ public:
                                 void(asio::error_code, connector_type)>(
         [this](auto handler) {
           auto io_ex = impl_.get_executor();
-          auto wrapper = [io_ctx = io_ctx_, h = std::move(handler)](
+          auto& io_ctx = io_ex.context();
+          auto wrapper = [&io_ctx, h = std::move(handler)](
                              asio::error_code ec, native_connector_type handle,
                              std::span<const std::byte> pd) mutable {
-            connector_type conn(*io_ctx);
+            connector_type conn(io_ctx);
             if (!ec) {
               asio::error_code aec;
               conn.assign_with_private_data(std::move(handle), pd,
@@ -123,7 +123,6 @@ public:
   }
 
 private:
-  asio::io_context* io_ctx_;
   asio::detail::io_object_impl<service_type> impl_;
 };
 
