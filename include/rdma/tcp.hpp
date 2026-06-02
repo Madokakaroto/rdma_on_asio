@@ -3,13 +3,11 @@
 #include "asio/ip/tcp.hpp"
 
 #if defined(_WIN32) || defined(_WIN64)
-#  include "nd/nd_queue_pair.hpp"
 #  include "nd/nd_connector.hpp"
 #  include "nd/nd_listener.hpp"
 #  define ASIO_RDMA_BACKEND_ND 1
 #elif defined(__linux__)
 #  include <rdma/rdma_cma.h>
-#  include "ibv/ibv_queue_pair.hpp"
 #  include "ibv/ibv_connector.hpp"
 #  include "ibv/ibv_listener.hpp"
 #  define ASIO_RDMA_BACKEND_VERBS 1
@@ -25,11 +23,9 @@ public:
   using resolver = asio::ip::basic_resolver<asio::ip::tcp>;
 
 #if defined(ASIO_RDMA_BACKEND_ND)
-  using queue_pair  = nd_queue_pair;
   using connector = nd_connector<tcp>;
   using listener  = nd_listener<tcp>;
 #elif defined(ASIO_RDMA_BACKEND_VERBS)
-  using queue_pair = ibv_queue_pair;
   using connector  = ibv_connector<tcp>;
   using listener   = ibv_listener<tcp>;
 

@@ -149,7 +149,7 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 | `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(endpoint)` / `listen` / `async_get_connection` → `(ec, connector)` |
 | `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write`. `rdma_queue_pair(io)` = event-driven; `rdma_queue_pair(io, cq)` = poll-mode |
 | `rdma_completion_queue` | Standalone poll-mode CQ; `poll()` / `poll_one()` |
-| `tcp` | Port space: `tcp::endpoint`, `tcp::resolver`, and `tcp::{queue_pair,connector,listener}` |
+| `tcp` | Port space: `tcp::endpoint`, `tcp::resolver`, and `tcp::{connector,listener}` (the data-plane `queue_pair` is port-space-agnostic — use `rdma_queue_pair`) |
 | `rdma_config_t` | Capacities (CQ depth, WR/SGE limits, …); `0` = auto-derive from device caps |
 
 `rdma_connector`/`rdma_listener` are templated on the port space (they carry the endpoint

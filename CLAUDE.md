@@ -18,29 +18,34 @@ port space. Compile-time `#if` selects the backend:
 - **Windows** → `nd_*` (NetworkDirect, IOCP-based)
 - **Linux** → `ibv_*` (libibverbs + rdma_cm, epoll-based)
 
-Two ways to spell the same types (both portable):
+The control plane (`connector`/`listener`) is port-space-bound and has two equivalent,
+portable spellings; the data plane (`queue_pair`/`completion_queue`/`memory_region`) is
+port-space-agnostic and is only spelled `rdma_*`:
 
 ```cpp
 #include "rdma/rdma.hpp"
 using namespace asio::rdma;
 
-// (a) backend-agnostic aliases (rdma/rdma_types.hpp)
+// data plane — backend-agnostic aliases only (not in the tcp port space)
 rdma_queue_pair        qp(io);
-rdma_connector<tcp>    conn(io);     // connector/listener stay templated on the port space
-rdma_listener<tcp>     lis(io);
 rdma_completion_queue  cq(dev);
 rdma_memory_region     mr(dev, p, n);
 rdma_device_ptr        dev = use_device(io).get_device();
 
-// (b) the tcp port space (include/rdma/tcp.hpp) — equivalent
-tcp::queue_pair  qp(io);
-tcp::connector   conn(io);
+// control plane — two equivalent spellings:
+// (a) backend-agnostic aliases (rdma/rdma_types.hpp)
+rdma_connector<tcp>    conn(io);     // connector/listener stay templated on the port space
+rdma_listener<tcp>     lis(io);
+// (b) the tcp port space (include/rdma/tcp.hpp)
+tcp::connector   conn2(io);
+tcp::listener    lis2(io);
 tcp::endpoint    ep(addr, port);
 ```
 
-`tcp.hpp` sets the backend macro and aliases `tcp::{queue_pair, connector, listener,
-endpoint, resolver}`; `rdma_types.hpp` defines the `rdma_*` names on top; `rdma.hpp`
-includes everything (incl. `use_device`, memory region, completion queue).
+`tcp.hpp` sets the backend macro and aliases `tcp::{connector, listener, endpoint, resolver}`
+(queue_pair is *not* exported here — it's decoupled from the port space); `rdma_types.hpp`
+defines the `rdma_*` names (incl. `rdma_queue_pair`) on top; `rdma.hpp` includes everything
+(incl. `use_device`, memory region, completion queue).
 
 ### Shared Layer (include/rdma/)
 
@@ -58,8 +63,8 @@ detail/rdma_op_{send,recv,read,write}.hpp — typed completion ops (shared by bo
 ```
 
 Header graph (no cycles): `rdma.hpp` → `rdma_commons.hpp` + `rdma_types.hpp`;
-`rdma_types.hpp` → `tcp.hpp` (backend macro + connector/listener/queue_pair) + the active
-backend's `{completion_queue, mr, device, use_device}` headers. Backend headers include
+`rdma_types.hpp` → `tcp.hpp` (backend macro + connector/listener) + the active backend's
+`{queue_pair, completion_queue, mr, device, use_device}` headers. Backend headers include
 `rdma_commons.hpp` (leaf), never `tcp.hpp`/`rdma_types.hpp`.
 
 **Data plane is portspace-agnostic.** `{nd,ibv}_queue_pair` and `{nd,ibv}_verbs_service`
