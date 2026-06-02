@@ -62,7 +62,7 @@ public:
       std::array<detail::native_wc_t, 16> results{};
       retrieved = detail::verbs_ops::poll_cq(cq_.Get(), results);
       for (ULONG i = 0; i < retrieved; ++i) {
-        dispatch_completion(results[i]);
+        dispatch_completion(this, results[i]);
       }
       total += retrieved;
     } while (retrieved != 0);
@@ -82,7 +82,7 @@ public:
     detail::native_wc_t result{};
     auto const retrieved = detail::verbs_ops::poll_cq(cq_.Get(), result);
     if (retrieved > 0) {
-      dispatch_completion(result);
+      dispatch_completion(this, result);
       return 1;
     }
     return 0;
@@ -91,7 +91,7 @@ public:
   detail::native_cq_t* native_handle() const noexcept { return cq_.Get(); }
 
 private:
-  static void dispatch_completion(detail::native_wc_t const& wc) {
+  static void dispatch_completion(void* owner, detail::native_wc_t const& wc) {
     if (!wc.RequestContext) return;
     auto* op = reinterpret_cast<detail::rdma_verbs_op_base*>(wc.RequestContext);
     op->ec_ = static_cast<nd_errc>(wc.Status);
@@ -103,7 +103,8 @@ private:
     } else {
       op->bytes_transferred_ = 0;
     }
-    op->complete(nullptr);
+    // Non-null owner so the handler upcall fires (mirrors ibv_completion_queue).
+    op->complete(owner);
   }
 
   nd_device_ptr device_;

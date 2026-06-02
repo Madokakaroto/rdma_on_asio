@@ -47,3 +47,16 @@ target_include_directories(test_nd_echo PRIVATE
 
 target_compile_definitions(test_nd_echo PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
 target_link_libraries(test_nd_echo PRIVATE ndutil)
+
+# Poll-mode echo: data plane runs against a user-owned CQ spun on its own thread.
+find_package(Threads REQUIRED)
+
+add_executable(test_nd_echo_poll test_nd_echo_poll.cpp)
+
+target_include_directories(test_nd_echo_poll PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party/asio/include
+)
+
+target_compile_definitions(test_nd_echo_poll PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
+target_link_libraries(test_nd_echo_poll PRIVATE ndutil Threads::Threads)
