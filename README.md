@@ -23,6 +23,18 @@ and runs on:
 
 ## Quick start
 
+The data plane (`async_send` / `async_recv` / `async_read` / `async_write`) can deliver its
+completions two ways. Both examples below share the same control-plane setup:
+`use_device(io)` discovers a device and `connector` / `listener` run the rdma_cm handshake on
+the `io_context`.
+
+### Event-driven mode (default)
+
+`use_device()` installs a shared completion queue that is bridged into Asio's reactor (IOCP on
+Windows, comp_channel + epoll on Linux). Verbs-op completions are posted to the `io_context`,
+so they compose with `co_await`, callbacks, futures, `asio::as_tuple`, etc. — you just drive
+`io.run()`.
+
 ```cpp
 #include "rdma/rdma.hpp"
 #include "asio/io_context.hpp"
@@ -35,11 +47,13 @@ constexpr auto nothrow = asio::as_tuple(asio::use_awaitable);
 
 asio::awaitable<void> client(asio::io_context& io, rdma_device_ptr dev,
                              const std::string& host, uint16_t port) {
-  rdma_queue_pair     qp(io);
   rdma_connector<tcp> conn(io);
-  conn.open(qp);                                            // bind qp to this connector
+  conn.open(tcp::v4());                                     // create the cm_id (client)
+  rdma_queue_pair     qp(io);                               // event-driven: uses the shared CQ
 
-  co_await conn.async_connect(tcp::endpoint(asio::ip::make_address(host), port), {}, nothrow);
+  std::string hello = "client-hello";
+  co_await conn.async_connect(qp, tcp::endpoint(asio::ip::make_address(host), port),
+                              asio::buffer(hello), nothrow); // QP is created during connect
 
   std::array<char, 4096> buf{};
   rdma_memory_region mr(dev, buf.data(), buf.size());       // register memory
@@ -52,9 +66,70 @@ asio::awaitable<void> client(asio::io_context& io, rdma_device_ptr dev,
 
 int main() {
   asio::io_context io;
-  auto& svc = use_device(io);            // discover device, set up shared CQ
+  auto& svc = use_device(io);            // discover device, install shared CQ
   asio::co_spawn(io, client(io, svc.get_device(), "10.0.0.1", 5000), asio::detached);
-  io.run();
+  io.run();                              // pumps both the CM handshake and verbs completions
+}
+```
+
+On the server side, the listener hands you a ready-to-accept `connector` (carrying the peer's
+private data) and you accept onto a fresh queue pair:
+
+```cpp
+rdma_listener<tcp> listener(io);
+listener.open(tcp::v4());
+listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+listener.listen();
+
+auto [ec, conn] = co_await listener.async_get_connection(nothrow);  // -> a connector
+// conn.get_remote_data() is the client's private data
+
+rdma_queue_pair qp(io);
+std::string reply = "server-hello";
+co_await conn.async_accept(qp, asio::buffer(reply), nothrow);        // QP created during accept
+// ... qp.async_recv / qp.async_send ...
+```
+
+### Poll mode (manual completion queue)
+
+Create a standalone `rdma_completion_queue`, bind the queue pair to it with the
+`(io, cq)` constructor, and reap data-plane completions yourself with `cq.poll()` /
+`cq.poll_one()` — no comp_channel, no reactor on the data path. Completion handlers fire
+**synchronously inside `poll()`**, so a plain callback token is the natural fit. (The
+control-plane handshake still runs on the `io_context`; poll mode only changes how verbs-op
+completions are delivered.)
+
+```cpp
+#include "rdma/rdma.hpp"
+#include "asio/io_context.hpp"
+
+using namespace asio::rdma;
+
+int main() {
+  asio::io_context io;
+  auto dev = use_device(io).get_device();
+
+  rdma_completion_queue cq(dev);       // standalone CQ (no comp_channel)
+  rdma_queue_pair       qp(io, cq);    // bind the QP's send/recv to this CQ
+
+  rdma_connector<tcp> conn(io);
+  conn.open(tcp::v4());
+
+  std::string hello = "client-hello";
+  conn.async_connect(qp, tcp::endpoint(asio::ip::make_address("10.0.0.1"), 5000),
+                     asio::buffer(hello),
+                     [](asio::error_code /*ec*/) { /* connected */ });
+  io.run();                            // pump the rdma_cm handshake to completion
+  io.restart();
+
+  std::array<char, 4096> buf{};
+  rdma_memory_region mr(dev, buf.data(), buf.size());
+  std::memcpy(buf.data(), "hello", 5);
+
+  bool sent = false;
+  qp.async_send(mr.cslice(0, 5),
+                [&](asio::error_code /*ec*/, std::size_t /*n*/) { sent = true; });
+  while (!sent) cq.poll();             // reap CQEs; handlers run inline, no io_context needed
 }
 ```
 
@@ -70,10 +145,10 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 | `use_device(io, config = {})` | Discover a device and initialize the per-`io_context` completion service |
 | `rdma_device_ptr` | Handle to the selected device (from `use_device(...).get_device()`) |
 | `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` produce send/recv buffers |
-| `rdma_connector<tcp>` | Control plane: `open(qp)` / `async_connect` / `async_accept` / `async_disconnect` |
-| `rdma_listener<tcp>` | Server: `open` / `bind(endpoint)` / `listen` / `async_get_connection_request` |
-| `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write` |
-| `rdma_completion_queue` | Standalone poll-mode CQ |
+| `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, pd)` / `async_accept(qp, pd)` / `async_disconnect` / `get_remote_data()` |
+| `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(endpoint)` / `listen` / `async_get_connection` → `(ec, connector)` |
+| `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write`. `rdma_queue_pair(io)` = event-driven; `rdma_queue_pair(io, cq)` = poll-mode |
+| `rdma_completion_queue` | Standalone poll-mode CQ; `poll()` / `poll_one()` |
 | `tcp` | Port space: `tcp::endpoint`, `tcp::resolver`, and `tcp::{queue_pair,connector,listener}` |
 | `rdma_config_t` | Capacities (CQ depth, WR/SGE limits, …); `0` = auto-derive from device caps |
 

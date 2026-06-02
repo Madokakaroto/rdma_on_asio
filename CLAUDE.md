@@ -72,9 +72,9 @@ while `rdma_queue_pair`/`rdma_completion_queue`/`rdma_memory_region`/`rdma_devic
 
 ```
 IO objects:
-  nd_queue_pair.hpp       — async_send / async_recv / async_read / async_write
-  nd_connector.hpp        — open / async_connect / async_accept / async_disconnect
-  nd_listener.hpp         — open / bind(endpoint) / listen / async_get_connection_request
+  nd_queue_pair.hpp       — async_send / async_recv / async_read / async_write; (io,cq) ctor for poll mode
+  nd_connector.hpp        — open(port_space) / assign / async_connect(qp,..) / async_accept(qp,..) / async_disconnect / get_remote_data
+  nd_listener.hpp         — open(port_space) / bind(endpoint) / listen / async_get_connection
   nd_completion_queue.hpp — standalone poll-mode CQ
   nd_mr.hpp               — RAII memory region `nd_memory_region` + const_buffer / mutable_buffer
   nd_use_device.hpp       — use_device(io_ctx, config) / use_device(io_ctx, selector)
@@ -95,9 +95,9 @@ Types (detail/):
 
 ```
 IO objects:
-  ibv_queue_pair.hpp       — async_send / async_recv / async_read / async_write
-  ibv_connector.hpp        — open / async_connect / async_accept / async_disconnect
-  ibv_listener.hpp         — open / bind(endpoint) / listen / async_get_connection_request
+  ibv_queue_pair.hpp       — async_send / async_recv / async_read / async_write; (io,cq) ctor for poll mode
+  ibv_connector.hpp        — open(port_space) / assign / async_connect(qp,..) / async_accept(qp,..) / async_disconnect / get_remote_data
+  ibv_listener.hpp         — open(port_space) / bind(endpoint) / listen / async_get_connection
   ibv_completion_queue.hpp — standalone poll-mode CQ
   ibv_mr.hpp               — RAII memory region `ibv_memory_region` + const_buffer / mutable_buffer
   ibv_use_device.hpp       — use_device(io_ctx, config)
@@ -118,17 +118,23 @@ Types (detail/):
 
 | Operation | Signature (both backends) |
 |-----------|--------------------------|
-| Init device | `use_device(io_ctx, config)` → `io_completion_service&` |
-| Queue pair | `queue_pair(io_ctx, config)` or deferred `open(io_ctx, config)` |
-| Connector client | `connector.open(qp, config)` |
-| Connector server | `connector.open(native_handle&&, qp, config)` |
-| Connect | `async_connect(endpoint, private_data, token)` → `void(error_code)` |
-| Accept | `async_accept(private_data, token)` → `void(error_code)` |
+| Init device | `use_device(io_ctx, config)` → `io_completion_service&`; `.get_device()` → `*_device_ptr` |
+| Queue pair (event) | `queue_pair(io_ctx, config)` or deferred `open(io_ctx, config)` — uses the shared CQ |
+| Queue pair (poll) | `queue_pair(io_ctx, cq, config)` or deferred `open(io_ctx, cq, config)` — binds to a standalone CQ |
+| Connector open | `connector.open(port_space, config)` — create the cm_id/connector (client side) |
+| Connector adopt | `connector.assign(native_handle&&, config)` — adopt a handle from the listener (server side) |
+| Connect | `async_connect(qp, endpoint, private_data, token)` → `void(error_code)` — creates the QP, then connects |
+| Accept | `async_accept(qp, private_data, token)` → `void(error_code)` — creates the QP, then accepts |
 | Disconnect | `async_disconnect(token)` → `void(error_code)` |
-| Listener bind | `listener.bind(endpoint)` |
-| Get conn req | `async_get_connection_request(token)` → `void(ec, native_handle, span<byte>)` |
+| Peer private data | `connector.get_remote_data()` → `const_buffer` (client req on server, server reply on client) |
+| Listener setup | `listener.open(port_space, config)` / `listener.bind(endpoint)` / `listener.listen(backlog)` |
+| Get connection | `async_get_connection(token)` → `void(ec, connector)`; fill form `async_get_connection(conn, token)` → `void(ec)` |
 | Send/Recv | `async_send(buffers, token)` / `async_recv(buffers, token)` → `void(ec, size_t)` |
 | RDMA R/W | `async_read(buffers, remote_addr, token)` / `async_write(...)` |
+
+`private_data` is an `asio::const_buffer` (pass `asio::buffer(...)`); an empty buffer sends none.
+The QP is **not** bound at `open` time — it is created on the connector's cm_id during
+`async_connect` / `async_accept` (the connector calls `qp.make_create_qp_fn()`).
 
 ### Two Completion Modes (both backends)
 
@@ -136,8 +142,12 @@ Types (detail/):
    (IOCP on Windows, comp_channel+epoll on Linux). CQ completions are bridged into asio's
    scheduler. User drives `io_ctx.run()`.
 
-2. **Poll mode**: User creates a standalone completion_queue, passes it to
-   `queue_pair::open(io_ctx, cq)`. User calls `cq.poll()` / `cq.poll_one()` manually.
+2. **Poll mode**: User creates a standalone `completion_queue` (no comp_channel) and binds the
+   QP to it via the `queue_pair(io_ctx, cq, config)` ctor (or `open(io_ctx, cq, config)`). User
+   calls `cq.poll()` / `cq.poll_one()` manually; data-plane completion handlers fire
+   **synchronously inside `poll()`** (no io_context post), so a plain callback token is the
+   natural fit. The control-plane handshake (`connector`/`listener`) still runs on the
+   io_context — poll mode only changes how verbs-op completions are delivered.
 
 ### Key Patterns
 
@@ -146,7 +156,7 @@ Types (detail/):
 - **Config semantics**: `rdma_config_t` fields default to 0; 0 means "auto-derive from device capabilities". Non-zero values are user constraints validated against device caps.
 - **Async initiation**: All async methods use `asio::async_initiate<Token, Signature>(initiation, token, ...)`.
 - **Error handling**: `asio::error_code&` out-param overloads + throw overloads via `asio::detail::throw_error(ec)`.
-- **Connector handle**: Move-only struct (`nd_connector_handle_t` / `ibv_connector_handle_t`) passed from listener to server-side connector.
+- **Connector handle**: Move-only struct (`nd_connector_handle_t` / `ibv_connector_handle_t`) produced by the listener and adopted by the server-side connector via `assign`. `listener.async_get_connection` wraps this: it constructs a connector, calls `assign` with the handle + the peer's private data, and yields the ready-to-`async_accept` connector to the handler.
 
 ### Platform-Specific Design Notes
 
