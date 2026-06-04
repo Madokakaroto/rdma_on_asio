@@ -47,7 +47,8 @@ public:
   explicit nd_verbs_service(asio::execution_context& ctx)
       : base_type(ctx)
       , nd_service_base(ctx)
-      , success_ec_() {
+      , success_ec_()
+      , io_completion_svc_(asio::use_service<nd_io_completion_service>(ctx)) {
   }
 
   ~nd_verbs_service() = default;
@@ -197,6 +198,7 @@ public:
 
 private:
   asio::error_code success_ec_;
+  nd_io_completion_service& io_completion_svc_;  // cached (event-mode arm_notify)
 
   static nd_sglist_t& get_sglist() {
     static thread_local nd_sglist_t static_sg_list;
@@ -286,14 +288,12 @@ private:
   }
 
   void arm_notify(implementation_type& impl) {
-    auto& io_svc =
-        asio::use_service<nd_io_completion_service>(this->context());
     nd_notify_wr_op::Handler handler{};
     nd_notify_wr_op::ptr p = {asio::detail::addressof(handler),
                               nd_notify_wr_op::ptr::allocate(handler), 0};
     p.p = new (p.v) nd_notify_wr_op{get_notify_state(impl)};
     asio::error_code ec;
-    io_svc.arm_notify(p.p, ec);
+    io_completion_svc_.arm_notify(p.p, ec);  // cached ref (no per-op use_service)
     p.v = p.p = nullptr;
   }
 

@@ -50,13 +50,14 @@ public:
     }
     cq_.reset();
     comp_channel_.reset();
-    device_.reset();
-    initialized_ = false;
   }
 
-  void initialize(ibv_device_ptr const& device, ibv_config_t const& config,
+  // Create the shared CQ + comp_channel on the reactor. The device is used
+  // transiently for its context (not stored — that's ibv_device_service's job);
+  // cqe is the already-derived CQ depth. Idempotency self-guards on cq_.
+  void initialize(ibv_device_ptr const& device, std::uint32_t cqe,
                   asio::error_code& ec) {
-    if (initialized_) {
+    if (cq_) {
       ec = make_error_code(ibv_errc::ext_already_registered);
       return;
     }
@@ -65,14 +66,11 @@ public:
       return;
     }
 
-    effective_config_ = derive_effective_config(config, device->attr_);
-
     comp_channel_.reset(verbs_ops::create_comp_channel(device->context_, ec));
     if (ec) {
       return;
     }
-    cq_.reset(verbs_ops::create_cq(device->context_,
-                                   static_cast<int>(effective_config_.cqe_),
+    cq_.reset(verbs_ops::create_cq(device->context_, static_cast<int>(cqe),
                                    nullptr, comp_channel_.get(), 0, ec));
     if (ec) {
       comp_channel_.reset();
@@ -85,20 +83,12 @@ public:
       comp_channel_.reset();
       return;
     }
-
-    device_ = device;
-    initialized_ = true;
     ec.clear();
   }
 
-  bool is_initialized() const noexcept { return initialized_; }
-  ibv_device_ptr get_device() const noexcept { return device_; }
   native_cq_t* get_cq() const noexcept { return cq_.get(); }
   native_comp_channel_t* get_comp_channel() const noexcept {
     return comp_channel_.get();
-  }
-  ibv_config_t const& get_effective_config() const noexcept {
-    return effective_config_;
   }
 
   // Called once per posted verbs op. Counts the op as outstanding and ensures
@@ -221,8 +211,6 @@ private:
 
   asio::detail::reactor& reactor_;
   asio::detail::scheduler& scheduler_;
-  ibv_device_ptr device_;
-  ibv_config_t effective_config_{};
   unique_ibv_cq_ptr cq_;
   unique_ibv_comp_channel_ptr comp_channel_;
   asio::detail::reactor::per_descriptor_data cq_reactor_data_{};
@@ -230,7 +218,6 @@ private:
   std::size_t pending_ = 0;
   bool armed_ = false;
   bool in_dispatch_ = false;
-  bool initialized_ = false;
 };
 
 }

@@ -47,7 +47,9 @@ public:
 
   explicit ibv_verbs_service(asio::execution_context& context)
       : asio::detail::execution_context_service_base<ibv_verbs_service>(context)
-      , ibv_service_base(context) {
+      , ibv_service_base(context)
+      , io_completion_svc_(
+            asio::use_service<ibv_io_completion_service>(context)) {
   }
 
   // The native QP is owned by the connector; the CQ/device by the
@@ -197,6 +199,7 @@ public:
 
 private:
   asio::error_code success_ec_;
+  ibv_io_completion_service& io_completion_svc_;  // cached (event-mode arm_notify)
 
   static ibv_sglist_t& get_sglist() {
     static thread_local ibv_sglist_t sglist;
@@ -275,7 +278,7 @@ private:
       auto* complete = new ibv_complete_op(op);
       this->scheduler_.post_immediate_completion(complete, false);
     } else {
-      asio::use_service<ibv_io_completion_service>(this->context()).arm_notify();
+      io_completion_svc_.arm_notify();  // cached ref (no per-op use_service)
     }
   }
 };

@@ -87,7 +87,8 @@ IO objects:
   nd_use_device.hpp       — use_device(io_ctx, device_ptr, config={}) -> void
 
 Services (detail/):
-  nd_io_completion_service.hpp — per-io_context singleton: shared CQ + IOCP handle
+  nd_device_service.hpp        — per-io_context: registered device_ptr + effective_config (use_device)
+  nd_io_completion_service.hpp — per-io_context: shared CQ + IOCP notify (arm_notify)
   nd_verbs_service.hpp         — QP lifecycle + data-plane op dispatch
   nd_connector_service.hpp     — INDConnector lifecycle + connect/accept/disconnect
   nd_listener_service.hpp      — INDListen lifecycle + GetConnectionRequest
@@ -110,7 +111,8 @@ IO objects:
   ibv_use_device.hpp       — use_device(io_ctx, device_ptr, config={}) -> void
 
 Services (detail/):
-  ibv_io_completion_service.hpp — per-io_context singleton: shared CQ + comp_channel on epoll
+  ibv_device_service.hpp        — per-io_context: registered device_ptr + effective_config (use_device)
+  ibv_io_completion_service.hpp — per-io_context: shared CQ + comp_channel on epoll (arm_notify)
   ibv_verbs_service.hpp         — QP lifecycle + data-plane op dispatch
   ibv_connector_service.hpp     — rdma_cm_id lifecycle + connect/accept/disconnect
   ibv_listener_service.hpp      — listening cm_id + GetConnectionRequest
@@ -145,22 +147,32 @@ Types (detail/):
 **QP creation timing differs by backend**: on **ibv** the native QP is created on the connector's
 cm_id during `async_connect` / `async_accept` (the connector calls `qp.make_create_qp_fn()`); on
 **nd** the QP is created (and owned) at `queue_pair` construction and the connector borrows it via
-`native_handle()`. Either way the QP gets its `{device, cq, config}` from the holder — the shared
-`io_completion_service` (event mode) or the `completion_queue` (poll mode).
+`native_handle()`. Either way the QP gets `{device, config}` from the `device_service` and, in
+event mode, `cq` from the `io_completion_service`; poll mode reads everything from the
+`completion_queue`.
+
+**Two per-io_context services, single responsibility each:** `device_service` holds the
+registered `device_ptr` + `effective_config` (and answers `is_registered()` — the canonical
+"use_device called?" predicate); `io_completion_service` owns the shared CQ + comp_channel/IOCP
+notify (`arm_notify`). `use_device` wires both: derive the effective config, `io.initialize` the
+CQ, then `dev.register_device` (so a CQ-init failure leaves the io_context unregistered).
+Service→service deps are cached as references in the holder's ctor (e.g. `verbs_service` holds
+`io_completion_service&`; `connector`/`listener` hold `device_service&`), never looked up per-op.
 
 **Config is centralized in `use_device`.** There is a single `rdma_config_t` in three roles:
 selection constraint (to `get_first_available_device`), device capability (`device->attr_`/`info_`),
-and effective/operating config (`derive_effective_config(config, caps)` stored in the
-io_completion_service as `effective_config_`). `connector`/`listener` no longer take a config —
-their connection params (`responder_resources`/`initiator_depth` from `inbound`/`outbound_read_limit_`)
-are read from the service's `effective_config_`. Opening a `connector`/`listener` without
-`use_device` on that io_context fails with `ext_device_not_registered`.
+and effective/operating config (`derive_effective_config(config, caps)`, stored in
+`device_service`). `connector`/`listener` no longer take a config — their connection params
+(`responder_resources`/`initiator_depth` from `inbound`/`outbound_read_limit_`) are read from
+`device_service::get_effective_config()`. Opening a `connector`/`listener`/`queue_pair` without
+`use_device` on that io_context fails with `ext_device_not_registered`
+(`device_service::is_registered()`).
 
 ### Two Completion Modes (both backends)
 
-1. **Event-driven mode** (default): `use_device(io, device)` initializes the io_completion_service
-   (IOCP on Windows, comp_channel+epoll on Linux). CQ completions are bridged into asio's
-   scheduler. User drives `io_ctx.run()`.
+1. **Event-driven mode** (default): `use_device(io, device)` registers the device (`device_service`)
+   and initializes the `io_completion_service` (IOCP on Windows, comp_channel+epoll on Linux). CQ
+   completions are bridged into asio's scheduler. User drives `io_ctx.run()`.
 
 2. **Poll mode** (io_context-free data plane): User creates a standalone `completion_queue` (no
    comp_channel) and binds the QP via `queue_pair(cq)` (or `bind(cq)`) — **no io_context**. User

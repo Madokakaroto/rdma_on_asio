@@ -29,13 +29,14 @@ public:
   void shutdown() override {
     cq_.Reset();
     cq_handle_.reset();
-    device_.reset();
-    initialized_ = false;
   }
 
-  void initialize(nd_adapter_ptr const& device, nd_config_t const& config,
+  // Create the shared CQ + overlapped handle on the IOCP scheduler. The device
+  // is used transiently for its adapter (not stored — that's nd_device_service's
+  // job); cqe is the already-derived CQ depth. Idempotency self-guards on cq_.
+  void initialize(nd_adapter_ptr const& device, std::uint32_t cqe,
                   asio::error_code& ec) {
-    if (initialized_) {
+    if (cq_) {
       ec = nd_errc::ext_already_registered;
       ASIO_ERROR_LOCATION(ec);
       return;
@@ -45,8 +46,6 @@ public:
       ASIO_ERROR_LOCATION(ec);
       return;
     }
-
-    effective_config_ = derive_effective_config(config, device->info_);
 
     cq_handle_.reset(
         create_overlapped_file(device->adapter_.Get(), ec));
@@ -60,8 +59,8 @@ public:
         .processor_group_ = 0,
         .processor_affinity_ = 0,
     };
-    cq_.Attach(verbs_ops::create_cq(device->adapter_.Get(),
-                                    effective_config_.cqe_, cq_init_attr, ec));
+    cq_.Attach(verbs_ops::create_cq(device->adapter_.Get(), cqe, cq_init_attr,
+                                    ec));
     if (ec) {
       cq_handle_.reset();
       ASIO_ERROR_LOCATION(ec);
@@ -75,23 +74,12 @@ public:
       ASIO_ERROR_LOCATION(ec);
       return;
     }
-
-    device_ = device;
-    initialized_ = true;
   }
-
-  bool is_initialized() const noexcept { return initialized_; }
-
-  nd_adapter_ptr const& get_device() const noexcept { return device_; }
 
   native_cq_t* get_cq() const noexcept { return cq_.Get(); }
 
-  nd_config_t const& get_effective_config() const noexcept {
-    return effective_config_;
-  }
-
   void arm_notify(asio::detail::operation* notify_op, asio::error_code& ec) {
-    assert(initialized_);
+    assert(cq_);
     assert(notify_op);
     native_cq_notify_attr notify_attr{
         .type_ = ND_CQ_NOTIFY_ANY,
@@ -112,11 +100,8 @@ public:
 
 private:
   asio::detail::win_iocp_io_context& scheduler_;
-  nd_adapter_ptr device_;
-  nd_config_t effective_config_{};
   nd2_completion_queue_ptr cq_;
   unique_handle_t cq_handle_;
-  bool initialized_ = false;
 };
 
 }

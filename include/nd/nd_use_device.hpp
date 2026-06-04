@@ -2,6 +2,8 @@
 
 #include "asio/io_context.hpp"
 #include "nd/nd_device.hpp"
+#include "nd/detail/nd_config_derive.hpp"
+#include "nd/detail/nd_device_service.hpp"
 #include "nd/detail/nd_io_completion_service.hpp"
 
 namespace asio::rdma {
@@ -14,8 +16,8 @@ namespace asio::rdma {
 // be passed to use_device on multiple io_contexts. Mirrors ibv use_device.
 inline void use_device(asio::io_context& io_ctx, nd_device_ptr const& device,
                        nd_config_t const& config, asio::error_code& ec) {
-  auto& svc = asio::use_service<detail::nd_io_completion_service>(io_ctx);
-  if (svc.is_initialized()) {
+  auto& dev_svc = asio::use_service<detail::nd_device_service>(io_ctx);
+  if (dev_svc.is_registered()) {
     ec = nd_errc::ext_already_registered;
     ASIO_ERROR_LOCATION(ec);
     return;
@@ -25,7 +27,14 @@ inline void use_device(asio::io_context& io_ctx, nd_device_ptr const& device,
     ASIO_ERROR_LOCATION(ec);
     return;
   }
-  svc.initialize(device, config, ec);
+  auto const effective = detail::derive_effective_config(config, device->info_);
+  // Initialize the CQ/notify service first; register the device only on success.
+  auto& io_svc = asio::use_service<detail::nd_io_completion_service>(io_ctx);
+  io_svc.initialize(device, effective.cqe_, ec);
+  if (ec) {
+    return;
+  }
+  dev_svc.register_device(device, effective);
 }
 
 inline void use_device(asio::io_context& io_ctx, nd_device_ptr const& device,

@@ -11,7 +11,7 @@
 #include "asio/execution_context.hpp"
 #include "asio/io_context.hpp"
 #include "ibv/detail/ibv_impl_types.hpp"
-#include "ibv/detail/ibv_io_completion_service.hpp"
+#include "ibv/detail/ibv_device_service.hpp"
 #include "ibv/detail/ibv_op_accept.hpp"
 #include "ibv/detail/ibv_op_connect.hpp"
 #include "ibv/detail/ibv_ops_cm.hpp"
@@ -49,7 +49,8 @@ public:
   explicit ibv_connector_service(asio::execution_context& context)
       : asio::detail::execution_context_service_base<
             ibv_connector_service<PortSpace>>(context)
-      , ibv_service_base(context) {
+      , ibv_service_base(context)
+      , device_svc_(asio::use_service<ibv_device_service>(context)) {
   }
 
   void shutdown() {
@@ -233,15 +234,12 @@ public:
   }
 
 private:
-  // The per-io_context completion service holds the device + effective config
-  // (installed by use_device). Connection params are sourced from it.
-  ibv_io_completion_service& io_svc() {
-    return asio::use_service<ibv_io_completion_service>(this->context());
-  }
-  bool device_registered() { return io_svc().is_initialized(); }
+  // device_service holds the device + effective config (installed by use_device)
+  // and answers the registration guard. Cached as a ref in the ctor.
+  bool device_registered() { return device_svc_.is_registered(); }
   ibv_config_t effective_config() {
-    return device_registered() ? io_svc().get_effective_config()
-                               : ibv_config_t{};
+    return device_svc_.is_registered() ? device_svc_.get_effective_config()
+                                       : ibv_config_t{};
   }
   static std::uint8_t to_u8(std::uint32_t v) {
     return static_cast<std::uint8_t>(v > 255u ? 255u : v);
@@ -327,6 +325,8 @@ private:
     impl.cm_id_.reset();
     impl.cm_channel_.reset();
   }
+
+  ibv_device_service& device_svc_;  // cached (registration guard + conn params)
 };
 
 }

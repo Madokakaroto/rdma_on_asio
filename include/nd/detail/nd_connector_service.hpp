@@ -11,7 +11,7 @@
 #include "asio/detail/memory.hpp"
 #include "asio/ip/address.hpp"
 #include "nd/detail/nd_service_base.hpp"
-#include "nd/detail/nd_io_completion_service.hpp"
+#include "nd/detail/nd_device_service.hpp"
 #include "nd/detail/nd_ops_cm.hpp"
 #include "nd/detail/nd_op_connect.hpp"
 #include "nd/detail/nd_config_derive.hpp"
@@ -45,7 +45,8 @@ public:
 
   explicit nd_connector_service(asio::execution_context& ctx)
       : base_type(ctx)
-      , nd_service_base(ctx) {
+      , nd_service_base(ctx)
+      , device_svc_(asio::use_service<nd_device_service>(ctx)) {
   }
 
   ~nd_connector_service() = default;
@@ -228,15 +229,13 @@ private:
       return;
     }
 
-    auto& io_svc =
-        asio::use_service<nd_io_completion_service>(this->context());
-    if (!io_svc.is_initialized()) {
+    if (!device_svc_.is_registered()) {
       ec = nd_errc::ext_device_not_registered;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
 
-    auto adapter = io_svc.get_device();
+    auto adapter = device_svc_.get_device();
     impl.connector_handle_.reset(
         create_overlapped_file(adapter->adapter_.Get(), ec));
     if (ec) {
@@ -264,16 +263,12 @@ private:
     impl.adapter_ = adapter;
   }
 
-  // The per-io_context completion service holds the device + effective config
-  // (installed by use_device); connection params are sourced from it.
-  bool device_registered() {
-    return asio::use_service<nd_io_completion_service>(this->context())
-        .is_initialized();
-  }
+  // device_service holds the device + effective config (installed by use_device)
+  // and answers the registration guard. Cached as a ref in the ctor.
+  bool device_registered() { return device_svc_.is_registered(); }
   nd_config_t effective_config() {
-    auto& io_svc = asio::use_service<nd_io_completion_service>(this->context());
-    return io_svc.is_initialized() ? io_svc.get_effective_config()
-                                   : nd_config_t{};
+    return device_svc_.is_registered() ? device_svc_.get_effective_config()
+                                       : nd_config_t{};
   }
 
   nd_pd_sink pd_sink(implementation_type& impl) {
@@ -351,6 +346,8 @@ private:
     }
     this->scheduler_.on_pending(op);
   }
+
+  nd_device_service& device_svc_;  // cached (registration guard + device + conn params)
 };
 
 }

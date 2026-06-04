@@ -5,7 +5,7 @@
 #include "asio/detail/memory.hpp"
 #include "asio/ip/address.hpp"
 #include "nd/detail/nd_service_base.hpp"
-#include "nd/detail/nd_io_completion_service.hpp"
+#include "nd/detail/nd_device_service.hpp"
 #include "nd/detail/nd_ops_cm.hpp"
 #include "nd/detail/nd_op_get_connection_request.hpp"
 #include "nd/detail/nd_config_derive.hpp"
@@ -30,7 +30,8 @@ public:
 
   explicit nd_listener_service(asio::execution_context& ctx)
       : base_type(ctx)
-      , nd_service_base(ctx) {
+      , nd_service_base(ctx)
+      , device_svc_(asio::use_service<nd_device_service>(ctx)) {
   }
 
   ~nd_listener_service() = default;
@@ -89,15 +90,13 @@ public:
       return;
     }
 
-    auto& io_svc =
-        asio::use_service<nd_io_completion_service>(this->context());
-    if (!io_svc.is_initialized()) {
+    if (!device_svc_.is_registered()) {
       ec = nd_errc::ext_device_not_registered;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
 
-    auto adapter = io_svc.get_device();
+    auto adapter = device_svc_.get_device();
     impl.listener_handle_.reset(
         create_overlapped_file(adapter->adapter_.Get(), ec));
     if (ec) {
@@ -209,6 +208,8 @@ public:
     }
     p.v = p.p = 0;
   }
+
+  nd_device_service& device_svc_;  // cached (registration guard + device)
 };
 
 }

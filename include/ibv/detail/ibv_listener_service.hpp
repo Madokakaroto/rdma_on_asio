@@ -4,7 +4,7 @@
 #include "asio/execution_context.hpp"
 #include "asio/io_context.hpp"
 #include "ibv/detail/ibv_impl_types.hpp"
-#include "ibv/detail/ibv_io_completion_service.hpp"
+#include "ibv/detail/ibv_device_service.hpp"
 #include "ibv/detail/ibv_op_get_connection_request.hpp"
 #include "ibv/detail/ibv_ops_cm.hpp"
 #include "ibv/detail/ibv_service_base.hpp"
@@ -33,7 +33,8 @@ public:
   explicit ibv_listener_service(asio::execution_context& context)
       : asio::detail::execution_context_service_base<
             ibv_listener_service<PortSpace>>(context)
-      , ibv_service_base(context) {
+      , ibv_service_base(context)
+      , device_svc_(asio::use_service<ibv_device_service>(context)) {
   }
 
   void shutdown() {
@@ -83,8 +84,7 @@ public:
       ec = make_error_code(ibv_errc::ext_already_registered);
       return;
     }
-    if (!asio::use_service<ibv_io_completion_service>(this->context())
-             .is_initialized()) {
+    if (!device_svc_.is_registered()) {
       ec = make_error_code(ibv_errc::ext_device_not_registered);
       return;
     }
@@ -165,6 +165,8 @@ private:
     impl.cm_id_.reset();
     impl.cm_channel_.reset();
   }
+
+  ibv_device_service& device_svc_;  // cached (registration guard)
 };
 
 }
