@@ -38,6 +38,7 @@ using rdma_completion_queue = nd_completion_queue;
 using rdma_memory_region = nd_memory_region;
 using rdma_device = nd_device_t;
 using rdma_device_ptr = nd_device_ptr;
+using rdma_device_manager_t = nd_device_manager_t;
 
 #elif defined(ASIO_RDMA_BACKEND_VERBS)
 
@@ -51,6 +52,7 @@ using rdma_completion_queue = ibv_completion_queue;
 using rdma_memory_region = ibv_memory_region;
 using rdma_device = ibv_device_t;
 using rdma_device_ptr = ibv_device_ptr;
+using rdma_device_manager_t = ibv_device_manager_t;
 
 #endif
 

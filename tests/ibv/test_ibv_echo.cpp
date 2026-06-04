@@ -161,8 +161,9 @@ int main(int argc, char* argv[]) {
 
   try {
     asio::io_context io_ctx;
-    auto& svc = rdma::use_device(io_ctx);
-    auto device = svc.get_device();
+    auto device = rdma::ibv_device_manager_t::instance()
+                      .get_first_available_device(tcp::v4(), {});
+    rdma::use_device(io_ctx, device);
 
     if (is_server) {
       asio::co_spawn(io_ctx, run_server(io_ctx, device, port), asio::detached);

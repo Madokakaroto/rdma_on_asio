@@ -216,10 +216,11 @@ int main(int argc, char* argv[]) {
 
   try {
     asio::io_context io_ctx;
-    // use_device is required even in poll mode: the device/PD it discovers back
-    // the QP created on the connection.
-    auto& svc = rdma::use_device(io_ctx);
-    auto device = svc.get_device();
+    // use_device is required even in poll mode: the device/PD backs the QP
+    // created on the connection.
+    auto device = rdma::rdma_device_manager_t::instance()
+                      .get_first_available_device(tcp::v4(), {});
+    rdma::use_device(io_ctx, device);
 
     if (is_server) {
       asio::co_spawn(io_ctx, run_server(io_ctx, device, port), asio::detached);

@@ -39,6 +39,9 @@
 #ifndef NDEXT_NO_AVAILABLE_PROVIDER
 #define NDEXT_NO_AVAILABLE_PROVIDER -11
 #endif
+#ifndef NDEXT_DEVICE_NOT_REGISTERED
+#define NDEXT_DEVICE_NOT_REGISTERED -12
+#endif
 
 
 
@@ -101,6 +104,7 @@ enum class nd_errc : int {
   ext_already_registered = NDEXT_ALREADY_REGISTERED,
   ext_no_executor = NDEXT_NO_EXECUTOR,
   ext_no_available_provider = NDEXT_NO_AVAILABLE_PROVIDER,
+  ext_device_not_registered = NDEXT_DEVICE_NOT_REGISTERED,
 };
 
 class nd_error_category : public std::error_category {
@@ -221,6 +225,8 @@ public:
         return "ND_EXT no executor";
       case NDEXT_NO_AVAILABLE_PROVIDER:
         return "ND_EXT no available provider";
+      case NDEXT_DEVICE_NOT_REGISTERED:
+        return "ND_EXT device not registered (call use_device first)";
       default:
         return "UNKNOWN_ND_ERROR";
     }

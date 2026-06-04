@@ -29,12 +29,12 @@ public:
       : impl_(0, 0, io_ctx) {
   }
 
-  // opening constructor (mirrors basic_socket(io_context, protocol))
-  nd_connector(asio::io_context& io_ctx, PortSpace const& ps,
-               nd_config_t const& config = {})
+  // opening constructor (mirrors basic_socket(io_context, protocol)). Requires
+  // use_device() on this io_context (config is centralized there).
+  nd_connector(asio::io_context& io_ctx, PortSpace const& ps)
       : impl_(0, 0, io_ctx) {
     asio::error_code ec;
-    impl_.get_service().open(impl_.get_implementation(), ps, config, ec);
+    impl_.get_service().open(impl_.get_implementation(), ps, ec);
     asio::detail::throw_error(ec);
   }
 
@@ -47,28 +47,26 @@ public:
   // open: create the IND2Connector (client). The PortSpace is accepted for API
   // parity with ibv (and possible future v4/v6 selection); ND has no explicit
   // RDMA port space. Optional — async_connect auto-opens if not already open.
-  void open(PortSpace const& ps, nd_config_t const& config = {}) {
+  void open(PortSpace const& ps) {
     asio::error_code ec;
-    open(ps, config, ec);
+    open(ps, ec);
     asio::detail::throw_error(ec);
   }
 
-  void open(PortSpace const& ps, nd_config_t const& config,
-            asio::error_code& ec) {
-    impl_.get_service().open(impl_.get_implementation(), ps, config, ec);
+  void open(PortSpace const& ps, asio::error_code& ec) {
+    impl_.get_service().open(impl_.get_implementation(), ps, ec);
   }
 
   // assign: adopt a connector handle produced by the listener (server side).
-  void assign(native_connector_type&& handle, nd_config_t const& config = {}) {
+  void assign(native_connector_type&& handle) {
     asio::error_code ec;
-    assign(std::move(handle), config, ec);
+    assign(std::move(handle), ec);
     asio::detail::throw_error(ec);
   }
 
-  void assign(native_connector_type&& handle, nd_config_t const& config,
-              asio::error_code& ec) {
+  void assign(native_connector_type&& handle, asio::error_code& ec) {
     impl_.get_service().assign(impl_.get_implementation(), std::move(handle),
-                               std::span<const std::byte>{}, config, ec);
+                               std::span<const std::byte>{}, ec);
   }
 
   bool is_open() const noexcept {
@@ -132,10 +130,9 @@ public:
   // listener when delivering a connection). Not part of the user surface.
   void assign_with_private_data(native_connector_type&& handle,
                                 std::span<const std::byte> remote_pd,
-                                nd_config_t const& config,
                                 asio::error_code& ec) {
     impl_.get_service().assign(impl_.get_implementation(), std::move(handle),
-                               remote_pd, config, ec);
+                               remote_pd, ec);
   }
 
 private:

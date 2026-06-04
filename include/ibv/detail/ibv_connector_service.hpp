@@ -11,6 +11,7 @@
 #include "asio/execution_context.hpp"
 #include "asio/io_context.hpp"
 #include "ibv/detail/ibv_impl_types.hpp"
+#include "ibv/detail/ibv_io_completion_service.hpp"
 #include "ibv/detail/ibv_op_accept.hpp"
 #include "ibv/detail/ibv_op_connect.hpp"
 #include "ibv/detail/ibv_ops_cm.hpp"
@@ -39,7 +40,6 @@ public:
     cm_channel_holder cm_channel_;
     cm_id_holder cm_id_;
     asio::detail::reactor::per_descriptor_data cm_reactor_data_;
-    ibv_config_t config_;
     int timeout_ = default_cm_timeout_ms;
     // Peer's private data (client request on server; server reply on client).
     std::array<std::byte, max_private_data_size> private_data_buffer_{};
@@ -73,7 +73,6 @@ public:
     base_move_construct(impl, other_impl);
     impl.cm_channel_ = std::move(other_impl.cm_channel_);
     impl.cm_id_ = std::move(other_impl.cm_id_);
-    impl.config_ = other_impl.config_;
     impl.timeout_ = other_impl.timeout_;
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
@@ -90,7 +89,6 @@ public:
     close_for_destruction(impl);
     impl.cm_channel_ = std::move(other_impl.cm_channel_);
     impl.cm_id_ = std::move(other_impl.cm_id_);
-    impl.config_ = other_impl.config_;
     impl.timeout_ = other_impl.timeout_;
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
@@ -103,10 +101,15 @@ public:
   // --- open / assign (asio basic_socket::open(protocol) / assign) ---
 
   // Create a fresh event channel + cm_id (client). ps_type = PortSpace::rdma_type().
+  // Requires use_device() on this io_context (config is centralized there).
   void open(implementation_type& impl, rdma_port_space ps_type,
-            ibv_config_t const& config, asio::error_code& ec) {
+            asio::error_code& ec) {
     if (is_open(impl)) {
       ec = make_error_code(ibv_errc::ext_already_registered);
+      return;
+    }
+    if (!device_registered()) {
+      ec = make_error_code(ibv_errc::ext_device_not_registered);
       return;
     }
     cm_channel_holder channel{ create_event_channel(ec) };
@@ -125,7 +128,6 @@ public:
     }
     impl.cm_channel_ = std::move(channel);
     impl.cm_id_ = std::move(cm_id);
-    impl.config_ = config;
     impl.timeout_ = default_cm_timeout_ms;
     ec.clear();
   }
@@ -133,8 +135,7 @@ public:
   // Adopt a connector handle produced by the listener (server). Also store the
   // client's request private data so get_remote_data() can return it.
   void assign(implementation_type& impl, native_connector_type&& handle,
-              std::span<const std::byte> remote_pd, ibv_config_t const& config,
-              asio::error_code& ec) {
+              std::span<const std::byte> remote_pd, asio::error_code& ec) {
     if (is_open(impl)) {
       ec = make_error_code(ibv_errc::ext_already_registered);
       return;
@@ -150,7 +151,6 @@ public:
     }
     impl.cm_channel_ = std::move(handle.cm_channel_);
     impl.cm_id_ = std::move(handle.cm_id_);
-    impl.config_ = config;
     impl.timeout_ = default_cm_timeout_ms;
     store_remote_pd(impl, remote_pd);
     ec.clear();
@@ -181,13 +181,17 @@ public:
     // Auto-open (asio socket.connect opens with the endpoint's protocol).
     asio::error_code open_ec;
     if (!is_open(impl)) {
-      open(impl, PortSpace::rdma_type(), ibv_config_t{}, open_ec);
+      open(impl, PortSpace::rdma_type(), open_ec);
     }
+    // RDMA read/atomic negotiation from the centralized effective config.
+    auto const eff = effective_config();
     using op = ibv_connect_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{this->success_ec_, impl.cm_id_.get(), impl.timeout_,
                        private_data.data(), private_data.size(),
+                       to_u8(eff.inbound_read_limit_),
+                       to_u8(eff.outbound_read_limit_),
                        std::move(create_qp), pd_sink(impl), handler, io_ex};
     if (open_ec) {
       p.p->ec_ = open_ec;
@@ -207,6 +211,12 @@ public:
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{this->success_ec_, impl.cm_id_.get(), handler, io_ex};
+    if (!device_registered()) {
+      p.p->ec_ = make_error_code(ibv_errc::ext_device_not_registered);
+      this->reactor_.post_immediate_completion(p.p, false);
+      p.v = p.p = 0;
+      return;
+    }
     start_accept_op(impl, std::move(create_qp), private_data, p.p);
     p.v = p.p = 0;
   }
@@ -223,6 +233,20 @@ public:
   }
 
 private:
+  // The per-io_context completion service holds the device + effective config
+  // (installed by use_device). Connection params are sourced from it.
+  ibv_io_completion_service& io_svc() {
+    return asio::use_service<ibv_io_completion_service>(this->context());
+  }
+  bool device_registered() { return io_svc().is_initialized(); }
+  ibv_config_t effective_config() {
+    return device_registered() ? io_svc().get_effective_config()
+                               : ibv_config_t{};
+  }
+  static std::uint8_t to_u8(std::uint32_t v) {
+    return static_cast<std::uint8_t>(v > 255u ? 255u : v);
+  }
+
   ibv_pd_sink pd_sink(implementation_type& impl) {
     return {impl.private_data_buffer_.data(), impl.private_data_buffer_.size(), &impl.private_data_length_};
   }
@@ -262,11 +286,12 @@ private:
         return;
       }
     }
+    auto const eff = effective_config();
     rdma_conn_param param{};
     param.private_data = private_data.data();
     param.private_data_len = static_cast<std::uint8_t>(private_data.size());
-    param.responder_resources = 1;
-    param.initiator_depth = 1;
+    param.responder_resources = to_u8(eff.inbound_read_limit_);
+    param.initiator_depth = to_u8(eff.outbound_read_limit_);
     param.rnr_retry_count = 7;
     if (accept(impl.cm_id_.get(), &param, op->ec_) == 0) {
       op->ec_ = asio::error_code{};

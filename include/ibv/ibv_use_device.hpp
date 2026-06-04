@@ -3,47 +3,37 @@
 #include "asio/io_context.hpp"
 #include "ibv/ibv_device.hpp"
 #include "ibv/ibv_error.hpp"
-#include "ibv/detail/ibv_config_derive.hpp"
 #include "ibv/detail/ibv_io_completion_service.hpp"
 
 namespace asio::rdma {
 
-// Initialize the per-io_context shared-CQ service on the first config-compatible
-// device. Mirrors nd_use_device.
-inline detail::ibv_io_completion_service& use_device(asio::io_context& io_ctx,
-                                                     ibv_config_t const& config,
-                                                     asio::error_code& ec) {
+// Initialize the per-io_context shared-CQ service for an explicit device. The
+// caller discovers the device beforehand via
+// ibv_device_manager_t::instance().get_first_available_device(ps, config).
+//
+// Returns void: the caller already holds the device_ptr (use it directly for
+// MR / completion_queue / etc.). The same device_ptr may be passed to use_device
+// on multiple io_contexts — each gets its own shared CQ + comp_channel bound to
+// its own reactor, all sharing the device's context/PD. Mirrors nd use_device.
+inline void use_device(asio::io_context& io_ctx, ibv_device_ptr const& device,
+                       ibv_config_t const& config, asio::error_code& ec) {
   auto& svc = asio::use_service<detail::ibv_io_completion_service>(io_ctx);
   if (svc.is_initialized()) {
     ec = make_error_code(ibv_errc::ext_already_registered);
-    return svc;
+    return;
   }
-
-  ibv_device_ptr selected;
-  auto const& mgr = ibv_device_manager_t::instance();
-  mgr.for_each_device([&](ibv_device_ptr const& device) -> bool {
-    if (detail::is_config_compatible(config, device->attr_)) {
-      selected = device;
-      return false;
-    }
-    return true;
-  });
-
-  if (!selected) {
+  if (!device) {
     ec = make_error_code(ibv_errc::ext_invalid_device);
-    return svc;
+    return;
   }
-
-  svc.initialize(selected, config, ec);
-  return svc;
+  svc.initialize(device, config, ec);
 }
 
-inline detail::ibv_io_completion_service& use_device(
-    asio::io_context& io_ctx, ibv_config_t const& config = {}) {
+inline void use_device(asio::io_context& io_ctx, ibv_device_ptr const& device,
+                       ibv_config_t const& config = {}) {
   asio::error_code ec{};
-  auto& svc = use_device(io_ctx, config, ec);
+  use_device(io_ctx, device, config, ec);
   asio::detail::throw_error(ec);
-  return svc;
 }
 
 }

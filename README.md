@@ -24,9 +24,11 @@ and runs on:
 ## Quick start
 
 The data plane (`async_send` / `async_recv` / `async_read` / `async_write`) can deliver its
-completions two ways. Both examples below share the same control-plane setup:
-`use_device(io)` discovers a device and `connector` / `listener` run the rdma_cm handshake on
-the `io_context`.
+completions two ways. Both examples below share the same setup: discover a device via
+`rdma_device_manager_t`, hand it to `use_device(io, dev)` (which installs the per-`io_context`
+completion service and is where the operating config is set), then run `connector` / `listener`
+on that `io_context`. One device can be shared across several `io_context`s — call
+`use_device` with the same `rdma_device_ptr` on each.
 
 ### Event-driven mode (default)
 
@@ -66,8 +68,10 @@ asio::awaitable<void> client(asio::io_context& io, rdma_device_ptr dev,
 
 int main() {
   asio::io_context io;
-  auto& svc = use_device(io);            // discover device, install shared CQ
-  asio::co_spawn(io, client(io, svc.get_device(), "10.0.0.1", 5000), asio::detached);
+  auto dev = rdma_device_manager_t::instance()
+                 .get_first_available_device(tcp::v4(), {});   // discover a device
+  use_device(io, dev);                   // install this device's shared CQ on io
+  asio::co_spawn(io, client(io, dev, "10.0.0.1", 5000), asio::detached);
   io.run();                              // pumps both the CM handshake and verbs completions
 }
 ```
@@ -107,7 +111,8 @@ using namespace asio::rdma;
 
 int main() {
   asio::io_context io;
-  auto dev = use_device(io).get_device();
+  auto dev = rdma_device_manager_t::instance().get_first_available_device(tcp::v4(), {});
+  use_device(io, dev);                 // required even in poll mode (backs the QP)
 
   rdma_completion_queue cq(dev);       // standalone CQ (no comp_channel)
   rdma_queue_pair       qp(io, cq);    // bind the QP's send/recv to this CQ
@@ -142,8 +147,9 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 
 | Type / call | Purpose |
 |-------------|---------|
-| `use_device(io, config = {})` | Discover a device and initialize the per-`io_context` completion service |
-| `rdma_device_ptr` | Handle to the selected device (from `use_device(...).get_device()`) |
+| `rdma_device_manager_t::instance()` | Process-wide device registry; `get_first_available_device(port_space, config)` → `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints) |
+| `use_device(io, device, config = {})` | Install the per-`io_context` completion service for `device`; sets the operating config. Returns `void`; share one `device` across multiple `io_context`s by calling it on each |
+| `rdma_device_ptr` | Handle to a device (from `get_first_available_device`) |
 | `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` produce send/recv buffers |
 | `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, pd)` / `async_accept(qp, pd)` / `async_disconnect` / `get_remote_data()` |
 | `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(endpoint)` / `listen` / `async_get_connection` → `(ec, connector)` |

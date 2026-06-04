@@ -44,7 +44,7 @@ class nd_device_manager_t {
   }
 
   template <typename Func>
-  void for_each_adapter(Func&& func) const {
+  void for_each_device(Func&& func) const {
     for (auto const& provider : providers_) {
       assert(provider);
       for (auto const& adapter : provider->v4_adapters_) {

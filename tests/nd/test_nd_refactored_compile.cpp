@@ -19,7 +19,9 @@ void test_io_objects_construct() {
 
   // These will fail at runtime without RDMA hardware, but must compile
   asio::error_code ec;
-  rdma::use_device(io_ctx, rdma::nd_config_t{}, ec);
+  auto device = rdma::nd_device_manager_t::instance()
+                    .get_first_available_device(tcp::v4(), rdma::nd_config_t{});
+  rdma::use_device(io_ctx, device, rdma::nd_config_t{}, ec);
   if (ec) {
     std::cout << "[SKIP] no RDMA device, skipping IO object tests\n";
     return;
@@ -44,7 +46,9 @@ void test_io_objects_construct() {
 void test_queue_pair_deferred() {
   asio::io_context io_ctx;
   asio::error_code ec;
-  rdma::use_device(io_ctx, rdma::nd_config_t{}, ec);
+  auto device = rdma::nd_device_manager_t::instance()
+                    .get_first_available_device(tcp::v4(), rdma::nd_config_t{});
+  rdma::use_device(io_ctx, device, rdma::nd_config_t{}, ec);
   if (ec) {
     std::cout << "[SKIP] deferred test: no device\n";
     return;

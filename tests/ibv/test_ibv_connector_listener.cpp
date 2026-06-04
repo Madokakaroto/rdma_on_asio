@@ -15,10 +15,17 @@ using asio::rdma::tcp;
 
 void test_listener_open_bind_listen() {
   asio::io_context io;
+  auto device = asio::rdma::ibv_device_manager_t::instance()
+                    .get_first_available_device(tcp::v4(), {});
+  asio::error_code ec;
+  asio::rdma::use_device(io, device, {}, ec);
+  if (ec) {
+    std::cout << "[SKIP] use_device failed: " << ec.message() << "\n";
+    return;
+  }
   asio::rdma::ibv_listener<tcp> listener(io);
 
-  asio::error_code ec;
-  listener.open(tcp::v4(), asio::rdma::ibv_config_t{}, ec);
+  listener.open(tcp::v4(), ec);
   if (ec) {
     std::cout << "[SKIP] listener.open failed: " << ec.message() << "\n";
     return;
@@ -41,10 +48,17 @@ void test_listener_open_bind_listen() {
 
 void test_connector_open() {
   asio::io_context io;
+  auto device = asio::rdma::ibv_device_manager_t::instance()
+                    .get_first_available_device(tcp::v4(), {});
+  asio::error_code ec;
+  asio::rdma::use_device(io, device, {}, ec);
+  if (ec) {
+    std::cout << "[SKIP] use_device failed: " << ec.message() << "\n";
+    return;
+  }
   asio::rdma::ibv_connector<tcp> connector(io);
 
-  asio::error_code ec;
-  connector.open(tcp::v4(), asio::rdma::ibv_config_t{}, ec);
+  connector.open(tcp::v4(), ec);
   if (ec) {
     std::cout << "[SKIP] connector.open failed: " << ec.message() << "\n";
     return;
@@ -59,7 +73,9 @@ void compile_only_async_surface(bool run) {
     return;
   }
   asio::io_context io;
-  asio::rdma::use_device(io);
+  auto device = asio::rdma::ibv_device_manager_t::instance()
+                    .get_first_available_device(tcp::v4(), {});
+  asio::rdma::use_device(io, device);
   asio::rdma::ibv_queue_pair qp(io);
   asio::rdma::ibv_connector<tcp> connector(io);
   asio::rdma::ibv_listener<tcp> listener(io);

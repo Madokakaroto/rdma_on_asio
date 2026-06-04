@@ -18,13 +18,17 @@
 #ifndef IBVEXT_ALREADY_REGISTERED
 #define IBVEXT_ALREADY_REGISTERED -3
 #endif
+#ifndef IBVEXT_DEVICE_NOT_REGISTERED
+#define IBVEXT_DEVICE_NOT_REGISTERED -4
+#endif
 
 namespace asio::rdma {
 
 enum class ibv_errc : int {
-  ext_no_available_device = IBVEXT_NO_AVAILABLE_DEVICE,
-  ext_invalid_device      = IBVEXT_INVALID_DEVICE,
-  ext_already_registered  = IBVEXT_ALREADY_REGISTERED,
+  ext_no_available_device  = IBVEXT_NO_AVAILABLE_DEVICE,
+  ext_invalid_device       = IBVEXT_INVALID_DEVICE,
+  ext_already_registered   = IBVEXT_ALREADY_REGISTERED,
+  ext_device_not_registered = IBVEXT_DEVICE_NOT_REGISTERED,
 };
 
 class ibv_error_category : public std::error_category {
@@ -39,6 +43,8 @@ class ibv_error_category : public std::error_category {
         return "IBV_EXT invalid device";
       case IBVEXT_ALREADY_REGISTERED:
         return "IBV_EXT already registered";
+      case IBVEXT_DEVICE_NOT_REGISTERED:
+        return "IBV_EXT device not registered (call use_device first)";
       default:
         return "UNKNOWN_IBV_ERROR";
     }

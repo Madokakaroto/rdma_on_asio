@@ -38,7 +38,6 @@ public:
     nd2_connector_ptr connector_;
     unique_handle_t connector_handle_;
     nd_adapter_ptr adapter_;
-    nd_config_t config_;
     // Peer's private data (client request on server; server reply on client).
     std::array<std::byte, max_private_data_size> private_data_buffer_{};
     std::size_t private_data_length_ = 0;
@@ -80,7 +79,6 @@ public:
     impl.connector_ = std::move(other_impl.connector_);
     impl.connector_handle_ = std::move(other_impl.connector_handle_);
     impl.adapter_ = std::move(other_impl.adapter_);
-    impl.config_ = other_impl.config_;
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
   }
@@ -95,23 +93,22 @@ public:
     impl.connector_ = std::move(other_impl.connector_);
     impl.connector_handle_ = std::move(other_impl.connector_handle_);
     impl.adapter_ = std::move(other_impl.adapter_);
-    impl.config_ = other_impl.config_;
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
   }
 
   // open (client): create IND2Connector + overlapped handle. PortSpace value is
   // accepted for parity with ibv; nd has no rdma port space, so it's ignored.
+  // Requires use_device() on this io_context (config is centralized there).
   void open(implementation_type& impl, PortSpace const& /*ps*/,
-            nd_config_t const& config, asio::error_code& ec) {
-    do_open(impl, config, ec);
+            asio::error_code& ec) {
+    do_open(impl, ec);
   }
 
   // assign (server): adopt a connector handle from the listener and store the
   // client's request private data so remote_private_data() can return it.
   void assign(implementation_type& impl, native_connector_type&& handle,
-              std::span<const std::byte> remote_pd, nd_config_t const& config,
-              asio::error_code& ec) {
+              std::span<const std::byte> remote_pd, asio::error_code& ec) {
     if (impl.connector_) {
       ec = asio::error::already_open;
       ASIO_ERROR_LOCATION(ec);
@@ -132,7 +129,6 @@ public:
     impl.connector_ = std::move(handle.connector_);
     impl.connector_handle_ = std::move(handle.overlapped_handle_);
     impl.adapter_ = std::move(handle.adapter_);
-    impl.config_ = config;
     store_remote_pd(impl, remote_pd);
   }
 
@@ -159,7 +155,7 @@ public:
     // Auto-open (mirrors asio socket.connect opening with the protocol).
     asio::error_code open_ec;
     if (!is_open(impl)) {
-      do_open(impl, nd_config_t{}, open_ec);
+      do_open(impl, open_ec);
     }
 
     using op = nd_connect_op<Handler, IoExecutor>;
@@ -193,6 +189,13 @@ public:
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{impl.connector_.Get(), handler, io_ex};
+    if (!device_registered()) {
+      asio::error_code ec = nd_errc::ext_device_not_registered;
+      this->scheduler_.work_started();
+      this->scheduler_.on_completion(p.p, ec);
+      p.v = p.p = 0;
+      return;
+    }
     if (!qp) {
       asio::error_code ec = nd_errc::ext_invalid_qp;
       this->scheduler_.work_started();
@@ -218,8 +221,7 @@ public:
 
 private:
   // Worker for both public open(ps, ...) and auto-open inside async_connect.
-  void do_open(implementation_type& impl, nd_config_t const& config,
-               asio::error_code& ec) {
+  void do_open(implementation_type& impl, asio::error_code& ec) {
     if (impl.connector_) {
       ec = asio::error::already_open;
       ASIO_ERROR_LOCATION(ec);
@@ -229,7 +231,7 @@ private:
     auto& io_svc =
         asio::use_service<nd_io_completion_service>(this->context());
     if (!io_svc.is_initialized()) {
-      ec = nd_errc::ext_invalid_device;
+      ec = nd_errc::ext_device_not_registered;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
@@ -260,7 +262,18 @@ private:
     }
 
     impl.adapter_ = adapter;
-    impl.config_ = config;
+  }
+
+  // The per-io_context completion service holds the device + effective config
+  // (installed by use_device); connection params are sourced from it.
+  bool device_registered() {
+    return asio::use_service<nd_io_completion_service>(this->context())
+        .is_initialized();
+  }
+  nd_config_t effective_config() {
+    auto& io_svc = asio::use_service<nd_io_completion_service>(this->context());
+    return io_svc.is_initialized() ? io_svc.get_effective_config()
+                                   : nd_config_t{};
   }
 
   nd_pd_sink pd_sink(implementation_type& impl) {
@@ -294,10 +307,11 @@ private:
       return;
     }
 
+    auto const eff = effective_config();
     connect(impl.connector_.Get(), qp,
             endpoint.data(), endpoint.size(),
-            impl.config_.inbound_read_limit_,
-            impl.config_.outbound_read_limit_,
+            eff.inbound_read_limit_,
+            eff.outbound_read_limit_,
             private_data.size() == 0 ? nullptr : private_data.data(),
             static_cast<ULONG>(private_data.size()),
             op, ec);
@@ -313,9 +327,10 @@ private:
                        nd_op_base* op) {
     this->scheduler_.work_started();
     asio::error_code ec{};
+    auto const eff = effective_config();
     accept(impl.connector_.Get(), qp,
-           impl.config_.inbound_read_limit_,
-           impl.config_.outbound_read_limit_,
+           eff.inbound_read_limit_,
+           eff.outbound_read_limit_,
            private_data.size() == 0 ? nullptr : private_data.data(),
            static_cast<ULONG>(private_data.size()),
            op, ec);

@@ -32,15 +32,15 @@ public:
   nd_listener(nd_listener const&) = delete;
   nd_listener& operator=(nd_listener const&) = delete;
 
-  void open(PortSpace const& ps, nd_config_t const& config = {}) {
+  // Requires use_device() on this io_context (config is centralized there).
+  void open(PortSpace const& ps) {
     asio::error_code ec;
-    open(ps, config, ec);
+    open(ps, ec);
     asio::detail::throw_error(ec);
   }
 
-  void open(PortSpace const& ps, nd_config_t const& config,
-            asio::error_code& ec) {
-    impl_.get_service().open(impl_.get_implementation(), ps, config, ec);
+  void open(PortSpace const& ps, asio::error_code& ec) {
+    impl_.get_service().open(impl_.get_implementation(), ps, ec);
   }
 
   void bind(endpoint_type const& endpoint) {
@@ -88,8 +88,7 @@ public:
             connector_type conn(io_ctx);
             if (!ec) {
               asio::error_code aec;
-              conn.assign_with_private_data(std::move(handle), pd,
-                                            nd_config_t{}, aec);
+              conn.assign_with_private_data(std::move(handle), pd, aec);
               if (aec) ec = aec;
             }
             std::move(h)(ec, std::move(conn));
@@ -112,8 +111,7 @@ public:
                              std::span<const std::byte> pd) mutable {
             if (!ec) {
               asio::error_code aec;
-              conn.assign_with_private_data(std::move(handle), pd,
-                                            nd_config_t{}, aec);
+              conn.assign_with_private_data(std::move(handle), pd, aec);
               if (aec) ec = aec;
             }
             std::move(h)(ec);

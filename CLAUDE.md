@@ -30,7 +30,9 @@ using namespace asio::rdma;
 rdma_queue_pair        qp(io);
 rdma_completion_queue  cq(dev);
 rdma_memory_region     mr(dev, p, n);
-rdma_device_ptr        dev = use_device(io).get_device();
+rdma_device_ptr        dev = rdma_device_manager_t::instance()
+                                 .get_first_available_device(tcp::v4(), {});
+use_device(io, dev);   // installs this device's shared CQ on io (config set here)
 
 // control plane — two equivalent spellings:
 // (a) backend-agnostic aliases (rdma/rdma_types.hpp)
@@ -82,7 +84,7 @@ IO objects:
   nd_listener.hpp         — open(port_space) / bind(endpoint) / listen / async_get_connection
   nd_completion_queue.hpp — standalone poll-mode CQ
   nd_mr.hpp               — RAII memory region `nd_memory_region` + const_buffer / mutable_buffer
-  nd_use_device.hpp       — use_device(io_ctx, config) / use_device(io_ctx, selector)
+  nd_use_device.hpp       — use_device(io_ctx, device_ptr, config={}) -> void
 
 Services (detail/):
   nd_io_completion_service.hpp — per-io_context singleton: shared CQ + IOCP handle
@@ -105,7 +107,7 @@ IO objects:
   ibv_listener.hpp         — open(port_space) / bind(endpoint) / listen / async_get_connection
   ibv_completion_queue.hpp — standalone poll-mode CQ
   ibv_mr.hpp               — RAII memory region `ibv_memory_region` + const_buffer / mutable_buffer
-  ibv_use_device.hpp       — use_device(io_ctx, config)
+  ibv_use_device.hpp       — use_device(io_ctx, device_ptr, config={}) -> void
 
 Services (detail/):
   ibv_io_completion_service.hpp — per-io_context singleton: shared CQ + comp_channel on epoll
@@ -123,16 +125,17 @@ Types (detail/):
 
 | Operation | Signature (both backends) |
 |-----------|--------------------------|
-| Init device | `use_device(io_ctx, config)` → `io_completion_service&`; `.get_device()` → `*_device_ptr` |
+| Discover device | `rdma_device_manager_t::instance().get_first_available_device(port_space, config)` → `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints; `for_each_device(fn)` to iterate) |
+| Init device | `use_device(io_ctx, device, config = {})` → `void` — installs the per-`io_context` completion service for `device` and stores the effective (operating) config; reusable across `io_context`s |
 | Queue pair (event) | `queue_pair(io_ctx, config)` or deferred `open(io_ctx, config)` — uses the shared CQ |
 | Queue pair (poll) | `queue_pair(io_ctx, cq, config)` or deferred `open(io_ctx, cq, config)` — binds to a standalone CQ |
-| Connector open | `connector.open(port_space, config)` — create the cm_id/connector (client side) |
-| Connector adopt | `connector.assign(native_handle&&, config)` — adopt a handle from the listener (server side) |
+| Connector open | `connector.open(port_space)` — create the cm_id/connector (client side); requires `use_device` on this io_context |
+| Connector adopt | `connector.assign(native_handle&&)` — adopt a handle from the listener (server side) |
 | Connect | `async_connect(qp, endpoint, private_data, token)` → `void(error_code)` — creates the QP, then connects |
 | Accept | `async_accept(qp, private_data, token)` → `void(error_code)` — creates the QP, then accepts |
 | Disconnect | `async_disconnect(token)` → `void(error_code)` |
 | Peer private data | `connector.get_remote_data()` → `const_buffer` (client req on server, server reply on client) |
-| Listener setup | `listener.open(port_space, config)` / `listener.bind(endpoint)` / `listener.listen(backlog)` |
+| Listener setup | `listener.open(port_space)` / `listener.bind(endpoint)` / `listener.listen(backlog)` (requires `use_device`) |
 | Get connection | `async_get_connection(token)` → `void(ec, connector)`; fill form `async_get_connection(conn, token)` → `void(ec)` |
 | Send/Recv | `async_send(buffers, token)` / `async_recv(buffers, token)` → `void(ec, size_t)` |
 | RDMA R/W | `async_read(buffers, remote_addr, token)` / `async_write(...)` |
@@ -141,9 +144,17 @@ Types (detail/):
 The QP is **not** bound at `open` time — it is created on the connector's cm_id during
 `async_connect` / `async_accept` (the connector calls `qp.make_create_qp_fn()`).
 
+**Config is centralized in `use_device`.** There is a single `rdma_config_t` in three roles:
+selection constraint (to `get_first_available_device`), device capability (`device->attr_`/`info_`),
+and effective/operating config (`derive_effective_config(config, caps)` stored in the
+io_completion_service as `effective_config_`). `connector`/`listener` no longer take a config —
+their connection params (`responder_resources`/`initiator_depth` from `inbound`/`outbound_read_limit_`)
+are read from the service's `effective_config_`. Opening a `connector`/`listener` without
+`use_device` on that io_context fails with `ext_device_not_registered`.
+
 ### Two Completion Modes (both backends)
 
-1. **Event-driven mode** (default): `use_device()` initializes the io_completion_service
+1. **Event-driven mode** (default): `use_device(io, device)` initializes the io_completion_service
    (IOCP on Windows, comp_channel+epoll on Linux). CQ completions are bridged into asio's
    scheduler. User drives `io_ctx.run()`.
 

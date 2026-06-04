@@ -41,6 +41,9 @@ protected:
   // responsibility, as in nd). rdma_connect copies it out of conn_param.
   void const* private_data_;
   std::uint8_t private_data_len_;
+  // RDMA read/atomic negotiation, sourced from the effective config.
+  std::uint8_t responder_resources_;
+  std::uint8_t initiator_depth_;
   // Creates the QP on cm_id once it has a context (after ADDR_RESOLVED).
   ibv_create_qp_fn create_qp_;
   // Where to store the server's reply private data (from ESTABLISHED).
@@ -49,6 +52,8 @@ protected:
   ibv_connect_op_base(asio::error_code const& success_ec, native_cm_id_t* cm_id,
                       int timeout, void const* private_data,
                       std::size_t private_data_len,
+                      std::uint8_t responder_resources,
+                      std::uint8_t initiator_depth,
                       ibv_create_qp_fn create_qp, ibv_pd_sink remote_pd,
                       func_type complete_func)
       // cm_id may be null if auto-open failed; that path posts an immediate
@@ -60,6 +65,8 @@ protected:
       , timeout_(timeout)
       , private_data_(private_data)
       , private_data_len_(static_cast<std::uint8_t>(private_data_len))
+      , responder_resources_(responder_resources)
+      , initiator_depth_(initiator_depth)
       , create_qp_(std::move(create_qp))
       , remote_pd_(remote_pd) {
   }
@@ -124,8 +131,8 @@ private:
         rdma_conn_param param{};
         param.private_data = private_data_;
         param.private_data_len = private_data_len_;
-        param.responder_resources = 1;  // TODO: derive from config at QP step
-        param.initiator_depth = 1;
+        param.responder_resources = responder_resources_;
+        param.initiator_depth = initiator_depth_;
         param.retry_count = 7;
         param.rnr_retry_count = 7;
         if (connect(cm_id_, &param, this->ec_) == 0) {
@@ -187,11 +194,13 @@ private:
 public:
   ibv_connect_op(asio::error_code const& success_ec, native_cm_id_t* cm_id,
                  int timeout, void const* private_data,
-                 std::size_t private_data_len, ibv_create_qp_fn create_qp,
+                 std::size_t private_data_len, std::uint8_t responder_resources,
+                 std::uint8_t initiator_depth, ibv_create_qp_fn create_qp,
                  ibv_pd_sink remote_pd, Handler& handler,
                  IoExecutor const& io_ex)
       : ibv_connect_op_base(success_ec, cm_id, timeout, private_data,
-                            private_data_len, std::move(create_qp), remote_pd,
+                            private_data_len, responder_resources,
+                            initiator_depth, std::move(create_qp), remote_pd,
                             &ibv_connect_op::do_complete)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {

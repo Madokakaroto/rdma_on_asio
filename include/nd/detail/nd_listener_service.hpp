@@ -26,7 +26,6 @@ public:
     nd2_listener_ptr listener_;
     unique_handle_t listener_handle_;
     nd_adapter_ptr adapter_;
-    nd_config_t config_;
   };
 
   explicit nd_listener_service(asio::execution_context& ctx)
@@ -65,7 +64,6 @@ public:
     impl.listener_ = std::move(other_impl.listener_);
     impl.listener_handle_ = std::move(other_impl.listener_handle_);
     impl.adapter_ = std::move(other_impl.adapter_);
-    impl.config_ = other_impl.config_;
   }
 
   void move_assign(implementation_type& impl,
@@ -78,14 +76,13 @@ public:
     impl.listener_ = std::move(other_impl.listener_);
     impl.listener_handle_ = std::move(other_impl.listener_handle_);
     impl.adapter_ = std::move(other_impl.adapter_);
-    impl.config_ = other_impl.config_;
   }
 
   // open: create listener + overlapped handle. PortSpace value is accepted for
   // parity with ibv (and possible future v4/v6 selection); ND has no explicit
-  // RDMA port space.
+  // RDMA port space. Requires use_device() on this io_context.
   void open(implementation_type& impl, PortSpace const& /*ps*/,
-            nd_config_t const& config, asio::error_code& ec) {
+            asio::error_code& ec) {
     if (impl.listener_) {
       ec = asio::error::already_open;
       ASIO_ERROR_LOCATION(ec);
@@ -95,7 +92,7 @@ public:
     auto& io_svc =
         asio::use_service<nd_io_completion_service>(this->context());
     if (!io_svc.is_initialized()) {
-      ec = nd_errc::ext_invalid_device;
+      ec = nd_errc::ext_device_not_registered;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
@@ -126,7 +123,6 @@ public:
     }
 
     impl.adapter_ = adapter;
-    impl.config_ = config;
   }
 
   bool is_open(implementation_type const& impl) const noexcept {

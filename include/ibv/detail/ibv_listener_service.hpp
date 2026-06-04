@@ -4,6 +4,7 @@
 #include "asio/execution_context.hpp"
 #include "asio/io_context.hpp"
 #include "ibv/detail/ibv_impl_types.hpp"
+#include "ibv/detail/ibv_io_completion_service.hpp"
 #include "ibv/detail/ibv_op_get_connection_request.hpp"
 #include "ibv/detail/ibv_ops_cm.hpp"
 #include "ibv/detail/ibv_service_base.hpp"
@@ -27,7 +28,6 @@ public:
     cm_channel_holder cm_channel_;
     cm_id_holder cm_id_;
     asio::detail::reactor::per_descriptor_data cm_reactor_data_;
-    ibv_config_t config_;
   };
 
   explicit ibv_listener_service(asio::execution_context& context)
@@ -56,7 +56,6 @@ public:
     base_move_construct(impl, other_impl);
     impl.cm_channel_ = std::move(other_impl.cm_channel_);
     impl.cm_id_ = std::move(other_impl.cm_id_);
-    impl.config_ = other_impl.config_;
     impl.cm_reactor_data_ = asio::detail::reactor::per_descriptor_data();
     if (impl.cm_channel_) {
       this->reactor_.move_descriptor(impl.cm_channel_->fd, impl.cm_reactor_data_,
@@ -70,7 +69,6 @@ public:
     close_for_destruction(impl);
     impl.cm_channel_ = std::move(other_impl.cm_channel_);
     impl.cm_id_ = std::move(other_impl.cm_id_);
-    impl.config_ = other_impl.config_;
     if (impl.cm_channel_) {
       this->reactor_.move_descriptor(impl.cm_channel_->fd, impl.cm_reactor_data_,
                                      other_impl.cm_reactor_data_);
@@ -80,9 +78,14 @@ public:
   // --- open / bind / listen ---
 
   void open(implementation_type& impl, rdma_port_space ps_type,
-            ibv_config_t const& config, asio::error_code& ec) {
+            asio::error_code& ec) {
     if (is_open(impl)) {
       ec = make_error_code(ibv_errc::ext_already_registered);
+      return;
+    }
+    if (!asio::use_service<ibv_io_completion_service>(this->context())
+             .is_initialized()) {
+      ec = make_error_code(ibv_errc::ext_device_not_registered);
       return;
     }
     cm_channel_holder channel{ create_event_channel(ec) };
@@ -103,7 +106,6 @@ public:
     }
     impl.cm_channel_ = std::move(channel);
     impl.cm_id_ = std::move(cm_id);
-    impl.config_ = config;
     ec.clear();
   }
 
