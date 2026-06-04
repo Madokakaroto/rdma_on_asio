@@ -1,32 +1,29 @@
-// Cross-platform RDMA echo test in POLL MODE. Same protocol as
-// test_rdma_echo.cpp, but the data plane runs against a user-owned standalone
-// completion_queue instead of the shared service CQ:
+// Cross-platform RDMA echo test in POLL MODE — io_context-free data plane.
 //
-//   - The user creates a rdma_completion_queue and binds the queue pair to it
-//     via the rdma_queue_pair(io, cq) constructor.
-//   - A dedicated thread spins on cq.poll(), reaping data-plane completions.
-//     Each completion handler is posted back to the io_context, so the awaiting
-//     coroutine resumes on the thread running io_ctx.run() — co_await still
-//     works unchanged.
-//   - The control plane (connector/listener: connect/accept/disconnect) still
-//     runs on the io_context; poll mode only changes how verbs-op completions
-//     are delivered.
+//   - The control plane (connect / accept / disconnect over rdma_cm / ND) runs on
+//     an io_context, as always.
+//   - The data plane runs against a user-owned standalone completion_queue. The
+//     queue pair is bound to it with rdma_queue_pair(cq) — note: NO io_context.
+//   - A dedicated thread spins cq.poll(). Data-plane ops use as_tuple(use_future);
+//     the handler that sets the future fires INLINE on the poll thread inside
+//     cq.poll() (the QP uses system_executor for poll-mode completions), so the
+//     data path never touches the io_context.
 //
-// Written entirely against the backend-agnostic public surface, so the same
-// source compiles and runs on either backend (NetworkDirect / libibverbs).
+// Written against the backend-agnostic public surface, so the same source
+// compiles and runs on either backend (NetworkDirect / libibverbs).
 #include <array>
 #include <atomic>
+#include <future>
 #include <iostream>
 #include <span>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <cstring>
 
 #include "asio/io_context.hpp"
-#include "asio/awaitable.hpp"
-#include "asio/co_spawn.hpp"
-#include "asio/use_awaitable.hpp"
+#include "asio/use_future.hpp"
 #include "asio/as_tuple.hpp"
 
 #include "rdma/rdma.hpp"
@@ -34,7 +31,9 @@
 namespace rdma = asio::rdma;
 using tcp = rdma::tcp;
 
-constexpr auto use_nothrow = asio::as_tuple(asio::use_awaitable);
+// Data-plane completion token: returns std::future<tuple<error_code, size_t>>;
+// no exceptions, and (crucially) completes inline on the polling thread.
+constexpr auto use_fut = asio::as_tuple(asio::use_future);
 constexpr std::size_t kBufSize = 4096;
 constexpr int kEchoCount = 10;
 
@@ -43,14 +42,14 @@ std::string_view pd_view(asio::const_buffer pd) {
 }
 
 // RAII spinner: a thread that busy-polls the standalone CQ until destroyed.
-// Construct it only AFTER the queue pair has been created on the connection
-// (async_connect / async_accept), so QP creation never races with poll().
+// Construct it only AFTER the connection is established (the QP exists), so QP
+// creation never races with poll().
 class cq_spinner {
 public:
   explicit cq_spinner(rdma::rdma_completion_queue& cq)
       : cq_(cq), thread_([this] {
           while (!stop_.load(std::memory_order_relaxed)) {
-            cq_.poll();  // reaps CQEs; handlers are posted to the io_context
+            cq_.poll();  // reaps CQEs + ready ops; completes data-plane handlers
           }
         }) {}
 
@@ -68,9 +67,8 @@ private:
   std::thread thread_;
 };
 
-asio::awaitable<void> run_server(asio::io_context& io_ctx,
-                                 rdma::rdma_device_ptr const& device,
-                                 uint16_t port) {
+void run_server(asio::io_context& io_ctx, rdma::rdma_device_ptr const& device,
+                uint16_t port) {
   std::cout << "[server] listening on port " << port << " (poll mode)\n";
 
   rdma::rdma_listener<tcp> listener(io_ctx);
@@ -81,33 +79,43 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   // Standalone CQ declared before the connector so it outlives the QP, which is
   // owned by the connection and torn down when `conn` is destroyed.
   rdma::rdma_completion_queue cq(device);
+  rdma::rdma_connector<tcp> conn(io_ctx);  // filled by async_get_connection
+  rdma::rdma_queue_pair qp(cq);            // poll-mode QP: bound to cq, no io
 
-  auto [ec_get, conn] = co_await listener.async_get_connection(use_nothrow);
-  if (ec_get) {
-    std::cerr << "[server] get_connection failed: " << ec_get.message() << "\n";
-    co_return;
+  // --- control plane: get connection (fill form, on the io_context) ---
+  asio::error_code get_ec;
+  listener.async_get_connection(conn,
+                                [&](asio::error_code ec) { get_ec = ec; });
+  io_ctx.run();
+  io_ctx.restart();
+  if (get_ec) {
+    std::cerr << "[server] get_connection failed: " << get_ec.message() << "\n";
+    return;
   }
   std::cout << "[server] client private data: \""
             << pd_view(conn.get_remote_data()) << "\"\n";
 
-  // Bind the QP to our poll-mode CQ; it is created on the connection by accept.
-  rdma::rdma_queue_pair qp(io_ctx, cq);
+  // --- control plane: accept (on the io_context) ---
+  asio::error_code accept_ec;
   std::string reply_pd = "server-hello";
-  auto [ec_accept] = co_await conn.async_accept(qp, asio::buffer(reply_pd), use_nothrow);
-  if (ec_accept) {
-    std::cerr << "[server] accept failed: " << ec_accept.message() << "\n";
-    co_return;
+  conn.async_accept(qp, asio::buffer(reply_pd),
+                    [&](asio::error_code ec) { accept_ec = ec; });
+  io_ctx.run();
+  io_ctx.restart();
+  if (accept_ec) {
+    std::cerr << "[server] accept failed: " << accept_ec.message() << "\n";
+    return;
   }
   std::cout << "[server] connection accepted\n";
 
+  // --- data plane: poll thread + use_future (io_context-free) ---
   std::array<char, kBufSize> raw_buf{};
   rdma::rdma_memory_region mr(device, raw_buf.data(), raw_buf.size());
-
   {
-    cq_spinner spinner(cq);  // start polling now that the QP exists
+    cq_spinner spinner(cq);
     for (int i = 0; i < kEchoCount; ++i) {
-      auto recv_buf = mr.slice(std::size_t{0}, kBufSize);
-      auto [ec_recv, n] = co_await qp.async_recv(recv_buf, use_nothrow);
+      auto [ec_recv, n] =
+          qp.async_recv(mr.slice(std::size_t{0}, kBufSize), use_fut).get();
       if (ec_recv || n == 0) {
         if (ec_recv && ec_recv != asio::error::operation_aborted) {
           std::cerr << "[server] recv error: " << ec_recv.message() << "\n";
@@ -116,9 +124,8 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
       }
       std::cout << "[server] echo " << n << " bytes: "
                 << std::string_view(raw_buf.data(), n) << "\n";
-
-      auto send_buf = mr.cslice(std::size_t{0}, n);
-      auto [ec_send, sent] = co_await qp.async_send(send_buf, use_nothrow);
+      auto [ec_send, sent] =
+          qp.async_send(mr.cslice(std::size_t{0}, n), use_fut).get();
       if (ec_send) {
         std::cerr << "[server] send error: " << ec_send.message() << "\n";
         break;
@@ -126,51 +133,56 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
     }
   }  // spinner joined here, before tearing the connection down
 
-  auto [ec_disc] = co_await conn.async_disconnect(use_nothrow);
-  (void)ec_disc;
+  // --- control plane: disconnect (on the io_context) ---
+  asio::error_code disc_ec;
+  conn.async_disconnect([&](asio::error_code ec) { disc_ec = ec; });
+  io_ctx.run();
+  (void)disc_ec;
   std::cout << "[server] disconnected\n";
 }
 
-asio::awaitable<void> run_client(asio::io_context& io_ctx,
-                                 rdma::rdma_device_ptr const& device,
-                                 std::string const& host, uint16_t port) {
+void run_client(asio::io_context& io_ctx, rdma::rdma_device_ptr const& device,
+                std::string const& host, uint16_t port) {
   std::cout << "[client] connecting to " << host << ":" << port << " (poll mode)\n";
 
   // CQ declared before the connector: it must outlive the QP owned by `conn`.
   rdma::rdma_completion_queue cq(device);
   rdma::rdma_connector<tcp> conn(io_ctx);
   conn.open(tcp::v4());
-  rdma::rdma_queue_pair qp(io_ctx, cq);  // bind the QP to our poll-mode CQ
+  rdma::rdma_queue_pair qp(cq);  // poll-mode QP: bound to cq, no io_context
 
+  // --- control plane: connect (on the io_context) ---
   tcp::endpoint endpoint(asio::ip::make_address(host), port);
   std::string req_pd = "client-hello";
-  auto [ec_conn] =
-      co_await conn.async_connect(qp, endpoint, asio::buffer(req_pd), use_nothrow);
-  if (ec_conn) {
-    std::cerr << "[client] connect failed: " << ec_conn.message() << "\n";
-    co_return;
+  asio::error_code conn_ec;
+  conn.async_connect(qp, endpoint, asio::buffer(req_pd),
+                     [&](asio::error_code ec) { conn_ec = ec; });
+  io_ctx.run();
+  io_ctx.restart();
+  if (conn_ec) {
+    std::cerr << "[client] connect failed: " << conn_ec.message() << "\n";
+    return;
   }
   std::cout << "[client] connected; server private data: \""
             << pd_view(conn.get_remote_data()) << "\"\n";
 
+  // --- data plane: poll thread + use_future (io_context-free) ---
   std::array<char, kBufSize> raw_buf{};
   rdma::rdma_memory_region mr(device, raw_buf.data(), raw_buf.size());
-
   {
-    cq_spinner spinner(cq);  // start polling now that the QP exists
+    cq_spinner spinner(cq);
     for (int i = 0; i < kEchoCount; ++i) {
       std::string msg = "Hello RDMA #" + std::to_string(i);
       std::memcpy(raw_buf.data(), msg.data(), msg.size());
 
-      auto send_buf = mr.cslice(std::size_t{0}, msg.size());
-      auto [ec_send, sent] = co_await qp.async_send(send_buf, use_nothrow);
+      auto [ec_send, sent] =
+          qp.async_send(mr.cslice(std::size_t{0}, msg.size()), use_fut).get();
       if (ec_send) {
         std::cerr << "[client] send error: " << ec_send.message() << "\n";
         break;
       }
-
-      auto recv_buf = mr.slice(std::size_t{0}, kBufSize);
-      auto [ec_recv, n] = co_await qp.async_recv(recv_buf, use_nothrow);
+      auto [ec_recv, n] =
+          qp.async_recv(mr.slice(std::size_t{0}, kBufSize), use_fut).get();
       if (ec_recv) {
         std::cerr << "[client] recv error: " << ec_recv.message() << "\n";
         break;
@@ -180,8 +192,11 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
     }
   }  // spinner joined here, before tearing the connection down
 
-  auto [ec_disc] = co_await conn.async_disconnect(use_nothrow);
-  (void)ec_disc;
+  // --- control plane: disconnect (on the io_context) ---
+  asio::error_code disc_ec;
+  conn.async_disconnect([&](asio::error_code ec) { disc_ec = ec; });
+  io_ctx.run();
+  (void)disc_ec;
   std::cout << "[client] disconnected\n";
 }
 
@@ -216,20 +231,15 @@ int main(int argc, char* argv[]) {
 
   try {
     asio::io_context io_ctx;
-    // use_device is required even in poll mode: the device/PD backs the QP
-    // created on the connection.
     auto device = rdma::rdma_device_manager_t::instance()
                       .get_first_available_device(tcp::v4(), {});
     rdma::use_device(io_ctx, device);
 
     if (is_server) {
-      asio::co_spawn(io_ctx, run_server(io_ctx, device, port), asio::detached);
+      run_server(io_ctx, device, port);
     } else {
-      asio::co_spawn(io_ctx, run_client(io_ctx, device, host, port),
-                     asio::detached);
+      run_client(io_ctx, device, host, port);
     }
-
-    io_ctx.run();
     return 0;
   } catch (std::exception const& e) {
     std::cerr << "fatal: " << e.what() << "\n";

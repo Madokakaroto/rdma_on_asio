@@ -79,7 +79,7 @@ while `rdma_queue_pair`/`rdma_completion_queue`/`rdma_memory_region`/`rdma_devic
 
 ```
 IO objects:
-  nd_queue_pair.hpp       — async_send / async_recv / async_read / async_write; (io,cq) ctor for poll mode
+  nd_queue_pair.hpp       — async_send / async_recv / async_read / async_write; (cq) ctor = io_context-free poll mode
   nd_connector.hpp        — open(port_space) / assign / async_connect(qp,..) / async_accept(qp,..) / async_disconnect / get_remote_data
   nd_listener.hpp         — open(port_space) / bind(endpoint) / listen / async_get_connection
   nd_completion_queue.hpp — standalone poll-mode CQ
@@ -102,7 +102,7 @@ Types (detail/):
 
 ```
 IO objects:
-  ibv_queue_pair.hpp       — async_send / async_recv / async_read / async_write; (io,cq) ctor for poll mode
+  ibv_queue_pair.hpp       — async_send / async_recv / async_read / async_write; (cq) ctor = io_context-free poll mode
   ibv_connector.hpp        — open(port_space) / assign / async_connect(qp,..) / async_accept(qp,..) / async_disconnect / get_remote_data
   ibv_listener.hpp         — open(port_space) / bind(endpoint) / listen / async_get_connection
   ibv_completion_queue.hpp — standalone poll-mode CQ
@@ -127,8 +127,8 @@ Types (detail/):
 |-----------|--------------------------|
 | Discover device | `rdma_device_manager_t::instance().get_first_available_device(port_space, config)` → `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints; `for_each_device(fn)` to iterate) |
 | Init device | `use_device(io_ctx, device, config = {})` → `void` — installs the per-`io_context` completion service for `device` and stores the effective (operating) config; reusable across `io_context`s |
-| Queue pair (event) | `queue_pair(io_ctx, config)` or deferred `open(io_ctx, config)` — uses the shared CQ |
-| Queue pair (poll) | `queue_pair(io_ctx, cq, config)` or deferred `open(io_ctx, cq, config)` — binds to a standalone CQ |
+| Queue pair (event) | `queue_pair(io_ctx)` or deferred `open(io_ctx)` — uses the shared CQ |
+| Queue pair (poll) | `queue_pair(cq)` or deferred `open(cq)` — io_context-free; binds to a standalone CQ (config read from the holder) |
 | Connector open | `connector.open(port_space)` — create the cm_id/connector (client side); requires `use_device` on this io_context |
 | Connector adopt | `connector.assign(native_handle&&)` — adopt a handle from the listener (server side) |
 | Connect | `async_connect(qp, endpoint, private_data, token)` → `void(error_code)` — creates the QP, then connects |
@@ -141,8 +141,11 @@ Types (detail/):
 | RDMA R/W | `async_read(buffers, remote_addr, token)` / `async_write(...)` |
 
 `private_data` is an `asio::const_buffer` (pass `asio::buffer(...)`); an empty buffer sends none.
-The QP is **not** bound at `open` time — it is created on the connector's cm_id during
-`async_connect` / `async_accept` (the connector calls `qp.make_create_qp_fn()`).
+**QP creation timing differs by backend**: on **ibv** the native QP is created on the connector's
+cm_id during `async_connect` / `async_accept` (the connector calls `qp.make_create_qp_fn()`); on
+**nd** the QP is created (and owned) at `queue_pair` construction and the connector borrows it via
+`native_handle()`. Either way the QP gets its `{device, cq, config}` from the holder — the shared
+`io_completion_service` (event mode) or the `completion_queue` (poll mode).
 
 **Config is centralized in `use_device`.** There is a single `rdma_config_t` in three roles:
 selection constraint (to `get_first_available_device`), device capability (`device->attr_`/`info_`),
@@ -158,17 +161,24 @@ are read from the service's `effective_config_`. Opening a `connector`/`listener
    (IOCP on Windows, comp_channel+epoll on Linux). CQ completions are bridged into asio's
    scheduler. User drives `io_ctx.run()`.
 
-2. **Poll mode**: User creates a standalone `completion_queue` (no comp_channel) and binds the
-   QP to it via the `queue_pair(io_ctx, cq, config)` ctor (or `open(io_ctx, cq, config)`). User
-   calls `cq.poll()` / `cq.poll_one()` manually; data-plane completion handlers fire
-   **synchronously inside `poll()`** (no io_context post), so a plain callback token is the
-   natural fit. The control-plane handshake (`connector`/`listener`) still runs on the
-   io_context — poll mode only changes how verbs-op completions are delivered.
+2. **Poll mode** (io_context-free data plane): User creates a standalone `completion_queue` (no
+   comp_channel) and binds the QP via `queue_pair(cq)` (or `open(cq)`) — **no io_context**. User
+   calls `cq.poll()` / `cq.poll_one()`. The QP supplies `asio::system_executor` as the op's
+   executor, so with a **non-io_context-bound token (callback / `use_future`)** the completion
+   handler fires **inline on the polling thread** — the data path never touches an io_context.
+   (With `use_awaitable`/an io_context-bound token, the handler's own executor wins and the
+   completion posts back to that io_context instead.) The control-plane handshake
+   (`connector`/`listener`) still runs on an io_context; only the data plane is io_context-free.
+   Empty-buffer / sync-post-error completions are queued on the `completion_queue` and drained by
+   `poll()` (so handlers only ever fire from within `poll()`).
 
 ### Key Patterns
 
 - **Service registration**: `asio::use_service<ServiceType>(io_ctx)` — asio creates the service on first access.
-- **IO object impl**: `asio::detail::io_object_impl<ServiceType>` constructed with `(0, 0, io_ctx)`.
+- **IO object impl**: `connector`/`listener` use `asio::detail::io_object_impl<ServiceType>`
+  constructed with `(0, 0, io_ctx)`. **`queue_pair` does NOT** — it owns the verbs-service
+  `implementation_type` directly (so poll mode needs no io_context) and dispatches to the static
+  (poll) or member (event) service entry points based on whether it holds an `io_context*`.
 - **Config semantics**: `rdma_config_t` fields default to 0; 0 means "auto-derive from device capabilities". Non-zero values are user constraints validated against device caps.
 - **Async initiation**: All async methods use `asio::async_initiate<Token, Signature>(initiation, token, ...)`.
 - **Error handling**: `asio::error_code&` out-param overloads + throw overloads via `asio::detail::throw_error(ec)`.

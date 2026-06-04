@@ -1,5 +1,7 @@
 #pragma once
 
+#include "asio/detail/mutex.hpp"
+#include "asio/detail/op_queue.hpp"
 #include "nd/nd_types.hpp"
 #include "nd/nd_error.hpp"
 #include "nd/nd_device.hpp"
@@ -7,9 +9,14 @@
 #include "nd/detail/nd_ops_verbs.hpp"
 #include "nd/detail/nd_op_base.hpp"
 #include "nd/detail/nd_config_derive.hpp"
+#include "rdma/detail/rdma_verbs_op.hpp"
 
 namespace asio::rdma {
 
+// Standalone poll-mode completion queue. Also holds the device (so a poll-mode
+// queue_pair can create itself without an io_context) and a ready-op queue:
+// data-plane ops that complete without a CQE (empty buffers / sync post errors)
+// are queued here and drained by poll()/poll_one().
 class nd_completion_queue {
 public:
   nd_completion_queue(nd_device_ptr const& device,
@@ -18,7 +25,7 @@ public:
     assert(device && device->adapter_);
     asio::error_code ec;
 
-    auto effective = detail::derive_effective_config(config, device->info_);
+    effective_config_ = detail::derive_effective_config(config, device->info_);
 
     handle_.reset(
         detail::create_overlapped_file(device->adapter_.Get(), ec));
@@ -32,7 +39,7 @@ public:
         .processor_affinity_ = 0,
     };
     cq_.Attach(detail::verbs_ops::create_cq(
-        device->adapter_.Get(), effective.cqe_, cq_init_attr, ec));
+        device->adapter_.Get(), effective_config_.cqe_, cq_init_attr, ec));
     if (ec) {
       handle_.reset();
       asio::detail::throw_error(ec);
@@ -40,11 +47,11 @@ public:
   }
 
   ~nd_completion_queue() = default;
-
+  // Owns a native CQ + overlapped handle + a mutex; not movable/copyable.
   nd_completion_queue(nd_completion_queue const&) = delete;
   nd_completion_queue& operator=(nd_completion_queue const&) = delete;
-  nd_completion_queue(nd_completion_queue&&) = default;
-  nd_completion_queue& operator=(nd_completion_queue&&) = default;
+  nd_completion_queue(nd_completion_queue&&) = delete;
+  nd_completion_queue& operator=(nd_completion_queue&&) = delete;
 
   std::size_t poll() {
     asio::error_code ec;
@@ -56,7 +63,7 @@ public:
   }
 
   std::size_t poll(asio::error_code& ec) {
-    std::size_t total = 0;
+    std::size_t total = drain_ready();
     ULONG retrieved = 0;
     do {
       std::array<detail::native_wc_t, 16> results{};
@@ -79,6 +86,10 @@ public:
   }
 
   std::size_t poll_one(asio::error_code& ec) {
+    if (auto* op = pop_ready()) {
+      op->complete(this);
+      return 1;
+    }
     detail::native_wc_t result{};
     auto const retrieved = detail::verbs_ops::poll_cq(cq_.Get(), result);
     if (retrieved > 0) {
@@ -89,6 +100,16 @@ public:
   }
 
   detail::native_cq_t* native_handle() const noexcept { return cq_.Get(); }
+  nd_device_ptr const& device() const noexcept { return device_; }
+  nd_config_t const& effective_config() const noexcept {
+    return effective_config_;
+  }
+
+  // Enqueue an op that completes without a CQE (empty buffer / sync post error).
+  void push_ready(detail::rdma_verbs_op_base* op) {
+    asio::detail::mutex::scoped_lock lock(mutex_);
+    ready_.push(op);
+  }
 
 private:
   static void dispatch_completion(void* owner, detail::native_wc_t const& wc) {
@@ -107,9 +128,36 @@ private:
     op->complete(owner);
   }
 
+  std::size_t drain_ready() {
+    asio::detail::op_queue<detail::rdma_verbs_op_base> local;
+    {
+      asio::detail::mutex::scoped_lock lock(mutex_);
+      local.push(ready_);
+    }
+    std::size_t n = 0;
+    while (auto* op = local.front()) {
+      local.pop();
+      ++n;
+      op->complete(this);
+    }
+    return n;
+  }
+
+  detail::rdma_verbs_op_base* pop_ready() {
+    asio::detail::mutex::scoped_lock lock(mutex_);
+    auto* op = ready_.front();
+    if (op) {
+      ready_.pop();
+    }
+    return op;
+  }
+
   nd_device_ptr device_;
+  nd_config_t effective_config_{};
   detail::nd2_completion_queue_ptr cq_;
   detail::unique_handle_t handle_;
+  mutable asio::detail::mutex mutex_;
+  asio::detail::op_queue<detail::rdma_verbs_op_base> ready_;
 };
 
 }
