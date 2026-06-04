@@ -50,21 +50,21 @@ public:
   // event mode: bind to the shared CQ installed by use_device on io_ctx.
   explicit ibv_queue_pair(asio::io_context& io_ctx) {
     asio::error_code ec;
-    open(io_ctx, ec);
+    bind(io_ctx, ec);
     asio::detail::throw_error(ec);
   }
 
   // poll mode: bind to a standalone completion_queue (no io_context).
-  explicit ibv_queue_pair(ibv_completion_queue& cq) { open(cq); }
+  explicit ibv_queue_pair(ibv_completion_queue& cq) { bind(cq); }
 
-  // deferred open — event mode
-  void open(asio::io_context& io_ctx) {
+  // deferred bind — event mode (the io_context's managed CQ)
+  void bind(asio::io_context& io_ctx) {
     asio::error_code ec;
-    open(io_ctx, ec);
+    bind(io_ctx, ec);
     asio::detail::throw_error(ec);
   }
 
-  void open(asio::io_context& io_ctx, asio::error_code& ec) {
+  void bind(asio::io_context& io_ctx, asio::error_code& ec) {
     auto& io_svc =
         asio::use_service<detail::ibv_io_completion_service>(io_ctx);
     if (!io_svc.is_initialized()) {
@@ -79,8 +79,8 @@ public:
     ec.clear();
   }
 
-  // deferred open — poll mode
-  void open(ibv_completion_queue& cq) {
+  // deferred bind — poll mode (a user-owned completion_queue)
+  void bind(ibv_completion_queue& cq) {
     io_ctx_ = nullptr;
     impl_.device_ = cq.device();
     impl_.cq_ = cq.native_handle();
@@ -88,8 +88,16 @@ public:
     impl_.poll_cq_ = &cq;
   }
 
-  bool is_open() const noexcept {
-    return detail::ibv_verbs_service::is_open(impl_);
+  // Bound to a completion mechanism? (Not "native QP exists" — on ibv the QP is
+  // created later by the connector; use native_handle() for that.)
+  bool is_bound() const noexcept {
+    return detail::ibv_verbs_service::is_bound(impl_);
+  }
+
+  // Which completion mechanism this QP is bound to.
+  completion_mode bound_type() const noexcept {
+    if (!is_bound()) return completion_mode::none;
+    return io_ctx_ ? completion_mode::event : completion_mode::poll;
   }
 
   detail::native_qp_t* native_handle() const noexcept {

@@ -55,9 +55,9 @@ void test_queue_pair_deferred() {
   }
 
   rdma::nd_queue_pair qp;
-  qp.open(io_ctx);
-  assert(qp.is_open());
-  std::cout << "[PASS] deferred queue_pair open\n";
+  qp.bind(io_ctx);
+  assert(qp.is_bound());
+  std::cout << "[PASS] deferred queue_pair bind\n";
 }
 
 int main() {

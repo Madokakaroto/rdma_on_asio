@@ -84,8 +84,11 @@ public:
     return ec;
   }
 
-  static bool is_open(implementation_type const& impl) {
-    return impl.qp_ != nullptr;
+  // "bound" = associated with a completion mechanism (a CQ). Note this is NOT
+  // "the native QP exists": on ibv the QP is created later by the connector, so
+  // native_handle() can still be null after a successful bind.
+  static bool is_bound(implementation_type const& impl) {
+    return impl.cq_ != nullptr;
   }
 
   static native_qp_t* native_handle(implementation_type const& impl) noexcept {

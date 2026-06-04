@@ -50,25 +50,25 @@ public:
   // event mode
   explicit nd_queue_pair(asio::io_context& io_ctx) {
     asio::error_code ec;
-    open(io_ctx, ec);
+    bind(io_ctx, ec);
     asio::detail::throw_error(ec);
   }
 
   // poll mode (no io_context)
   explicit nd_queue_pair(nd_completion_queue& cq) {
     asio::error_code ec;
-    open(cq, ec);
+    bind(cq, ec);
     asio::detail::throw_error(ec);
   }
 
-  // deferred open — event mode
-  void open(asio::io_context& io_ctx) {
+  // deferred bind — event mode (the io_context's managed CQ)
+  void bind(asio::io_context& io_ctx) {
     asio::error_code ec;
-    open(io_ctx, ec);
+    bind(io_ctx, ec);
     asio::detail::throw_error(ec);
   }
 
-  void open(asio::io_context& io_ctx, asio::error_code& ec) {
+  void bind(asio::io_context& io_ctx, asio::error_code& ec) {
     auto& io_svc =
         asio::use_service<detail::nd_io_completion_service>(io_ctx);
     if (!io_svc.is_initialized()) {
@@ -84,14 +84,14 @@ public:
     ec = detail::nd_verbs_service::create_qp(impl_);
   }
 
-  // deferred open — poll mode
-  void open(nd_completion_queue& cq) {
+  // deferred bind — poll mode (a user-owned completion_queue)
+  void bind(nd_completion_queue& cq) {
     asio::error_code ec;
-    open(cq, ec);
+    bind(cq, ec);
     asio::detail::throw_error(ec);
   }
 
-  void open(nd_completion_queue& cq, asio::error_code& ec) {
+  void bind(nd_completion_queue& cq, asio::error_code& ec) {
     io_ctx_ = nullptr;
     impl_.device_ = cq.device();
     impl_.cq_ = cq.native_handle();
@@ -100,8 +100,15 @@ public:
     ec = detail::nd_verbs_service::create_qp(impl_);
   }
 
-  bool is_open() const noexcept {
-    return detail::nd_verbs_service::is_open(impl_);
+  // Bound to a completion mechanism?
+  bool is_bound() const noexcept {
+    return detail::nd_verbs_service::is_bound(impl_);
+  }
+
+  // Which completion mechanism this QP is bound to.
+  completion_mode bound_type() const noexcept {
+    if (!is_bound()) return completion_mode::none;
+    return io_ctx_ ? completion_mode::event : completion_mode::poll;
   }
 
   detail::native_qp_t* native_handle() const noexcept {

@@ -127,8 +127,9 @@ Types (detail/):
 |-----------|--------------------------|
 | Discover device | `rdma_device_manager_t::instance().get_first_available_device(port_space, config)` → `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints; `for_each_device(fn)` to iterate) |
 | Init device | `use_device(io_ctx, device, config = {})` → `void` — installs the per-`io_context` completion service for `device` and stores the effective (operating) config; reusable across `io_context`s |
-| Queue pair (event) | `queue_pair(io_ctx)` or deferred `open(io_ctx)` — uses the shared CQ |
-| Queue pair (poll) | `queue_pair(cq)` or deferred `open(cq)` — io_context-free; binds to a standalone CQ (config read from the holder) |
+| Queue pair (event) | `queue_pair(io_ctx)` or deferred `bind(io_ctx)` — bound to the io_context's managed CQ |
+| Queue pair (poll) | `queue_pair(cq)` or deferred `bind(cq)` — io_context-free; bound to a user CQ (config read from the holder) |
+| Queue pair state | `is_bound()` → bool (bound to a completion mechanism); `bound_type()` → `completion_mode {none, event, poll}` |
 | Connector open | `connector.open(port_space)` — create the cm_id/connector (client side); requires `use_device` on this io_context |
 | Connector adopt | `connector.assign(native_handle&&)` — adopt a handle from the listener (server side) |
 | Connect | `async_connect(qp, endpoint, private_data, token)` → `void(error_code)` — creates the QP, then connects |
@@ -162,7 +163,7 @@ are read from the service's `effective_config_`. Opening a `connector`/`listener
    scheduler. User drives `io_ctx.run()`.
 
 2. **Poll mode** (io_context-free data plane): User creates a standalone `completion_queue` (no
-   comp_channel) and binds the QP via `queue_pair(cq)` (or `open(cq)`) — **no io_context**. User
+   comp_channel) and binds the QP via `queue_pair(cq)` (or `bind(cq)`) — **no io_context**. User
    calls `cq.poll()` / `cq.poll_one()`. The QP supplies `asio::system_executor` as the op's
    executor, so with a **non-io_context-bound token (callback / `use_future`)** the completion
    handler fires **inline on the polling thread** — the data path never touches an io_context.

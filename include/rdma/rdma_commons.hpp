@@ -16,6 +16,15 @@ enum mr_acccess_flag_t {
   mr_access_remote_write,
 };
 
+// How a queue pair's completions are delivered (see queue_pair::bound_type()).
+// Mirrors RDMA's two completion-notification mechanisms: polling a plain CQ
+// (poll) vs. completion-channel / IOCP event notification (event).
+enum class completion_mode {
+  none,    // not bound to any completion mechanism yet
+  event,   // event-driven: io_context's managed CQ, completion-channel/IOCP notification
+  poll,    // polled: a user-owned completion_queue, reaped via poll()/poll_one()
+};
+
 // configuration to initialize the shared state.
 // 0 = auto-derive from device capabilities using min(device_max, default).
 struct rdma_config_t {

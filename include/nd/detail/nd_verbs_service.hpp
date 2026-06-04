@@ -84,8 +84,11 @@ public:
     return ec;
   }
 
-  static bool is_open(implementation_type const& impl) noexcept {
-    return impl.qp_ != nullptr;
+  // "bound" = associated with a completion mechanism (a CQ). On nd the QP is
+  // created at bind time, so native_handle() is also non-null then; the predicate
+  // is named for the binding, to match ibv.
+  static bool is_bound(implementation_type const& impl) noexcept {
+    return impl.cq_ != nullptr;
   }
 
   static native_qp_t* native_handle(implementation_type const& impl) noexcept {
