@@ -80,7 +80,7 @@ public:
         [this](auto handler) {
           auto io_ex = impl_.get_executor();
           auto& io_ctx = io_ex.context();
-          // Bind the wrapper to a named local — the service takes Handler& and
+          // Bind the wrapper to a named local -- the service takes Handler& and
           // moves it; a temporary won't bind (the same bug fixed on ibv).
           auto wrapper = [&io_ctx, h = std::move(handler)](
                              asio::error_code ec, native_connector_type handle,
@@ -100,7 +100,7 @@ public:
   }
 
   // Fill form: handler(error_code); assigns the connection into a pre-built
-  // (empty) connector — lets the caller pick its io_context.
+  // (empty) connector -- lets the caller pick its io_context.
   template <typename AcceptToken>
   auto async_get_connection(connector_type& conn, AcceptToken&& token) {
     return asio::async_initiate<AcceptToken, void(asio::error_code)>(

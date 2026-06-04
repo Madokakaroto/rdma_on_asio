@@ -30,7 +30,7 @@ namespace asio::rdma::detail {
 //
 // Consequence (mirrors ibv): once started, the poller is outstanding IOCP work
 // for the io_context's lifetime, so io_context::run() no longer returns merely
-// because the data plane is idle — stop via io_context::stop() / destruction.
+// because the data plane is idle -- stop via io_context::stop() / destruction.
 // poll-mode-only / control-plane-only io_contexts never start it.
 class nd_io_completion_service
     : public asio::detail::execution_context_service_base<
@@ -108,7 +108,7 @@ private:
   static constexpr std::size_t poll_wcs_count = 4;
 
   // Single-in-flight, self-perpetuating CQ poller. Each cycle uses a fresh IOCP
-  // overlapped op (allocated in arm_poller), so only one is ever outstanding —
+  // overlapped op (allocated in arm_poller), so only one is ever outstanding --
   // GetResults is serialized. On completion it drains+dispatches the CQ and
   // re-arms; owner == nullptr (io_context shutdown) frees without re-arming.
   class nd_poll_wc_op final : public asio::detail::operation {

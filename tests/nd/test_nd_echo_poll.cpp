@@ -1,4 +1,4 @@
-// NetworkDirect echo test in POLL MODE — io_context-free data plane.
+// NetworkDirect echo test in POLL MODE -- io_context-free data plane.
 //
 //   - Control plane (connect / accept / disconnect over IND2Connector) runs on an
 //     io_context.

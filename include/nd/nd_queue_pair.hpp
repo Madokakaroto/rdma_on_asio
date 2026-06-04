@@ -13,9 +13,9 @@ namespace asio::rdma {
 
 // Queue pair IO object. Two mutually-exclusive modes, distinguished by io_ctx_:
 //
-//   nd_queue_pair(io_context&)        event mode — completions via use_device's
+//   nd_queue_pair(io_context&)        event mode -- completions via use_device's
 //                                      shared CQ (IOCP).
-//   nd_queue_pair(completion_queue&)  poll mode  — io_context-free data plane;
+//   nd_queue_pair(completion_queue&)  poll mode  -- io_context-free data plane;
 //                                      completions reaped by the user's poll().
 //
 // No io_object_impl: the QP owns the verbs-service implementation_type directly
@@ -67,7 +67,7 @@ public:
     asio::detail::throw_error(ec);
   }
 
-  // deferred bind — event mode (the io_context's managed CQ)
+  // deferred bind -- event mode (the io_context's managed CQ)
   void bind(asio::io_context& io_ctx) {
     asio::error_code ec;
     bind(io_ctx, ec);
@@ -88,7 +88,7 @@ public:
     impl_.cq_ = io_svc.get_cq();
     impl_.config_ = dev_svc.get_effective_config();
     impl_.poll_cq_ = nullptr;
-    // Cache the verbs service once — the event-mode async_* path uses it per op.
+    // Cache the verbs service once -- the event-mode async_* path uses it per op.
     verbs_svc_ = &asio::use_service<detail::nd_verbs_service>(io_ctx);
     ec = detail::nd_verbs_service::create_qp(impl_);
     if (!ec) {
@@ -97,7 +97,7 @@ public:
     }
   }
 
-  // deferred bind — poll mode (a user-owned completion_queue)
+  // deferred bind -- poll mode (a user-owned completion_queue)
   void bind(nd_completion_queue& cq) {
     asio::error_code ec;
     bind(cq, ec);

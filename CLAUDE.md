@@ -251,6 +251,10 @@ verified end-to-end over RoCE (`--server` / `--client <ip>` / `--port`).
   count, and a clean `io.stop()` exit. (Hard to make a deterministic race assertion; aim for a
   long-running soak + counter check.)
 
+## Code Comments
+
+Do not use non-ASCII characters in source code comments. MSVC triggers C4819 warnings when it encounters characters outside the current code page (936/GBK on Chinese Windows). Use ASCII equivalents instead (e.g. `--` instead of `—`).
+
 ## Line Endings
 
 All text files use LF line endings (enforced via `.gitattributes`). Write all files with LF, not CRLF.

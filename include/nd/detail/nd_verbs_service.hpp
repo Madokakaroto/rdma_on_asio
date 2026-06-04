@@ -267,7 +267,7 @@ private:
     }
   }
 
-  // event mode: a posted op needs nothing here — the io_completion_service's
+  // event mode: a posted op needs nothing here -- the io_completion_service's
   // poller is already armed (started at queue_pair::bind) and self-perpetuating,
   // so it reaps this op's completion. Only an immediate completion (empty buffers
   // / synchronous post error) needs scheduling onto the io_context.

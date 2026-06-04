@@ -46,7 +46,7 @@ public:
 
   // open: create the IND2Connector (client). The PortSpace is accepted for API
   // parity with ibv (and possible future v4/v6 selection); ND has no explicit
-  // RDMA port space. Optional — async_connect auto-opens if not already open.
+  // RDMA port space. Optional -- async_connect auto-opens if not already open.
   void open(PortSpace const& ps) {
     asio::error_code ec;
     open(ps, ec);

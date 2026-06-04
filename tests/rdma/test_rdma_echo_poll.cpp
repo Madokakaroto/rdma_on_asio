@@ -1,9 +1,9 @@
-// Cross-platform RDMA echo test in POLL MODE — io_context-free data plane.
+// Cross-platform RDMA echo test in POLL MODE -- io_context-free data plane.
 //
 //   - The control plane (connect / accept / disconnect over rdma_cm / ND) runs on
 //     an io_context, as always.
 //   - The data plane runs against a user-owned standalone completion_queue. The
-//     queue pair is bound to it with rdma_queue_pair(cq) — note: NO io_context.
+//     queue pair is bound to it with rdma_queue_pair(cq) -- note: NO io_context.
 //   - A dedicated thread spins cq.poll(). Data-plane ops use as_tuple(use_future);
 //     the handler that sets the future fires INLINE on the poll thread inside
 //     cq.poll() (the QP uses system_executor for poll-mode completions), so the

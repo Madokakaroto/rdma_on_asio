@@ -21,7 +21,7 @@ namespace asio::rdma::detail {
 // Control-plane service for nd_connector. Mirrors ibv_connector_service.
 //
 // Open creates the IND2Connector + overlapped handle (no QP).
-// The QP is supplied at async_connect/async_accept time and only borrowed —
+// The QP is supplied at async_connect/async_accept time and only borrowed --
 // the queue_pair owns it.
 template <typename PortSpace>
 class nd_connector_service

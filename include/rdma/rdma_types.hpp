@@ -5,8 +5,8 @@
 // so application code can be written portably (further reduced via rdma.hpp).
 //
 // tcp.hpp sets ASIO_RDMA_BACKEND_{ND,VERBS} and pulls in the (port-space-bound)
-// connector/listener; here we add the remaining backend headers — including the
-// port-space-agnostic queue_pair — and define the aliases.
+// connector/listener; here we add the remaining backend headers -- including the
+// port-space-agnostic queue_pair -- and define the aliases.
 #include "rdma/tcp.hpp"
 
 #if defined(ASIO_RDMA_BACKEND_ND)

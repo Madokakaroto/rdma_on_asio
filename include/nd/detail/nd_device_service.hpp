@@ -9,7 +9,7 @@ namespace asio::rdma::detail {
 // Per-io_context registration of the device (adapter) + effective config that
 // use_device selected. Single responsibility: hold {device, effective_config}.
 //
-// Distinct from the process-wide nd_device_manager_t (device *discovery*) — this
+// Distinct from the process-wide nd_device_manager_t (device *discovery*) -- this
 // is the per-io_context binding and the single source of truth for "use_device
 // was called on this io_context" (is_registered()). The CQ/IOCP notify mechanism
 // lives in the separate nd_io_completion_service.

@@ -166,7 +166,7 @@ int main(int argc, char* argv[]) {
     rdma::use_device(io_ctx, device);
 
     // Event mode keeps the shared-CQ poller armed for the io_context's lifetime,
-    // so io.run() no longer returns on idle — stop it when the echo finishes.
+    // so io.run() no longer returns on idle -- stop it when the echo finishes.
     auto on_done = [&io_ctx](std::exception_ptr) { io_ctx.stop(); };
     if (is_server) {
       asio::co_spawn(io_ctx, run_server(io_ctx, device, port), on_done);

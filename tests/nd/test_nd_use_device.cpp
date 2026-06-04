@@ -4,6 +4,7 @@
 
 #include "asio/io_context.hpp"
 #include "nd/nd_use_device.hpp"
+#include "nd/detail/nd_device_service.hpp"
 #include "rdma/tcp.hpp"
 
 namespace rdma = asio::rdma;
@@ -34,10 +35,11 @@ void test_use_device() {
   asio::error_code ec;
   rdma::use_device(io_ctx, dev, rdma::nd_config_t{}, ec);
   assert(!ec);
-  auto& svc = asio::use_service<rdma::detail::nd_io_completion_service>(io_ctx);
-  assert(svc.is_initialized());
-  assert(svc.get_device() != nullptr);
-  assert(svc.get_cq() != nullptr);
+  auto& dev_svc = asio::use_service<rdma::detail::nd_device_service>(io_ctx);
+  assert(dev_svc.is_registered());
+  assert(dev_svc.get_device() != nullptr);
+  auto& io_svc = asio::use_service<rdma::detail::nd_io_completion_service>(io_ctx);
+  assert(io_svc.get_cq() != nullptr);
   std::cout << "[PASS] use_device(io, device)\n";
 }
 
@@ -77,8 +79,8 @@ void test_effective_config() {
     std::cout << "[SKIP] effective_config: " << ec.message() << "\n";
     return;
   }
-  auto& svc = asio::use_service<rdma::detail::nd_io_completion_service>(io_ctx);
-  auto const& cfg = svc.get_effective_config();
+  auto& dev_svc = asio::use_service<rdma::detail::nd_device_service>(io_ctx);
+  auto const& cfg = dev_svc.get_effective_config();
   assert(cfg.cqe_ > 0);
   assert(cfg.max_send_wr_ > 0);
   assert(cfg.max_recv_wr_ > 0);
