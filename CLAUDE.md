@@ -174,6 +174,15 @@ and effective/operating config (`derive_effective_config(config, caps)`, stored 
    and initializes the `io_completion_service` (IOCP on Windows, comp_channel+epoll on Linux). CQ
    completions are bridged into asio's scheduler. User drives `io_ctx.run()`.
 
+   The shared-CQ poller is **lock-free & thread-safe** for concurrent multi-thread submit +
+   multi-thread `run()`: it's a single self-perpetuating op (`ibv_poll_wc_op` / `nd_poll_wc_op`)
+   started lazily at the **first event-mode `queue_pair::bind(io)`** (`ensure_poller_started()`,
+   one-time) and re-arming itself thereafter, so it is the only thing that touches the CQ —
+   submitter threads just `post`. **Contract:** once started, the poller is outstanding work for
+   the io_context's lifetime, so `io.run()` no longer returns on idle — stop via `io.stop()` /
+   destruction. io_contexts that never bind an event-mode QP (poll-mode-only / control-plane-only)
+   never start the poller and keep "run() returns when idle".
+
 2. **Poll mode** (io_context-free data plane): User creates a standalone `completion_queue` (no
    comp_channel) and binds the QP via `queue_pair(cq)` (or `bind(cq)`) — **no io_context**. User
    calls `cq.poll()` / `cq.poll_one()`. The QP supplies `asio::system_executor` as the op's
@@ -231,6 +240,16 @@ tests/rdma/  — cross-platform tests (use only rdma_* aliases + rdma/rdma.hpp);
 `tests/rdma/test_rdma_echo.cpp` is the canonical portable example: one source, backend chosen
 by the build. Runtime testing needs RDMA hardware; on Linux the ibv + rdma echo tests have been
 verified end-to-end over RoCE (`--server` / `--client <ip>` / `--port`).
+
+## TODO
+
+- **Multi-thread completion-notification stress test** — the event-mode shared-CQ poller is
+  designed to be lock-free / thread-safe under multi-thread `io_context::run()` + concurrent
+  `async_send` from multiple threads (single self-perpetuating poller; submitters touch no service
+  state). Add a stress test that exercises this: several `run()` threads + several threads posting
+  concurrently (over multiple QPs), asserting high-concurrency stability, a consistent completion
+  count, and a clean `io.stop()` exit. (Hard to make a deterministic race assertion; aim for a
+  long-running soak + counter check.)
 
 ## Line Endings
 

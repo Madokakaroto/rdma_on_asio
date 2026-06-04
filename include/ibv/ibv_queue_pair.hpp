@@ -85,6 +85,8 @@ public:
     impl_.poll_cq_ = nullptr;
     // Cache the verbs service once — the event-mode async_* path uses it per op.
     verbs_svc_ = &asio::use_service<detail::ibv_verbs_service>(io_ctx);
+    // Start the shared-CQ poller (idempotent); the data plane never arms again.
+    io_svc.ensure_poller_started();
     ec.clear();
   }
 

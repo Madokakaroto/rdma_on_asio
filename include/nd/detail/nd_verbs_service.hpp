@@ -5,10 +5,8 @@
 #include "asio/detail/memory.hpp"
 #include "nd/nd_completion_queue.hpp"
 #include "nd/detail/nd_service_base.hpp"
-#include "nd/detail/nd_io_completion_service.hpp"
 #include "nd/detail/nd_ops_verbs.hpp"
 #include "nd/detail/nd_op_base.hpp"
-#include "nd/detail/nd_op_notify_wr.hpp"
 #include "nd/detail/nd_op_complete.hpp"
 #include "rdma/detail/rdma_op_send.hpp"
 #include "rdma/detail/rdma_op_recv.hpp"
@@ -47,8 +45,7 @@ public:
   explicit nd_verbs_service(asio::execution_context& ctx)
       : base_type(ctx)
       , nd_service_base(ctx)
-      , success_ec_()
-      , io_completion_svc_(asio::use_service<nd_io_completion_service>(ctx)) {
+      , success_ec_() {
   }
 
   ~nd_verbs_service() = default;
@@ -198,7 +195,6 @@ public:
 
 private:
   asio::error_code success_ec_;
-  nd_io_completion_service& io_completion_svc_;  // cached (event-mode arm_notify)
 
   static nd_sglist_t& get_sglist() {
     static thread_local nd_sglist_t static_sg_list;
@@ -271,9 +267,11 @@ private:
     }
   }
 
-  // event mode: immediate completions post to the scheduler; posted ops arm the
-  // shared-CQ (IOCP) notify so the proactor wakes when a completion arrives.
-  void finish_event(implementation_type& impl, rdma_verbs_op_base* op,
+  // event mode: a posted op needs nothing here — the io_completion_service's
+  // poller is already armed (started at queue_pair::bind) and self-perpetuating,
+  // so it reaps this op's completion. Only an immediate completion (empty buffers
+  // / synchronous post error) needs scheduling onto the io_context.
+  void finish_event(implementation_type& /*impl*/, rdma_verbs_op_base* op,
                     bool immediate) {
     if (immediate) [[unlikely]] {
       nd_complete_op::Handler handler{};
@@ -282,29 +280,7 @@ private:
       p.p = new (p.v) nd_complete_op{op};
       this->scheduler_.post_immediate_completion(p.p, false);
       p.v = p.p = 0;
-    } else {
-      arm_notify(impl);
     }
-  }
-
-  void arm_notify(implementation_type& impl) {
-    nd_notify_wr_op::Handler handler{};
-    nd_notify_wr_op::ptr p = {asio::detail::addressof(handler),
-                              nd_notify_wr_op::ptr::allocate(handler), 0};
-    p.p = new (p.v) nd_notify_wr_op{get_notify_state(impl)};
-    asio::error_code ec;
-    io_completion_svc_.arm_notify(p.p, ec);  // cached ref (no per-op use_service)
-    p.v = p.p = nullptr;
-  }
-
-  nd_connector_state_ptr get_notify_state(implementation_type& impl) {
-    // nd_notify_wr_op currently requires nd_connector_state_ptr to access cq.
-    // TODO: refactor nd_notify_wr_op to accept native_cq_t* directly.
-    auto state = std::make_shared<nd_connector_state_t>();
-    state->cq_ = nd2_completion_queue_ptr{};
-    state->cq_.Attach(impl.cq_);
-    if (impl.cq_) impl.cq_->AddRef();
-    return state;
   }
 };
 

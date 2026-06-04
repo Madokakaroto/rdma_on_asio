@@ -9,7 +9,6 @@
 #include "ibv/ibv_types.hpp"
 #include "ibv/detail/ibv_config_derive.hpp"
 #include "ibv/detail/ibv_impl_types.hpp"
-#include "ibv/detail/ibv_io_completion_service.hpp"
 #include "ibv/detail/ibv_op_complete.hpp"
 #include "ibv/detail/ibv_ops_verbs.hpp"
 #include "rdma/detail/rdma_op_read.hpp"
@@ -47,9 +46,7 @@ public:
 
   explicit ibv_verbs_service(asio::execution_context& context)
       : asio::detail::execution_context_service_base<ibv_verbs_service>(context)
-      , ibv_service_base(context)
-      , io_completion_svc_(
-            asio::use_service<ibv_io_completion_service>(context)) {
+      , ibv_service_base(context) {
   }
 
   // The native QP is owned by the connector; the CQ/device by the
@@ -199,7 +196,6 @@ public:
 
 private:
   asio::error_code success_ec_;
-  ibv_io_completion_service& io_completion_svc_;  // cached (event-mode arm_notify)
 
   static ibv_sglist_t& get_sglist() {
     static thread_local ibv_sglist_t sglist;
@@ -270,15 +266,15 @@ private:
     }
   }
 
-  // event mode: immediate completions post to the scheduler; posted ops arm the
-  // shared-CQ poller so the reactor wakes when a CQE arrives.
-  void finish_event(implementation_type& impl, rdma_verbs_op_base* op,
+  // event mode: a posted op needs nothing here — the io_completion_service's
+  // poller is already armed (started at queue_pair::bind) and self-perpetuating,
+  // so it will reap this op's CQE. Only an immediate completion (empty buffers /
+  // synchronous post error) needs scheduling onto the io_context.
+  void finish_event(implementation_type& /*impl*/, rdma_verbs_op_base* op,
                     bool immediate) {
     if (immediate) [[unlikely]] {
       auto* complete = new ibv_complete_op(op);
       this->scheduler_.post_immediate_completion(complete, false);
-    } else {
-      io_completion_svc_.arm_notify();  // cached ref (no per-op use_service)
     }
   }
 };

@@ -91,6 +91,10 @@ public:
     // Cache the verbs service once — the event-mode async_* path uses it per op.
     verbs_svc_ = &asio::use_service<detail::nd_verbs_service>(io_ctx);
     ec = detail::nd_verbs_service::create_qp(impl_);
+    if (!ec) {
+      // Start the shared-CQ poller (idempotent); the data plane never arms again.
+      io_svc.ensure_poller_started();
+    }
   }
 
   // deferred bind — poll mode (a user-owned completion_queue)
