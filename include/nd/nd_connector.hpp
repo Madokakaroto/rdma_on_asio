@@ -114,14 +114,30 @@ public:
         token);
   }
 
-  // async disconnect: handler(error_code)
-  template <typename DisconnectToken>
-  auto async_disconnect(DisconnectToken&& token) {
-    return asio::async_initiate<DisconnectToken, void(asio::error_code)>(
+  // disconnect: synchronous, non-blocking, abrupt teardown (mirrors socket
+  // shutdown/close). ND2 Disconnect is overlapped, issued fire-and-forget; the
+  // in-flight send/recv complete with operation_aborted ASYNCHRONOUSLY. To be
+  // NOTIFIED of a (peer) disconnect, use async_wait_disconnect.
+  void disconnect() {
+    asio::error_code ec;
+    disconnect(ec);
+    asio::detail::throw_error(ec);
+  }
+
+  void disconnect(asio::error_code& ec) {
+    impl_.get_service().disconnect(impl_.get_implementation(), ec);
+  }
+
+  // Disconnect NOTIFICATION (on_disconnect): one-shot, completes when the
+  // connection is disconnected. handler(error_code) -- ext_disconnected. If
+  // already disconnected, completes immediately (level-triggered). Mirrors ibv.
+  template <typename WaitToken>
+  auto async_wait_disconnect(WaitToken&& token) {
+    return asio::async_initiate<WaitToken, void(asio::error_code)>(
         [this](auto handler) {
           auto io_ex = impl_.get_executor();
-          impl_.get_service().async_disconnect(
-              impl_.get_implementation(), handler, io_ex);
+          impl_.get_service().async_wait_disconnect(impl_.get_implementation(),
+                                                    handler, io_ex);
         },
         token);
   }

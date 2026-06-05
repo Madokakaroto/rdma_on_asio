@@ -76,7 +76,8 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
     }
   }
 
-  auto [ec_disc] = co_await conn.async_disconnect(use_nothrow);
+  asio::error_code ec_disc;
+  conn.disconnect(ec_disc);
   (void)ec_disc;
   std::cout << "[server] disconnected\n";
 }
@@ -125,7 +126,8 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
               << std::string_view(raw_buf.data(), n) << "\n";
   }
 
-  auto [ec_disc] = co_await conn.async_disconnect(use_nothrow);
+  asio::error_code ec_disc;
+  conn.disconnect(ec_disc);
   (void)ec_disc;
   std::cout << "[client] disconnected\n";
 }

@@ -41,6 +41,9 @@ public:
     // Peer's private data (client request on server; server reply on client).
     std::array<std::byte, max_private_data_size> private_data_buffer_{};
     std::size_t private_data_length_ = 0;
+    // Set once disconnected (self disconnect() or NotifyDisconnect fired). Makes
+    // async_wait_disconnect level-triggered. Mirrors ibv.
+    bool disconnected_ = false;
   };
 
   explicit nd_connector_service(asio::execution_context& ctx)
@@ -65,6 +68,7 @@ public:
     impl.connector_.Reset();
     impl.connector_handle_.reset();
     impl.adapter_.reset();
+    impl.disconnected_ = false;
   }
 
   void destroy(implementation_type& impl) {
@@ -82,6 +86,7 @@ public:
     impl.adapter_ = std::move(other_impl.adapter_);
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
+    impl.disconnected_ = other_impl.disconnected_;
   }
 
   void move_assign(implementation_type& impl,
@@ -96,6 +101,7 @@ public:
     impl.adapter_ = std::move(other_impl.adapter_);
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
+    impl.disconnected_ = other_impl.disconnected_;
   }
 
   // open (client): create IND2Connector + overlapped handle. PortSpace value is
@@ -208,15 +214,70 @@ public:
     p.v = p.p = 0;
   }
 
-  // async disconnect
+  // Synchronous, non-blocking, abrupt disconnect (mirrors socket shutdown/close).
+  // ND2 Disconnect is overlapped, so fire-and-forget: issue it with a self-reaping
+  // op (nd_disconnect_ff_op) and return without waiting. ec reflects only a
+  // synchronous initiation failure (ND_PENDING is the normal async case -> not an
+  // error). [Windows verify] the IND2Connector must outlive the in-flight Disconnect
+  // overlapped (teardown ordering).
+  void disconnect(implementation_type& impl, asio::error_code& ec) {
+    if (!impl.connector_) {
+      ec = asio::error::bad_descriptor;
+      ASIO_ERROR_LOCATION(ec);
+      return;
+    }
+    impl.disconnected_ = true;
+    nd_disconnect_ff_op::Handler h{};
+    nd_disconnect_ff_op::ptr p = {asio::detail::addressof(h),
+                                  nd_disconnect_ff_op::ptr::allocate(h), 0};
+    p.p = new (p.v) nd_disconnect_ff_op{impl.connector_.Get()};
+    this->scheduler_.work_started();
+    asio::error_code dec{};
+    detail::disconnect(impl.connector_.Get(), p.p, dec);
+    if (!dec || dec == nd_errc::pending) {
+      this->scheduler_.on_pending(p.p);  // IOCP completes + frees it later
+      ec.clear();
+    }
+    else {
+      this->scheduler_.on_completion(p.p, dec);  // frees the op
+      ec = dec;
+    }
+    p.v = p.p = 0;
+  }
+
+  // Disconnect NOTIFICATION (on_disconnect). One-shot; armed on demand via
+  // IND2Connector::NotifyDisconnect. Level-triggered: if already disconnected,
+  // completes immediately. Completion code: ext_disconnected. [Windows verify]
   template <typename Handler, typename IoExecutor>
-  void async_disconnect(implementation_type& impl,
-                        Handler& handler, IoExecutor const& io_ex) {
-    using op = nd_disconnect_op<Handler, IoExecutor>;
+  void async_wait_disconnect(implementation_type& impl, Handler& handler,
+                             IoExecutor const& io_ex) {
+    using op = nd_wait_disconnect_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
-    p.p = new (p.v) op{impl.connector_.Get(), handler, io_ex};
-    start_disconnect_op(impl, p.p);
+    p.p = new (p.v) op{impl.connector_.Get(), &impl.disconnected_, handler,
+                       io_ex};
+    this->scheduler_.work_started();
+    if (impl.disconnected_) {
+      // level-triggered: already disconnected -> complete immediately
+      this->scheduler_.on_completion(p.p,
+                                     make_error_code(nd_errc::ext_disconnected));
+      p.v = p.p = 0;
+      return;
+    }
+    if (!impl.connector_) {
+      this->scheduler_.on_completion(
+          p.p, make_error_code(nd_errc::ext_invalid_connector));
+      p.v = p.p = 0;
+      return;
+    }
+    asio::error_code ec{};
+    detail::notify_disconnect(impl.connector_.Get(), p.p, ec);
+    if (!ec || ec == nd_errc::pending) {
+      this->scheduler_.on_pending(p.p);
+    }
+    else {
+      this->scheduler_.on_completion(p.p, ec);
+    }
     p.v = p.p = 0;
   }
 
@@ -329,17 +390,6 @@ private:
            private_data.size() == 0 ? nullptr : private_data.data(),
            static_cast<ULONG>(private_data.size()),
            op, ec);
-    if (ec) {
-      this->scheduler_.on_completion(op, ec);
-      return;
-    }
-    this->scheduler_.on_pending(op);
-  }
-
-  void start_disconnect_op(implementation_type& impl, nd_op_base* op) {
-    this->scheduler_.work_started();
-    asio::error_code ec{};
-    disconnect(impl.connector_.Get(), op, ec);
     if (ec) {
       this->scheduler_.on_completion(op, ec);
       return;

@@ -67,6 +67,17 @@ inline result_type disconnect(IND2Connector* connector, OVERLAPPED* overlapped,
   return hr;
 }
 
+// Arm a disconnect NOTIFICATION: the overlapped completes when the connection is
+// disconnected (peer or self). Backs async_wait_disconnect (on_disconnect).
+inline result_type notify_disconnect(IND2Connector* connector,
+                                     OVERLAPPED* overlapped,
+                                     asio::error_code& ec) {
+  assert(connector);
+  auto const hr = connector->NotifyDisconnect(overlapped);
+  ec = static_cast<nd_errc>(hr);
+  return hr;
+}
+
 // listener interfaces
 inline IND2Listener* create_listener(IND2Adapter* adapter,
                                      HANDLE overlapped_handle,

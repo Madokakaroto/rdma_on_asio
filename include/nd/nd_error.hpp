@@ -42,6 +42,9 @@
 #ifndef NDEXT_DEVICE_NOT_REGISTERED
 #define NDEXT_DEVICE_NOT_REGISTERED -12
 #endif
+#ifndef NDEXT_DISCONNECTED
+#define NDEXT_DISCONNECTED -13
+#endif
 
 
 
@@ -105,6 +108,9 @@ enum class nd_errc : int {
   ext_no_executor = NDEXT_NO_EXECUTOR,
   ext_no_available_provider = NDEXT_NO_AVAILABLE_PROVIDER,
   ext_device_not_registered = NDEXT_DEVICE_NOT_REGISTERED,
+  // Connection torn down (NotifyDisconnect fired). Mirrors ibv_errc::ext_disconnected;
+  // not mapped onto a socket error code (see disconnect_refactor_plan D-D).
+  ext_disconnected = NDEXT_DISCONNECTED,
 };
 
 class nd_error_category : public std::error_category {
@@ -227,6 +233,8 @@ public:
         return "ND_EXT no available provider";
       case NDEXT_DEVICE_NOT_REGISTERED:
         return "ND_EXT device not registered (call use_device first)";
+      case NDEXT_DISCONNECTED:
+        return "ND_EXT connection disconnected";
       default:
         return "UNKNOWN_ND_ERROR";
     }

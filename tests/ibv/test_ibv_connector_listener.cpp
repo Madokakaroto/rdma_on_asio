@@ -85,7 +85,9 @@ void compile_only_async_surface(bool run) {
 
   connector.async_connect(qp, ep, pd, [](asio::error_code) {});
   connector.async_accept(qp, pd, [](asio::error_code) {});
-  connector.async_disconnect([](asio::error_code) {});
+  asio::error_code dec;
+  connector.disconnect(dec);  // now synchronous
+  connector.async_wait_disconnect([](asio::error_code) {});  // on_disconnect
   (void)connector.get_remote_data();
 
   // return form: handler(error_code, connector)

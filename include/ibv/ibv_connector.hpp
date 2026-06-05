@@ -111,14 +111,36 @@ public:
         token);
   }
 
-  // async disconnect: handler(error_code)
-  template <typename DisconnectToken>
-  auto async_disconnect(DisconnectToken&& token) {
-    return asio::async_initiate<DisconnectToken, void(asio::error_code)>(
+  // disconnect: synchronous, non-blocking, abrupt teardown (mirrors socket
+  // shutdown/close which are sync). rdma_disconnect transitions the local QP to
+  // ERROR and flushes pending WRs; those pending send/recv complete on the CQ
+  // with operation_aborted ASYNCHRONOUSLY, so disconnect() returning does not
+  // mean they have already aborted. To be NOTIFIED of a (peer) disconnect, use
+  // async_wait_disconnect.
+  void disconnect() {
+    asio::error_code ec;
+    disconnect(ec);
+    asio::detail::throw_error(ec);
+  }
+
+  void disconnect(asio::error_code& ec) {
+    impl_.get_service().disconnect(impl_.get_implementation(), ec);
+  }
+
+  // Disconnect NOTIFICATION (on_disconnect): one-shot, completes when the
+  // connection is disconnected. handler(error_code) -- ext_disconnected on a peer
+  // disconnect, ext_device_removed if the local device was removed,
+  // operation_aborted if you disconnect()ed yourself while waiting. If already
+  // disconnected, completes immediately (level-triggered). Detects only GRACEFUL
+  // (cm DISCONNECTED) teardown; ungraceful peer loss surfaces via data-plane op
+  // errors (connection_reset) -- see disconnect_refactor_plan.md.
+  template <typename WaitToken>
+  auto async_wait_disconnect(WaitToken&& token) {
+    return asio::async_initiate<WaitToken, void(asio::error_code)>(
         [this](auto handler) {
           auto io_ex = impl_.get_executor();
-          impl_.get_service().async_disconnect(impl_.get_implementation(),
-                                               handler, io_ex);
+          impl_.get_service().async_wait_disconnect(impl_.get_implementation(),
+                                                    handler, io_ex);
         },
         token);
   }

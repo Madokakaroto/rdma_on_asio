@@ -129,8 +129,7 @@ void run_server(asio::io_context& io_ctx, rdma::ibv_device_ptr const& device,
 
   // --- control plane: disconnect ---
   asio::error_code disc_ec;
-  conn.async_disconnect([&](asio::error_code ec) { disc_ec = ec; });
-  io_ctx.run();
+  conn.disconnect(disc_ec);
   (void)disc_ec;
   std::cout << "[server] disconnected\n";
 }
@@ -187,8 +186,7 @@ void run_client(asio::io_context& io_ctx, rdma::ibv_device_ptr const& device,
 
   // --- control plane: disconnect ---
   asio::error_code disc_ec;
-  conn.async_disconnect([&](asio::error_code ec) { disc_ec = ec; });
-  io_ctx.run();
+  conn.disconnect(disc_ec);
   (void)disc_ec;
   std::cout << "[client] disconnected\n";
 }

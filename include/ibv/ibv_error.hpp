@@ -21,6 +21,12 @@
 #ifndef IBVEXT_DEVICE_NOT_REGISTERED
 #define IBVEXT_DEVICE_NOT_REGISTERED -4
 #endif
+#ifndef IBVEXT_DISCONNECTED
+#define IBVEXT_DISCONNECTED -5
+#endif
+#ifndef IBVEXT_DEVICE_REMOVED
+#define IBVEXT_DEVICE_REMOVED -6
+#endif
 
 namespace asio::rdma {
 
@@ -29,6 +35,13 @@ enum class ibv_errc : int {
   ext_invalid_device       = IBVEXT_INVALID_DEVICE,
   ext_already_registered   = IBVEXT_ALREADY_REGISTERED,
   ext_device_not_registered = IBVEXT_DEVICE_NOT_REGISTERED,
+  // Connection torn down (peer/self rdma_disconnect -> RDMA_CM_EVENT_DISCONNECTED).
+  // A custom code: rdma_cm reports disconnect as an EVENT, not an errno, and we do
+  // not map it onto a socket error code (see disconnect_refactor_plan D-D).
+  ext_disconnected         = IBVEXT_DISCONNECTED,
+  // Local RDMA device removed (RDMA_CM_EVENT_DEVICE_REMOVAL). Device-level fatal:
+  // the user must destroy the connector / all objects on this device.
+  ext_device_removed       = IBVEXT_DEVICE_REMOVED,
 };
 
 class ibv_error_category : public std::error_category {
@@ -45,6 +58,10 @@ class ibv_error_category : public std::error_category {
         return "IBV_EXT already registered";
       case IBVEXT_DEVICE_NOT_REGISTERED:
         return "IBV_EXT device not registered (call use_device first)";
+      case IBVEXT_DISCONNECTED:
+        return "IBV_EXT connection disconnected";
+      case IBVEXT_DEVICE_REMOVED:
+        return "IBV_EXT local RDMA device removed";
       default:
         return "UNKNOWN_IBV_ERROR";
     }

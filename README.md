@@ -64,7 +64,7 @@ asio::awaitable<void> client(asio::io_context& io, rdma_device_ptr dev,
 
   co_await qp.async_send(mr.cslice(0, 5), nothrow);         // RDMA SEND
   auto [ec, n] = co_await qp.async_recv(mr.slice(0, buf.size()), nothrow);  // RECV
-  co_await conn.async_disconnect(nothrow);
+  conn.disconnect();                                        // synchronous teardown
 }
 
 int main() {
@@ -158,7 +158,7 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 | `use_device(io, device, config = {})` | Install the per-`io_context` completion service for `device`; sets the operating config. Returns `void`; share one `device` across multiple `io_context`s by calling it on each |
 | `rdma_device_ptr` | Handle to a device (from `get_first_available_device`) |
 | `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` produce send/recv buffers |
-| `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, pd)` / `async_accept(qp, pd)` / `async_disconnect` / `get_remote_data()` |
+| `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, pd)` / `async_accept(qp, pd)` / `disconnect()` (sync) / `get_remote_data()` |
 | `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(endpoint)` / `listen` / `async_get_connection` → `(ec, connector)` |
 | `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write`. Binds to a completion mechanism: `rdma_queue_pair(io)` = event-driven; `rdma_queue_pair(cq)` = poll-mode (io_context-free data plane). `bind()` (deferred) / `is_bound()` / `bound_type()` → `completion_mode` |
 | `rdma_completion_queue` | Standalone poll-mode CQ; `poll()` / `poll_one()` |

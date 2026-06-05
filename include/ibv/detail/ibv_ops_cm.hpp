@@ -196,4 +196,22 @@ inline int get_cm_event(native_event_channel_t* channel,
   return rc;
 }
 
+// Drain + ack every currently-queued CM event on a (non-blocking) channel.
+// Must be called before rdma_destroy_id on teardown: rdma_destroy_id blocks
+// until all reported events have been acknowledged. Each event is wrapped in a
+// unique_rdma_cm_event_ptr whose deleter calls rdma_ack_cm_event.
+inline void drain_cm_events(native_event_channel_t* channel) {
+  if (channel == nullptr) {
+    return;
+  }
+  asio::error_code ec;
+  for (;;) {
+    native_cm_event_t* event = nullptr;
+    if (get_cm_event(channel, &event, ec) != 0) {
+      break;  // EAGAIN (drained) or a hard error -- stop either way
+    }
+    unique_rdma_cm_event_ptr acked{ event };  // deleter acks on scope exit
+  }
+}
+
 }

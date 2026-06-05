@@ -197,6 +197,87 @@ private:
   }
 };
 
+// Fire-and-forget disconnect op (no handler): backs the synchronous, non-blocking
+// connector::disconnect(). ND2 Disconnect is overlapped, so we issue it with this
+// self-reaping op and return without waiting; when IOCP completes the overlapped,
+// do_complete simply frees the op (no user upcall). Mirrors nd_poll_wc_op's
+// self-perpetuating/self-reaping pattern.
+class nd_disconnect_ff_op final : public nd_op_base {
+public:
+  struct Handler {};
+  ASIO_DEFINE_HANDLER_PTR(nd_disconnect_ff_op);
+
+  explicit nd_disconnect_ff_op(IND2Connector* connector)
+      : nd_op_base(connector, &nd_op_base::default_process,
+                   &nd_disconnect_ff_op::do_complete) {
+  }
+
+private:
+  static void do_complete(void* /*owner*/, asio::detail::operation* base,
+                          const asio::error_code& /*result_ec*/,
+                          std::size_t /*bytes_transferred*/) {
+    auto* o = static_cast<nd_disconnect_ff_op*>(base);
+    ptr p = {nullptr, o, o};
+    p.reset();  // fire-and-forget: free the op, no upcall
+  }
+};
+
+// Disconnect-notification watcher (on_disconnect). Issues IND2Connector::
+// NotifyDisconnect; when that overlapped completes (connection disconnected), it
+// sets the connector's disconnected_ flag and upcalls handler(ext_disconnected).
+// Mirrors nd_disconnect_op. [Windows verify] NotifyDisconnect completion semantics.
+template <typename Handler, typename IoExecutor>
+class nd_wait_disconnect_op final : public nd_op_base {
+private:
+  bool* disconnected_;
+  Handler handler_;
+  asio::detail::handler_work<Handler, IoExecutor> work_;
+
+public:
+  ASIO_DEFINE_HANDLER_PTR(nd_wait_disconnect_op);
+  nd_wait_disconnect_op(IND2Connector* connector, bool* disconnected,
+                        Handler& handler, const IoExecutor& io_ex)
+      : nd_op_base(connector, &nd_op_base::default_process,
+                   &nd_wait_disconnect_op::do_complete)
+      , disconnected_(disconnected)
+      , handler_(ASIO_MOVE_CAST(Handler)(handler))
+      , work_(handler_, io_ex) {
+  }
+
+private:
+  static void do_complete(void* owner, asio::detail::operation* base,
+                          const asio::error_code& /*result_ec*/,
+                          std::size_t /*bytes_transferred*/) {
+    nd_wait_disconnect_op* o = static_cast<nd_wait_disconnect_op*>(base);
+    if (o->disconnected_) {
+      *o->disconnected_ = true;
+    }
+    // NotifyDisconnect completing means the connection is gone: report a single
+    // disconnect code (not mapped to a socket error). See D-D.
+    asio::error_code ec = make_error_code(nd_errc::ext_disconnected);
+
+    ptr p = {asio::detail::addressof(o->handler_), o, o};
+
+    ASIO_HANDLER_COMPLETION((*o));
+
+    asio::detail::handler_work<Handler, IoExecutor> w(ASIO_MOVE_CAST2(
+        asio::detail::handler_work<Handler, IoExecutor>)(o->work_));
+
+    ASIO_ERROR_LOCATION(ec);
+
+    asio::detail::binder1<Handler, asio::error_code> handler(o->handler_, ec);
+    p.h = asio::detail::addressof(handler.handler_);
+    p.reset();
+
+    if (owner) {
+      asio::detail::fenced_block b(asio::detail::fenced_block::half);
+      ASIO_HANDLER_INVOCATION_BEGIN((handler.arg1_));
+      w.complete(handler, handler.handler_);
+      ASIO_HANDLER_INVOCATION_END;
+    }
+  }
+};
+
 }
 
 #include "asio/detail/pop_options.hpp"
