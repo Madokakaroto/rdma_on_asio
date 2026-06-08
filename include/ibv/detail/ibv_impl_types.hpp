@@ -110,6 +110,21 @@ using unique_rdma_cm_event_ptr =
 using cm_channel_holder = unique_rdma_event_channel_ptr;
 using cm_id_holder = unique_rdma_cm_id_ptr;
 
+// Connection lifecycle, mirrored by the connect/accept op's per-stage CAS and
+// used as the SOLE basis for connector::disconnect()'s teardown decision. The
+// transition out of `connecting` (-> connected) is the single atomic arbitration
+// point between the op (reactor thread) and disconnect() (any thread): whoever
+// acts second performs the one rdma_disconnect for an established connection.
+// See docs/cancellation_stage1_object.md (design A).
+enum class connect_state : int {
+  idle,          // op not armed yet
+  addr_resolve,  // [client] resolve_addr issued, awaiting ADDR_RESOLVED
+  addr_route,    // [client] resolve_route issued, awaiting ROUTE_RESOLVED
+  connecting,    // rdma_connect / rdma_accept issued, awaiting ESTABLISHED
+  connected,     // ESTABLISHED -- the only state where rdma_disconnect is legal
+  closed,        // torn down / aborted / failed -- terminal, destroy only
+};
+
 // Upper bound for copied CM private data (transports cap this well below 256).
 inline constexpr std::size_t max_private_data_size = 256;
 

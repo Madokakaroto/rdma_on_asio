@@ -60,3 +60,15 @@ target_include_directories(test_ibv_wait_disconnect PRIVATE
 
 target_compile_definitions(test_ibv_wait_disconnect PRIVATE ASIO_STANDALONE)
 target_link_libraries(test_ibv_wait_disconnect PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
+
+# MT-safe, state-adaptive disconnect (pending-connect abort + established teardown
+# driven from another thread): needs Threads.
+add_executable(test_ibv_disconnect_cancel test_ibv_disconnect_cancel.cpp)
+
+target_include_directories(test_ibv_disconnect_cancel PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party/asio/include
+)
+
+target_compile_definitions(test_ibv_disconnect_cancel PRIVATE ASIO_STANDALONE)
+target_link_libraries(test_ibv_disconnect_cancel PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM Threads::Threads)

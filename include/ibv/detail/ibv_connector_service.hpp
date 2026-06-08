@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <span>
@@ -45,11 +46,15 @@ public:
     // Peer's private data (client request on server; server reply on client).
     std::array<std::byte, max_private_data_size> private_data_buffer_{};
     std::size_t private_data_length_ = 0;
-    // Set once the connection is torn down (self disconnect() or a peer
-    // DISCONNECTED/DEVICE_REMOVAL observed by the wait-disconnect watcher).
-    // Makes async_wait_disconnect level-triggered (already-disconnected ->
-    // immediate completion).
-    bool disconnected_ = false;
+    // Teardown arbiter: mirrors the connect/accept op's stage and is the SOLE
+    // basis for disconnect()'s decision. Atomic so disconnect() is thread-safe
+    // (callable from any thread, no strand). See docs/cancellation_stage1_object.md.
+    std::atomic<connect_state> connect_state_{connect_state::idle};
+    // Peer-disconnect latch, set by the wait watcher. SEPARATE from connect_state_
+    // so a peer disconnect does not push us to `closed` and thereby suppress a
+    // later disconnect()'s local WR flush. Makes async_wait_disconnect
+    // level-triggered (already-closed -> immediate completion).
+    std::atomic<bool> peer_closed_{false};
   };
 
   explicit ibv_connector_service(asio::execution_context& context)
@@ -68,7 +73,8 @@ public:
     base_construct(impl);
     impl.cm_reactor_data_ = asio::detail::reactor::per_descriptor_data();
     impl.timeout_ = default_cm_timeout_ms;
-    impl.disconnected_ = false;
+    impl.connect_state_.store(connect_state::idle, std::memory_order_relaxed);
+    impl.peer_closed_.store(false, std::memory_order_relaxed);
   }
 
   void destroy(implementation_type& impl) {
@@ -84,7 +90,12 @@ public:
     impl.timeout_ = other_impl.timeout_;
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
-    impl.disconnected_ = other_impl.disconnected_;
+    impl.connect_state_.store(
+        other_impl.connect_state_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    impl.peer_closed_.store(
+        other_impl.peer_closed_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
     impl.cm_reactor_data_ = asio::detail::reactor::per_descriptor_data();
     if (impl.cm_channel_) {
       this->reactor_.move_descriptor(impl.cm_channel_->fd, impl.cm_reactor_data_,
@@ -101,7 +112,12 @@ public:
     impl.timeout_ = other_impl.timeout_;
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
-    impl.disconnected_ = other_impl.disconnected_;
+    impl.connect_state_.store(
+        other_impl.connect_state_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    impl.peer_closed_.store(
+        other_impl.peer_closed_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
     if (impl.cm_channel_) {
       this->reactor_.move_descriptor(impl.cm_channel_->fd, impl.cm_reactor_data_,
                                      other_impl.cm_reactor_data_);
@@ -139,6 +155,8 @@ public:
     impl.cm_channel_ = std::move(channel);
     impl.cm_id_ = std::move(cm_id);
     impl.timeout_ = default_cm_timeout_ms;
+    impl.connect_state_.store(connect_state::idle, std::memory_order_relaxed);
+    impl.peer_closed_.store(false, std::memory_order_relaxed);
     ec.clear();
   }
 
@@ -162,6 +180,8 @@ public:
     impl.cm_channel_ = std::move(handle.cm_channel_);
     impl.cm_id_ = std::move(handle.cm_id_);
     impl.timeout_ = default_cm_timeout_ms;
+    impl.connect_state_.store(connect_state::idle, std::memory_order_relaxed);
+    impl.peer_closed_.store(false, std::memory_order_relaxed);
     store_remote_pd(impl, remote_pd);
     ec.clear();
   }
@@ -175,11 +195,10 @@ public:
                         impl.private_data_length_);
   }
 
-  void cancel(implementation_type& impl) {
-    if (impl.cm_channel_) {
-      this->reactor_.cancel_ops(impl.cm_channel_->fd, impl.cm_reactor_data_);
-    }
-  }
+  // NOTE: connector has no public cancel(). Object-level teardown -- including
+  // aborting an in-flight async_connect/async_accept -- is connector::disconnect(),
+  // which adapts to connect_state_ (see disconnect() below). Only listener keeps
+  // cancel() (reusable accept semantics). See docs/cancellation_stage1_object.md.
 
   // --- async operations ---
 
@@ -198,11 +217,13 @@ public:
     using op = ibv_connect_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
-    p.p = new (p.v) op{this->success_ec_, impl.cm_id_.get(), impl.timeout_,
-                       private_data.data(), private_data.size(),
+    p.p = new (p.v) op{this->success_ec_,         impl.cm_id_.get(),
+                       &impl.connect_state_,      impl.timeout_,
+                       private_data.data(),       private_data.size(),
                        to_u8(eff.inbound_read_limit_),
                        to_u8(eff.outbound_read_limit_),
-                       std::move(create_qp), pd_sink(impl), handler, io_ex};
+                       std::move(create_qp),      pd_sink(impl),
+                       handler,                   io_ex};
     if (open_ec) {
       p.p->ec_ = open_ec;
       this->reactor_.post_immediate_completion(p.p, false);
@@ -220,7 +241,8 @@ public:
     using op = ibv_accept_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
-    p.p = new (p.v) op{this->success_ec_, impl.cm_id_.get(), handler, io_ex};
+    p.p = new (p.v) op{this->success_ec_, impl.cm_id_.get(), &impl.connect_state_,
+                       handler, io_ex};
     if (!device_registered()) {
       p.p->ec_ = make_error_code(ibv_errc::ext_device_not_registered);
       this->reactor_.post_immediate_completion(p.p, false);
@@ -237,21 +259,54 @@ public:
   // ASYNCHRONOUSLY (reaped by the poller / poll()), so "disconnect returned"
   // does NOT mean pending data-plane ops have already aborted. Abrupt teardown:
   // not-yet-sent WRs are dropped, not delivered.
+  // Unified, thread-safe teardown (replaces connector::cancel()). Adapts to
+  // connect_state_: aborts an in-flight connect/accept (cancel_ops only, no
+  // rdma_disconnect since the cm_id never reached ESTABLISHED) OR tears down an
+  // established connection (cancel_ops + rdma_disconnect). The CAS-to-closed is
+  // the arbitration counterpart to the op's connecting->connected CAS: whoever
+  // acts second performs the single rdma_disconnect. Callable from any thread.
+  // See docs/cancellation_stage1_object.md (design A.5).
   void disconnect(implementation_type& impl, asio::error_code& ec) {
-    impl.disconnected_ = true;
-    // Complete any outstanding async_wait_disconnect deterministically: we do not
-    // rely on the (unreliable) self-side DISCONNECTED event. cancel_ops completes
-    // the armed watcher with operation_aborted (you cancelled your own wait by
-    // disconnecting); a peer-initiated disconnect instead yields ext_disconnected.
-    if (impl.cm_channel_) {
-      this->reactor_.cancel_ops(impl.cm_channel_->fd, impl.cm_reactor_data_);
+    ec.clear();
+    connect_state old = impl.connect_state_.load(std::memory_order_acquire);
+    for (;;) {
+      if (old == connect_state::closed) {
+        return;  // idempotent: already torn down
+      }
+      if (impl.connect_state_.compare_exchange_weak(
+              old, connect_state::closed, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+        break;  // success; `old` holds the true prior state (weak retries refresh it)
+      }
     }
-    detail::disconnect(impl.cm_id_.get(), ec);
+    switch (old) {
+      case connect_state::addr_resolve:
+      case connect_state::addr_route:
+      case connect_state::connecting:
+        // Not established -> abort the in-flight op only. If it establishes
+        // after this, the op's ESTABLISHED-CAS fails and it tears down itself.
+        if (impl.cm_channel_) {
+          this->reactor_.cancel_ops(impl.cm_channel_->fd, impl.cm_reactor_data_);
+        }
+        break;
+      case connect_state::connected:
+        // Established and the op already completed -> we are the second actor:
+        // abort the armed wait watcher + tear down (flush WRs + DREQ), once.
+        if (impl.cm_channel_) {
+          this->reactor_.cancel_ops(impl.cm_channel_->fd, impl.cm_reactor_data_);
+        }
+        detail::disconnect(impl.cm_id_.get(), ec);
+        break;
+      case connect_state::idle:
+      default:
+        break;  // nothing armed, nothing connected
+    }
   }
 
   // Disconnect NOTIFICATION (on_disconnect). One-shot; armed on demand. If the
-  // connection is already torn down (disconnected_), completes immediately
-  // (level-triggered); otherwise a watcher stays armed on the CM fd until a peer
+  // connection is already torn down (peer_closed_ latch set, or connect_state_
+  // == closed from a self disconnect()), completes immediately (level-triggered);
+  // otherwise a watcher stays armed on the CM fd until a peer
   // DISCONNECTED/DEVICE_REMOVAL arrives. Completion code: ext_disconnected (peer
   // disconnect) / ext_device_removed (local device gone) -- see D-D.
   template <typename Handler, typename IoExecutor>
@@ -261,8 +316,10 @@ public:
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{this->success_ec_, impl.cm_channel_.get(),
-                       &impl.disconnected_, handler, io_ex};
-    if (impl.disconnected_) {
+                       &impl.peer_closed_, handler, io_ex};
+    if (impl.peer_closed_.load(std::memory_order_acquire) ||
+        impl.connect_state_.load(std::memory_order_acquire) ==
+            connect_state::closed) {
       p.p->ec_ = make_error_code(ibv_errc::ext_disconnected);
       this->reactor_.post_immediate_completion(p.p, false);
     }
@@ -308,12 +365,24 @@ private:
     if (resolve_addr(impl.cm_id_.get(), nullptr,
                      const_cast<sockaddr*>(endpoint.data()), impl.timeout_,
                      op->ec_) == 0) {
+      // Publish addr_resolve BEFORE arming, so a concurrent disconnect() sees an
+      // in-flight op (addr_resolve -> cancel_ops). If disconnect() already won
+      // (raced ahead to closed), the CAS fails -> complete aborted, do not arm.
+      connect_state e = connect_state::idle;
+      if (!impl.connect_state_.compare_exchange_strong(
+              e, connect_state::addr_resolve, std::memory_order_acq_rel,
+              std::memory_order_acquire)) {
+        op->ec_ = asio::error::operation_aborted;
+        this->reactor_.post_immediate_completion(op, false);
+        return;
+      }
       op->ec_ = asio::error_code{};
       this->reactor_.start_op(asio::detail::reactor::read_op,
                               impl.cm_channel_->fd, impl.cm_reactor_data_, op,
                               false, false);
     }
     else {
+      impl.connect_state_.store(connect_state::closed, std::memory_order_release);
       this->reactor_.post_immediate_completion(op, false);
     }
   }
@@ -321,10 +390,23 @@ private:
   void start_accept_op(implementation_type& impl, ibv_create_qp_fn create_qp,
                        asio::const_buffer private_data,
                        asio::detail::reactor_op* op) {
+    // Publish connecting BEFORE creating the QP / accepting, so a concurrent
+    // disconnect() sees an in-flight op. If disconnect() already won, complete
+    // aborted and do not accept.
+    connect_state e = connect_state::idle;
+    if (!impl.connect_state_.compare_exchange_strong(
+            e, connect_state::connecting, std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      op->ec_ = asio::error::operation_aborted;
+      this->reactor_.post_immediate_completion(op, false);
+      return;
+    }
     // The child cm_id already has a context: create the QP before accepting.
     if (create_qp) {
       op->ec_ = create_qp(impl.cm_id_.get());
       if (op->ec_) {
+        impl.connect_state_.store(connect_state::closed,
+                                  std::memory_order_release);
         this->reactor_.post_immediate_completion(op, false);
         return;
       }
@@ -343,6 +425,7 @@ private:
                               false, false);
     }
     else {
+      impl.connect_state_.store(connect_state::closed, std::memory_order_release);
       this->reactor_.post_immediate_completion(op, false);
     }
   }
@@ -354,7 +437,10 @@ private:
       this->reactor_.cleanup_descriptor_data(impl.cm_reactor_data_);
       // Drain + ack any pending CM events (e.g. DISCONNECTED / TIMEWAIT_EXIT)
       // before rdma_destroy_id, which blocks until reported events are acked.
-      drain_cm_events(impl.cm_channel_.get());
+      // Passing cm_id closes the A.7 race window: if an ESTABLISHED arrived but
+      // was never processed (disconnect()'s cancel_ops aborted the op first),
+      // drain issues a graceful rdma_disconnect on it before destroy.
+      drain_cm_events(impl.cm_channel_.get(), impl.cm_id_.get());
     }
     // The QP is created on cm_id (cm_id->qp) and owned here; destroy it before
     // the cm_id, which in turn must precede the event channel.

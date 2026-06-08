@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <utility>
 
 #include "asio/detail/bind_handler.hpp"
@@ -19,21 +20,27 @@ namespace asio::rdma::detail {
 //   RDMA_CM_EVENT_DISCONNECTED   -> complete with ibv_errc::ext_disconnected
 //   RDMA_CM_EVENT_DEVICE_REMOVAL -> complete with ibv_errc::ext_device_removed
 // Other events (e.g. TIMEWAIT_EXIT) are acked (by the unique_ptr deleter) and
-// ignored -- the op returns not_done to stay armed. On the terminal event it also
-// sets the connector's disconnected_ flag so a subsequent async_wait_disconnect
+// ignored -- the op returns not_done to stay armed. On the terminal event it sets
+// the connector's peer_closed_ latch so a subsequent async_wait_disconnect
 // completes immediately (level-triggered).
+//
+// IMPORTANT: peer_closed_ is SEPARATE from connect_state_ (the teardown arbiter).
+// A peer disconnect must NOT push connect_state_ to `closed`, or a later
+// disconnect() would short-circuit and never flush local pending WRs. See
+// docs/cancellation_stage1_object.md (design A.6).
 //
 // One-shot: completes once. Armed on demand by async_wait_disconnect (not always);
 // if nothing is armed, queued CM events are drained+acked at teardown instead.
 class ibv_wait_disconnect_op_base : public ibv_op_cm {
 protected:
-  bool* disconnected_;  // connector's flag, set on the terminal event
+  std::atomic<bool>* peer_closed_;  // connector's latch, set on the terminal event
 
   ibv_wait_disconnect_op_base(asio::error_code const& success_ec,
                               native_event_channel_t* channel,
-                              bool* disconnected, func_type complete_func)
+                              std::atomic<bool>* peer_closed,
+                              func_type complete_func)
       : ibv_op_cm(success_ec, channel, &do_perform, complete_func)
-      , disconnected_(disconnected) {
+      , peer_closed_(peer_closed) {
   }
 
 private:
@@ -48,14 +55,14 @@ private:
     }
     switch (event->event) {
       case RDMA_CM_EVENT_DISCONNECTED:
-        if (op->disconnected_) {
-          *op->disconnected_ = true;
+        if (op->peer_closed_) {
+          op->peer_closed_->store(true, std::memory_order_release);
         }
         op->ec_ = make_error_code(ibv_errc::ext_disconnected);
         return status::done;
       case RDMA_CM_EVENT_DEVICE_REMOVAL:
-        if (op->disconnected_) {
-          *op->disconnected_ = true;
+        if (op->peer_closed_) {
+          op->peer_closed_->store(true, std::memory_order_release);
         }
         op->ec_ = make_error_code(ibv_errc::ext_device_removed);
         return status::done;
@@ -77,9 +84,10 @@ private:
 
 public:
   ibv_wait_disconnect_op(asio::error_code const& success_ec,
-                         native_event_channel_t* channel, bool* disconnected,
-                         Handler& handler, IoExecutor const& io_ex)
-      : ibv_wait_disconnect_op_base(success_ec, channel, disconnected,
+                         native_event_channel_t* channel,
+                         std::atomic<bool>* peer_closed, Handler& handler,
+                         IoExecutor const& io_ex)
+      : ibv_wait_disconnect_op_base(success_ec, channel, peer_closed,
                                     &ibv_wait_disconnect_op::do_complete)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {

@@ -200,7 +200,14 @@ inline int get_cm_event(native_event_channel_t* channel,
 // Must be called before rdma_destroy_id on teardown: rdma_destroy_id blocks
 // until all reported events have been acknowledged. Each event is wrapped in a
 // unique_rdma_cm_event_ptr whose deleter calls rdma_ack_cm_event.
-inline void drain_cm_events(native_event_channel_t* channel) {
+// If graceful_cm_id is non-null and a drained event is ESTABLISHED, the
+// connection came up but was never processed (disconnect()'s cancel_ops aborted
+// the in-flight op before it drained the event) -- issue a graceful
+// rdma_disconnect so the peer gets a DREQ instead of an abrupt destroy. Only
+// fires in that narrow race window; on the normal path ESTABLISHED was already
+// consumed by the connect/accept op. See docs/cancellation_stage1_object.md A.7.
+inline void drain_cm_events(native_event_channel_t* channel,
+                            native_cm_id_t* graceful_cm_id = nullptr) {
   if (channel == nullptr) {
     return;
   }
@@ -211,6 +218,11 @@ inline void drain_cm_events(native_event_channel_t* channel) {
       break;  // EAGAIN (drained) or a hard error -- stop either way
     }
     unique_rdma_cm_event_ptr acked{ event };  // deleter acks on scope exit
+    if (graceful_cm_id != nullptr &&
+        acked->event == RDMA_CM_EVENT_ESTABLISHED) {
+      asio::error_code ignored;
+      disconnect(graceful_cm_id, ignored);
+    }
   }
 }
 

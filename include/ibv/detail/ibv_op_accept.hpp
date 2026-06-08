@@ -1,11 +1,14 @@
 #pragma once
 
+#include <atomic>
+
 #include "asio/detail/bind_handler.hpp"
 #include "asio/detail/fenced_block.hpp"
 #include "asio/detail/handler_alloc_helpers.hpp"
 #include "asio/detail/handler_work.hpp"
 #include "asio/detail/memory.hpp"
 #include "ibv/detail/ibv_op_cm.hpp"
+#include "ibv/detail/ibv_ops_cm.hpp"
 #include "ibv/ibv_error.hpp"
 #include "asio/detail/push_options.hpp"
 
@@ -14,25 +17,51 @@ namespace asio::rdma::detail {
 // Server-side accept: the service issues rdma_accept on the (migrated) child
 // cm_id; this op waits on that cm_id's own event channel for ESTABLISHED.
 // Single-stage, so it never returns not_done after seeing an event.
+//
+// Mirrors connect's teardown arbitration: ESTABLISHED does CAS(connecting ->
+// connected); if that fails, disconnect() won the race while the connection
+// established -> this op (second actor) tears it down exactly once. Failures
+// claim `closed` unless disconnect() beat us. See ibv_op_connect.hpp.
 template <typename Handler, typename IoExecutor>
 class ibv_accept_op final : public ibv_op_cm {
 public:
   ASIO_DEFINE_HANDLER_PTR(ibv_accept_op);
 
 private:
+  std::atomic<connect_state>* state_;  // points at the connector's connect_state_
+  native_cm_id_t* cm_id_;
   Handler handler_;
   asio::detail::handler_work<Handler, IoExecutor> work_;
 
 public:
   ibv_accept_op(asio::error_code const& success_ec, native_cm_id_t* cm_id,
-                Handler& handler, IoExecutor const& io_ex)
+                std::atomic<connect_state>* state, Handler& handler,
+                IoExecutor const& io_ex)
       : ibv_op_cm(success_ec, cm_id->channel, &do_perform,
                   &ibv_accept_op::do_complete)
+      , state_(state)
+      , cm_id_(cm_id)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {
   }
 
 private:
+  // Terminal failure: claim `closed` unless disconnect() beat us. Returns true
+  // if WE claimed it (keep the real error), false if disconnect() already won.
+  bool claim_closed() {
+    connect_state e = state_->load(std::memory_order_acquire);
+    for (;;) {
+      if (e == connect_state::closed) {
+        return false;
+      }
+      if (state_->compare_exchange_weak(e, connect_state::closed,
+                                        std::memory_order_acq_rel,
+                                        std::memory_order_acquire)) {
+        return true;
+      }
+    }
+  }
+
   static status do_perform(asio::detail::reactor_op* base) {
     auto* op = static_cast<ibv_accept_op*>(base);
     unique_rdma_cm_event_ptr event{};
@@ -43,16 +72,30 @@ private:
       return status::not_done;
     }
     switch (event->event) {
-      case RDMA_CM_EVENT_ESTABLISHED:
+      case RDMA_CM_EVENT_ESTABLISHED: {
+        // Arbitration: connecting -> connected (single exit from connecting).
+        connect_state e = connect_state::connecting;
+        if (!op->state_->compare_exchange_strong(e, connect_state::connected,
+                                                 std::memory_order_acq_rel,
+                                                 std::memory_order_acquire)) {
+          // disconnect() won while we established -> second-actor teardown.
+          asio::error_code ignored;
+          detail::disconnect(op->cm_id_, ignored);
+          op->ec_ = asio::error::operation_aborted;
+        }
         break;
+      }
       case RDMA_CM_EVENT_REJECTED:
         op->ec_ = asio::error::connection_refused;
+        if (!op->claim_closed()) op->ec_ = asio::error::operation_aborted;
         break;
       case RDMA_CM_EVENT_CONNECT_ERROR:
         op->ec_ = asio::error::connection_aborted;
+        if (!op->claim_closed()) op->ec_ = asio::error::operation_aborted;
         break;
       default:
         op->ec_ = asio::error::connection_aborted;
+        if (!op->claim_closed()) op->ec_ = asio::error::operation_aborted;
         break;
     }
     return status::done;

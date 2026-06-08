@@ -76,9 +76,10 @@ public:
     return impl_.get_service().get_remote_data(impl_.get_implementation());
   }
 
-  void cancel() {
-    impl_.get_service().cancel(impl_.get_implementation());
-  }
+  // No cancel(): object-level teardown -- including aborting an in-flight
+  // async_connect/async_accept -- is disconnect(), which adapts to the
+  // connection state and is thread-safe. (Only listener has cancel(), with
+  // reusable accept semantics.) See docs/cancellation_stage1_object.md.
 
   // async connect: create the QP on the cm_id then connect. handler(error_code)
   template <typename ConnectToken>
@@ -111,12 +112,16 @@ public:
         token);
   }
 
-  // disconnect: synchronous, non-blocking, abrupt teardown (mirrors socket
-  // shutdown/close which are sync). rdma_disconnect transitions the local QP to
-  // ERROR and flushes pending WRs; those pending send/recv complete on the CQ
-  // with operation_aborted ASYNCHRONOUSLY, so disconnect() returning does not
-  // mean they have already aborted. To be NOTIFIED of a (peer) disconnect, use
-  // async_wait_disconnect.
+  // disconnect: synchronous, non-blocking, thread-safe, unified teardown
+  // (mirrors socket shutdown/close which are sync; also subsumes cancel). Adapts
+  // to the connection state: aborts an in-flight async_connect/async_accept with
+  // operation_aborted, or tears down an established connection. For an
+  // established connection rdma_disconnect transitions the local QP to ERROR and
+  // flushes pending WRs; those pending send/recv complete on the CQ with
+  // operation_aborted ASYNCHRONOUSLY, so disconnect() returning does not mean
+  // they have already aborted. Callable from any thread (no strand needed); the
+  // only contract is not destroying the connector concurrently. To be NOTIFIED
+  // of a (peer) disconnect, use async_wait_disconnect.
   void disconnect() {
     asio::error_code ec;
     disconnect(ec);
