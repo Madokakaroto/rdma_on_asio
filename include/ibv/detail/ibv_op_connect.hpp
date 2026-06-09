@@ -18,8 +18,6 @@
 
 namespace asio::rdma::detail {
 
-inline constexpr int default_cm_timeout_ms = 2000;
-
 // Client connect state machine: resolve_addr (issued by the service before the
 // op is armed) -> ROUTE -> CONNECT -> ESTABLISHED. Each intermediate event
 // issues the next rdma_cm call and returns not_done to stay armed on the fd.

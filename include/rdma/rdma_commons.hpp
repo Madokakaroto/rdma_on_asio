@@ -41,10 +41,17 @@ struct rdma_config_t {
   // Connection configuration
   std::uint32_t inbound_read_limit_ = 0;  // 0 = device default
   std::uint32_t outbound_read_limit_ = 0; // 0 = device default
+  // CM address/route resolution timeout (ms). 0 = default_cm_resolve_timeout_ms.
+  // ibv only: feeds rdma_resolve_addr / rdma_resolve_route. nd ignores it --
+  // ND's IND2Connector::Connect resolves internally with no exposed timeout.
+  std::uint32_t cm_resolve_timeout_ms_ = 0;
 
   // Listener configuration
   int backlog_ = 128;
 };
+
+// Default CM resolve timeout (ms) used when cm_resolve_timeout_ms_ == 0.
+inline constexpr std::uint32_t default_cm_resolve_timeout_ms = 2000;
 
 // Remote memory region handle (address + remote key/token) for RDMA read/write.
 struct rdma_remote_addr_t {

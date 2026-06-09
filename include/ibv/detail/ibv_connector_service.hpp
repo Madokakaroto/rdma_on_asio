@@ -42,7 +42,6 @@ public:
     cm_channel_holder cm_channel_;
     cm_id_holder cm_id_;
     asio::detail::reactor::per_descriptor_data cm_reactor_data_;
-    int timeout_ = default_cm_timeout_ms;
     // Peer's private data (client request on server; server reply on client).
     std::array<std::byte, max_private_data_size> private_data_buffer_{};
     std::size_t private_data_length_ = 0;
@@ -72,7 +71,6 @@ public:
   void construct(implementation_type& impl) {
     base_construct(impl);
     impl.cm_reactor_data_ = asio::detail::reactor::per_descriptor_data();
-    impl.timeout_ = default_cm_timeout_ms;
     impl.connect_state_.store(connect_state::idle, std::memory_order_relaxed);
     impl.peer_closed_.store(false, std::memory_order_relaxed);
   }
@@ -87,7 +85,6 @@ public:
     base_move_construct(impl, other_impl);
     impl.cm_channel_ = std::move(other_impl.cm_channel_);
     impl.cm_id_ = std::move(other_impl.cm_id_);
-    impl.timeout_ = other_impl.timeout_;
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
     impl.connect_state_.store(
@@ -109,7 +106,6 @@ public:
     close_for_destruction(impl);
     impl.cm_channel_ = std::move(other_impl.cm_channel_);
     impl.cm_id_ = std::move(other_impl.cm_id_);
-    impl.timeout_ = other_impl.timeout_;
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
     impl.connect_state_.store(
@@ -154,7 +150,6 @@ public:
     }
     impl.cm_channel_ = std::move(channel);
     impl.cm_id_ = std::move(cm_id);
-    impl.timeout_ = default_cm_timeout_ms;
     impl.connect_state_.store(connect_state::idle, std::memory_order_relaxed);
     impl.peer_closed_.store(false, std::memory_order_relaxed);
     ec.clear();
@@ -179,7 +174,6 @@ public:
     }
     impl.cm_channel_ = std::move(handle.cm_channel_);
     impl.cm_id_ = std::move(handle.cm_id_);
-    impl.timeout_ = default_cm_timeout_ms;
     impl.connect_state_.store(connect_state::idle, std::memory_order_relaxed);
     impl.peer_closed_.store(false, std::memory_order_relaxed);
     store_remote_pd(impl, remote_pd);
@@ -218,7 +212,7 @@ public:
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{this->success_ec_,         impl.cm_id_.get(),
-                       &impl.connect_state_,      impl.timeout_,
+                       &impl.connect_state_,      cm_timeout(),
                        private_data.data(),       private_data.size(),
                        to_u8(eff.inbound_read_limit_),
                        to_u8(eff.outbound_read_limit_),
@@ -354,6 +348,13 @@ private:
     return device_svc_.is_registered() ? device_svc_.get_effective_config()
                                        : ibv_config_t{};
   }
+  // CM resolve timeout (ms) from the effective config (use_device-centralized),
+  // falling back to the default if unset/unregistered. Replaces the old per-impl
+  // timeout_ field.
+  int cm_timeout() {
+    auto const t = effective_config().cm_resolve_timeout_ms_;
+    return static_cast<int>(t ? t : default_cm_resolve_timeout_ms);
+  }
   static std::uint8_t to_u8(std::uint32_t v) {
     return static_cast<std::uint8_t>(v > 255u ? 255u : v);
   }
@@ -374,7 +375,7 @@ private:
                         endpoint_type const& endpoint,
                         asio::detail::reactor_op* op) {
     if (resolve_addr(impl.cm_id_.get(), nullptr,
-                     const_cast<sockaddr*>(endpoint.data()), impl.timeout_,
+                     const_cast<sockaddr*>(endpoint.data()), cm_timeout(),
                      op->ec_) == 0) {
       // Publish addr_resolve BEFORE arming, so a concurrent disconnect() sees an
       // in-flight op (addr_resolve -> cancel_ops). If disconnect() already won

@@ -49,6 +49,10 @@ inline ibv_config_t derive_effective_config(ibv_config_t const& user_config,
   if (effective.outbound_read_limit_ == 0) {
     effective.outbound_read_limit_ = cap_of(caps.max_qp_init_rd_atom);
   }
+  // CM resolve timeout is a policy (no device cap); 0 -> fixed default.
+  if (effective.cm_resolve_timeout_ms_ == 0) {
+    effective.cm_resolve_timeout_ms_ = default_cm_resolve_timeout_ms;
+  }
 
   return effective;
 }
