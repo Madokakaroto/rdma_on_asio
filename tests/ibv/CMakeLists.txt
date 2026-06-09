@@ -72,3 +72,14 @@ target_include_directories(test_ibv_disconnect_cancel PRIVATE
 
 target_compile_definitions(test_ibv_disconnect_cancel PRIVATE ASIO_STANDALONE)
 target_link_libraries(test_ibv_disconnect_cancel PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM Threads::Threads)
+
+# Stage 2: per-op (cancellation_slot) cancellation of control-plane ops.
+add_executable(test_ibv_control_cancel test_ibv_control_cancel.cpp)
+
+target_include_directories(test_ibv_control_cancel PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/third_party/asio/include
+)
+
+target_compile_definitions(test_ibv_control_cancel PRIVATE ASIO_STANDALONE)
+target_link_libraries(test_ibv_control_cancel PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM Threads::Threads)

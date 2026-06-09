@@ -135,8 +135,15 @@ public:
     using op = ibv_get_connection_request_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
+    auto cancel_slot = asio::get_associated_cancellation_slot(handler);
     p.p = new (p.v)
         op{this->success_ec_, impl.cm_channel_.get(), handler, io_ex};
+    if (is_open(impl)) {
+      // Per-op cancellation: cancel_after / co_spawn cancel / || act on this
+      // get-connection. The listener stays in LISTEN and is reusable afterwards.
+      arm_cm_cancellation(cancel_slot, this->reactor_, impl.cm_reactor_data_,
+                          impl.cm_channel_->fd, p.p);
+    }
     start_get_connection_request_op(impl, p.p);
     p.v = p.p = 0;
   }

@@ -292,6 +292,15 @@ private:
     ibv_connect_op* o = static_cast<ibv_connect_op*>(base);
     ptr p = {asio::detail::addressof(o->handler_), o, o};
 
+    // Per-op cancel completes the op via the reactor (operation_aborted),
+    // bypassing do_process's claim_closed. Mark the connector terminal so a later
+    // async_connect is cleanly rejected (-> ext_connector_terminal). Keyed strictly
+    // on operation_aborted so transient guard errors stay retryable; aborted <=>
+    // not established, so this never clobbers a live `connected`.
+    if (owner && o->ec_ == asio::error::operation_aborted) {
+      o->state_->store(connect_state::closed, std::memory_order_release);
+    }
+
     ASIO_HANDLER_COMPLETION((*o));
 
     asio::detail::handler_work<Handler, IoExecutor> w(ASIO_MOVE_CAST2(

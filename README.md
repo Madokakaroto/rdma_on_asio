@@ -159,7 +159,7 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 | `rdma_device_ptr` | Handle to a device (from `get_first_available_device`) |
 | `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` produce send/recv buffers |
 | `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, pd)` / `async_accept(qp, pd)` / `disconnect()` (sync) / `get_remote_data()` |
-| `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(endpoint)` / `listen` / `async_get_connection` → `(ec, connector)` |
+| `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(endpoint)` / `listen` / `async_get_connection` → `(ec, connector)` / `cancel()` (abort pending get; listener stays reusable) |
 | `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write`. Binds to a completion mechanism: `rdma_queue_pair(io)` = event-driven; `rdma_queue_pair(cq)` = poll-mode (io_context-free data plane). `bind()` (deferred) / `is_bound()` / `bound_type()` → `completion_mode` |
 | `rdma_completion_queue` | Standalone poll-mode CQ; `poll()` / `poll_one()` |
 | `tcp` | Port space: `tcp::endpoint`, `tcp::resolver`, and `tcp::{connector,listener}` (the data-plane `queue_pair` is port-space-agnostic — use `rdma_queue_pair`) |
@@ -206,10 +206,42 @@ tests/
   connect/accept/listen, send/recv/read/write, MR, dual completion modes, echo).
 - **nd (Windows):** implemented against the same public surface; build to be verified on Windows.
 
+## Cancellation
+
+**Control plane — object-level *and* per-operation (ibv: implemented + RoCE-verified; nd: same
+design, pending Windows verification).**
+
+- *Object-level teardown.* `connector::disconnect()` is one thread-safe, state-adaptive call: it
+  aborts an in-flight `async_connect`/`async_accept`, **or** tears down an established connection
+  (pending data-plane ops then flush to `operation_aborted`). Because an rdma_cm `cm_id` is
+  single-use, a connector is **terminal** after disconnect — a reused `async_connect` is rejected
+  up front with `ext_connector_terminal`; create a fresh connector. `listener::cancel()` aborts a
+  pending `async_get_connection` and leaves the listener in `LISTEN` (reusable, like
+  `acceptor::cancel()`).
+- *Per-operation (Asio cancellation slots).* `async_connect`, `async_accept`,
+  `async_get_connection`, and `async_wait_disconnect` honor a `cancellation_slot`, so
+  `cancel_after`, `co_spawn` cancellation, `awaitable_operators` `||`, and `parallel_group` act on
+  one specific control-plane op. Cancelling a connect/accept makes the connector terminal;
+  cancelling `async_wait_disconnect` only stops the watcher — the connection stays usable.
+
+**Data plane — no per-operation cancellation, by design.** Once a send/recv/read/write work
+request is posted, it belongs to the HCA: its buffers stay pinned until the matching completion,
+and standard verbs offers no `ibv_cancel_wr` to retract a single in-flight WR. The only standard
+lever is a *whole-queue* state change — moving the QP to ERROR (which flushes **all** outstanding
+WRs as `operation_aborted`) or destroying it. There is one vendor-private exception,
+`mlx5dv_qp_cancel_posted_send_wrs()` (mlx5 DirectVerbs), which cancels posted *send* WRs by
+`wr_id` — but it is narrow and heavyweight: the QP must first be drained into the SQD state, it
+must have been created with `MLX5DV_QP_CREATE_SIG_PIPELINING` (the API exists for the
+signature-pipelining offload, not general use), it needs a DEVX context, and it covers sends only.
+Being a Mellanox/NVIDIA-private API with those constraints, it is not a portable, general per-WR
+cancel. **So this layer does not implement data-plane single-op cancellation** — to abort
+in-flight data-plane ops, tear the connection down with `disconnect()`, whose QP→ERROR flush
+completes them as `operation_aborted`.
+
 ## TODO
 
-- **Cancellation** — wire up per-operation cancellation (Asio cancellation slots) across the
-  CM and verbs ops; currently `cancel()` only cancels pending reactor ops.
+- **nd cancellation (Windows)** — mirror the ibv control-plane cancellation on NetworkDirect
+  (`CancelIoEx` per-op / `IND2Connector::Disconnect`), then verify on Windows.
 - **Unit tests** — broaden coverage badly needed: config derivation, error mapping,
   MR slicing/bounds, completion dispatch, poll-mode CQ, connector/listener edge cases.
 - **Benchmark** — add a throughput/latency benchmark harness (send/recv, RDMA read/write).

@@ -107,6 +107,12 @@ private:
     ibv_accept_op* o = static_cast<ibv_accept_op*>(base);
     ptr p = {asio::detail::addressof(o->handler_), o, o};
 
+    // Per-op cancel -> connector terminal (mirrors ibv_connect_op). Keyed on
+    // operation_aborted; aborted <=> not established, so never clobbers connected.
+    if (owner && o->ec_ == asio::error::operation_aborted) {
+      o->state_->store(connect_state::closed, std::memory_order_release);
+    }
+
     ASIO_HANDLER_COMPLETION((*o));
 
     asio::detail::handler_work<Handler, IoExecutor> w(ASIO_MOVE_CAST2(

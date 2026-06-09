@@ -201,6 +201,8 @@ public:
                      endpoint_type const& endpoint,
                      asio::const_buffer private_data, Handler& handler,
                      IoExecutor const& io_ex) {
+    // Capture the cancellation slot BEFORE the op ctor moves `handler`.
+    auto cancel_slot = asio::get_associated_cancellation_slot(handler);
     // Auto-open (asio socket.connect opens with the endpoint's protocol).
     asio::error_code open_ec;
     if (!is_open(impl)) {
@@ -234,6 +236,9 @@ public:
       this->reactor_.post_immediate_completion(p.p, false);
     }
     else {
+      // Per-op cancellation: cancel_after / co_spawn cancel / || act on this op.
+      arm_cm_cancellation(cancel_slot, this->reactor_, impl.cm_reactor_data_,
+                          impl.cm_channel_->fd, p.p);
       start_connect_op(impl, endpoint, p.p);
     }
     p.v = p.p = 0;
@@ -243,6 +248,7 @@ public:
   void async_accept(implementation_type& impl, ibv_create_qp_fn create_qp,
                     asio::const_buffer private_data, Handler& handler,
                     IoExecutor const& io_ex) {
+    auto cancel_slot = asio::get_associated_cancellation_slot(handler);
     using op = ibv_accept_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
@@ -254,6 +260,10 @@ public:
       p.v = p.p = 0;
       return;
     }
+    // Per-op cancellation (cancelling accept tears down the half-open connection;
+    // see docs/cancellation_stage2_control_single_op.md).
+    arm_cm_cancellation(cancel_slot, this->reactor_, impl.cm_reactor_data_,
+                        impl.cm_channel_->fd, p.p);
     start_accept_op(impl, std::move(create_qp), private_data, p.p);
     p.v = p.p = 0;
   }
@@ -317,6 +327,7 @@ public:
   template <typename Handler, typename IoExecutor>
   void async_wait_disconnect(implementation_type& impl, Handler& handler,
                              IoExecutor const& io_ex) {
+    auto cancel_slot = asio::get_associated_cancellation_slot(handler);
     using op = ibv_wait_disconnect_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
@@ -333,6 +344,11 @@ public:
       this->reactor_.post_immediate_completion(p.p, false);
     }
     else {
+      // Per-op cancellation: lets `qp.async_recv || conn.async_wait_disconnect`
+      // and cancel_after stop the watcher WITHOUT tearing the connection down
+      // (functor only cancel_ops_by_key; connect_state_ stays connected).
+      arm_cm_cancellation(cancel_slot, this->reactor_, impl.cm_reactor_data_,
+                          impl.cm_channel_->fd, p.p);
       this->reactor_.start_op(asio::detail::reactor::read_op,
                               impl.cm_channel_->fd, impl.cm_reactor_data_, p.p,
                               false, false);
