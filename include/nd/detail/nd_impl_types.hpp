@@ -162,6 +162,19 @@ struct nd_connector_handle_t {
 // Upper bound for copied CM private data (mirrors ibv_impl_types.hpp).
 inline constexpr std::size_t max_private_data_size = 256;
 
+// Connection lifecycle for the nd connector. Per-platform by design: ND's
+// IND2Connector::Connect hides address/route resolution inside the provider, so
+// nd has NONE of ibv's resolve stages -- this enum is intentionally smaller than
+// the ibv connect_state. Only the TERMINAL/discarded determination (`closed`) is
+// aligned across backends; intermediate states are not. See
+// docs/cancellation_stage1_object.md / cancellation_stage2_control_single_op.md.
+enum class connect_state : int {
+  idle,        // not connecting (fresh / opened / assigned)
+  connecting,  // Connect/Accept issued (one-shot: connector never returns to idle)
+  connected,   // established (reserved; set once op completion is wired)
+  closed,      // disconnected / failed -- terminal, discarded
+};
+
 // Where an async op writes the peer's private data (the connector's buffer), so
 // it outlives the op. buf/len point into the connector's implementation_type.
 struct nd_pd_sink {

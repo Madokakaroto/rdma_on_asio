@@ -41,8 +41,15 @@ public:
     // Peer's private data (client request on server; server reply on client).
     std::array<std::byte, max_private_data_size> private_data_buffer_{};
     std::size_t private_data_length_ = 0;
-    // Set once disconnected (self disconnect() or NotifyDisconnect fired). Makes
-    // async_wait_disconnect level-triggered. Mirrors ibv.
+    // Teardown/lifecycle, used for the discarded-state determination (aligned
+    // with ibv's connect_state_): idle -> connecting -> [connected] -> closed.
+    // nd-specific (no resolve stages). Plain (non-atomic): nd's disconnect is
+    // not the MT-safe CAS arbiter ibv's is -- only touched on the initiating
+    // side. A `!= idle` reuse guard makes the connector one-shot (rdma_cm-aligned).
+    connect_state connect_state_ = connect_state::idle;
+    // Peer-disconnect notification latch (set by self disconnect() or
+    // NotifyDisconnect). SEPARATE from connect_state_ (mirrors ibv's peer_closed_):
+    // makes async_wait_disconnect level-triggered. Kept as the wait-op's flag.
     bool disconnected_ = false;
   };
 
@@ -68,6 +75,7 @@ public:
     impl.connector_.Reset();
     impl.connector_handle_.reset();
     impl.adapter_.reset();
+    impl.connect_state_ = connect_state::idle;
     impl.disconnected_ = false;
   }
 
@@ -86,6 +94,7 @@ public:
     impl.adapter_ = std::move(other_impl.adapter_);
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
+    impl.connect_state_ = other_impl.connect_state_;
     impl.disconnected_ = other_impl.disconnected_;
   }
 
@@ -101,6 +110,7 @@ public:
     impl.adapter_ = std::move(other_impl.adapter_);
     impl.private_data_buffer_ = other_impl.private_data_buffer_;
     impl.private_data_length_ = other_impl.private_data_length_;
+    impl.connect_state_ = other_impl.connect_state_;
     impl.disconnected_ = other_impl.disconnected_;
   }
 
@@ -136,6 +146,8 @@ public:
     impl.connector_ = std::move(handle.connector_);
     impl.connector_handle_ = std::move(handle.overlapped_handle_);
     impl.adapter_ = std::move(handle.adapter_);
+    impl.connect_state_ = connect_state::idle;
+    impl.disconnected_ = false;
     store_remote_pd(impl, remote_pd);
   }
 
@@ -173,6 +185,17 @@ public:
     if (open_ec) {
       this->scheduler_.work_started();
       this->scheduler_.on_completion(p.p, open_ec);
+      p.v = p.p = 0;
+      return;
+    }
+    // Terminal / non-fresh connector: a prior connect attempt (one-shot) or a
+    // disconnect()/failure left it non-idle. Early-exit with a clear code instead
+    // of reusing a stranded IND2Connector; the user must create a fresh connector.
+    // Mirrors the ibv `connect_state_ != idle` guard. [Windows verify]
+    if (impl.connect_state_ != connect_state::idle) {
+      asio::error_code ec = nd_errc::ext_connector_terminal;
+      this->scheduler_.work_started();
+      this->scheduler_.on_completion(p.p, ec);
       p.v = p.p = 0;
       return;
     }
@@ -226,7 +249,8 @@ public:
       ASIO_ERROR_LOCATION(ec);
       return;
     }
-    impl.disconnected_ = true;
+    impl.connect_state_ = connect_state::closed;  // terminal (discarded)
+    impl.disconnected_ = true;                     // peer/self latch (wait level-trigger)
     nd_disconnect_ff_op::Handler h{};
     nd_disconnect_ff_op::ptr p = {asio::detail::addressof(h),
                                   nd_disconnect_ff_op::ptr::allocate(h), 0};
@@ -352,6 +376,8 @@ private:
                         asio::const_buffer private_data,
                         nd_connect_op_base* op) {
     this->scheduler_.work_started();
+    // One-shot: mark non-idle on attempt so any reuse is rejected (rdma_cm-aligned).
+    impl.connect_state_ = connect_state::connecting;
 
     endpoint_type local_ep{asio::ip::make_address(impl.adapter_->name_),
                            endpoint.port()};
@@ -382,6 +408,8 @@ private:
                        asio::const_buffer private_data,
                        nd_op_base* op) {
     this->scheduler_.work_started();
+    // One-shot: mark non-idle on attempt so any reuse is rejected (rdma_cm-aligned).
+    impl.connect_state_ = connect_state::connecting;
     asio::error_code ec{};
     auto const eff = effective_config();
     accept(impl.connector_.Get(), qp,

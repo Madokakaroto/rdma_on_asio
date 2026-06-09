@@ -228,6 +228,17 @@ public:
       p.p->ec_ = open_ec;
       this->reactor_.post_immediate_completion(p.p, false);
     }
+    else if (impl.connect_state_.load(std::memory_order_acquire) !=
+             connect_state::idle) {
+      // One-shot connector: only a fresh (idle) connector may connect. Any other
+      // state -- in-flight, established, or terminal (disconnect/failed connect,
+      // -> closed) -- means the cm_id is used/stranded (rdma_cm cm_ids are not
+      // reusable). Early-exit with a clear code instead of driving resolve_addr
+      // on a non-IDLE cm_id (raw EINVAL); the user must create a fresh connector.
+      // See docs/cancellation_stage1_object.md.
+      p.p->ec_ = make_error_code(ibv_errc::ext_connector_terminal);
+      this->reactor_.post_immediate_completion(p.p, false);
+    }
     else {
       start_connect_op(impl, endpoint, p.p);
     }

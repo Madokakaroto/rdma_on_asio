@@ -328,6 +328,47 @@ bool phase_c(rdma::rdma_device_ptr const& device, std::string const& ip,
   return ok;
 }
 
+// ---------------------------------------------------------------------------
+// Phase D: a disconnected (terminal) connector rejects a fresh async_connect
+// early with ibv_errc::ext_connector_terminal -- it does not touch the stranded
+// cm_id, and does not silently leak a raw EINVAL.
+// ---------------------------------------------------------------------------
+bool phase_d(rdma::rdma_device_ptr const& device, std::string const& ip,
+             uint16_t port) {
+  asio::io_context io;
+  rdma::use_device(io, device);
+
+  rdma::rdma_connector<tcp> conn(io);
+  conn.open(tcp::v4());
+  conn.disconnect();  // idle -> closed: the connector is now terminal (discarded)
+
+  rdma::rdma_queue_pair qp(io);
+  std::atomic<bool> done{false};
+  asio::error_code cec;
+  tcp::endpoint ep(asio::ip::make_address(ip), port);
+  std::string req = "x";
+  conn.async_connect(qp, ep, asio::buffer(req), [&](asio::error_code ec) {
+    cec = ec;
+    done.store(true, std::memory_order_release);
+  });
+
+  std::thread worker([&] { io.run(); });
+  bool const fired = wait_until(
+      [&] { return done.load(std::memory_order_acquire); }, 5s);
+  io.stop();
+  worker.join();
+
+  bool const ok = fired && cec == rdma::ibv_errc::ext_connector_terminal;
+  if (ok) {
+    std::cout << "[PASS] phase D: async_connect on a disconnected connector "
+                 "early-exits with ext_connector_terminal\n";
+  } else {
+    std::cerr << "[FAIL] phase D: fired=" << fired << " ec=" << cec.message()
+              << " (expected ext_connector_terminal)\n";
+  }
+  return ok;
+}
+
 int main(int argc, char* argv[]) {
   if (argc < 2) {
     std::cout << "[SKIP] usage: " << argv[0] << " <roce-ip> [port] "
@@ -345,6 +386,7 @@ int main(int argc, char* argv[]) {
     ok &= phase_a(device, ip, static_cast<uint16_t>(port + 113));
     ok &= phase_b(device, ip, port);
     ok &= phase_c(device, ip, static_cast<uint16_t>(port + 211), 150);
+    ok &= phase_d(device, ip, port);
 
     if (ok) {
       std::cout << "\nAll ibv disconnect/cancel tests passed.\n";

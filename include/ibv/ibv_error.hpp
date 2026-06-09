@@ -27,6 +27,9 @@
 #ifndef IBVEXT_DEVICE_REMOVED
 #define IBVEXT_DEVICE_REMOVED -6
 #endif
+#ifndef IBVEXT_CONNECTOR_TERMINAL
+#define IBVEXT_CONNECTOR_TERMINAL -7
+#endif
 
 namespace asio::rdma {
 
@@ -42,6 +45,10 @@ enum class ibv_errc : int {
   // Local RDMA device removed (RDMA_CM_EVENT_DEVICE_REMOVAL). Device-level fatal:
   // the user must destroy the connector / all objects on this device.
   ext_device_removed       = IBVEXT_DEVICE_REMOVED,
+  // Connector is terminal (discarded): a prior disconnect() or failed connect
+  // left connect_state_ == closed. async_connect early-exits with this instead of
+  // touching the stranded cm_id; the user must create a fresh connector.
+  ext_connector_terminal   = IBVEXT_CONNECTOR_TERMINAL,
 };
 
 class ibv_error_category : public std::error_category {
@@ -62,6 +69,8 @@ class ibv_error_category : public std::error_category {
         return "IBV_EXT connection disconnected";
       case IBVEXT_DEVICE_REMOVED:
         return "IBV_EXT local RDMA device removed";
+      case IBVEXT_CONNECTOR_TERMINAL:
+        return "IBV_EXT connector is terminal (disconnected/failed); create a new connector";
       default:
         return "UNKNOWN_IBV_ERROR";
     }

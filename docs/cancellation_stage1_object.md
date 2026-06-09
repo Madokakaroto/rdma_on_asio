@@ -523,3 +523,10 @@ UX(`co_await (connect || timeout)`)属 Stage 2;`connector::disconnect()` 只是�
   回 io_context(保持同步签名 commit dadc61c);残留契约仅"别并发析构"。
 - **状态粒度(已定)**:采用细粒度 `connect_state_`(镜像 op 各阶段),推进用 CAS;评审知悉其对 disconnect 决策
   力等价于粗粒度 `{idle,connecting,connected,closed}`,细粒度取其"显式 + 早停 + 对称",代价是更多 CAS 点。
+- **跨后端取交集(已定)**:terminal 语义对**两个后端统一**——cancel/disconnect 后 connector **与 queue_pair**
+  都视为 terminal、都重建。**即使 ND 物理上能复用也对齐 rdma_cm**:API 抽象取能力交集,保证行为跨平台一致,
+  不暴露 ibv 没有的复用路径。含义:
+  - ibv 上 QP 物理绑 cm_id、随 connector 销毁,"不可复用"天然成立;
+  - ND 上 QP 由 `queue_pair` 持有、connector 死后仍存活,所以 **ND 需主动把该 qp 标 terminal**(连接被拆时,
+    令其后续 `async_send/recv` 或再次绑定 connector 报终态错误),而**不**暴露"qp 重绑新 connector"这条路径。
+  - connector 侧两后端一致:重发 connect/accept 以 `ext_connector_terminal`(ND 等价码)拒绝。

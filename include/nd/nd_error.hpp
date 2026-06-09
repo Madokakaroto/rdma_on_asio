@@ -45,6 +45,9 @@
 #ifndef NDEXT_DISCONNECTED
 #define NDEXT_DISCONNECTED -13
 #endif
+#ifndef NDEXT_CONNECTOR_TERMINAL
+#define NDEXT_CONNECTOR_TERMINAL -14
+#endif
 
 
 
@@ -111,6 +114,11 @@ enum class nd_errc : int {
   // Connection torn down (NotifyDisconnect fired). Mirrors ibv_errc::ext_disconnected;
   // not mapped onto a socket error code (see disconnect_refactor_plan D-D).
   ext_disconnected = NDEXT_DISCONNECTED,
+  // Connector is terminal (discarded): a prior disconnect()/NotifyDisconnect left
+  // it torn down. async_connect early-exits with this instead of reusing the
+  // stranded connector; the user must create a fresh one. Mirrors
+  // ibv_errc::ext_connector_terminal.
+  ext_connector_terminal = NDEXT_CONNECTOR_TERMINAL,
 };
 
 class nd_error_category : public std::error_category {
@@ -235,6 +243,8 @@ public:
         return "ND_EXT device not registered (call use_device first)";
       case NDEXT_DISCONNECTED:
         return "ND_EXT connection disconnected";
+      case NDEXT_CONNECTOR_TERMINAL:
+        return "ND_EXT connector is terminal (disconnected/failed); create a new connector";
       default:
         return "UNKNOWN_ND_ERROR";
     }
