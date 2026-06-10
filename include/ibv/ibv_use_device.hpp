@@ -4,8 +4,8 @@
 #include "ibv/ibv_device.hpp"
 #include "ibv/ibv_error.hpp"
 #include "ibv/detail/ibv_config_derive.hpp"
-#include "ibv/detail/ibv_device_service.hpp"
-#include "ibv/detail/ibv_io_completion_service.hpp"
+#include "ibv/detail/ibv_service_device.hpp"
+#include "ibv/detail/ibv_service_io_completion.hpp"
 
 namespace asio::rdma {
 

@@ -6,7 +6,7 @@
 #include "asio/io_context.hpp"
 #include "asio/detail/io_object_impl.hpp"
 #include "nd/nd_connector.hpp"
-#include "nd/detail/nd_listener_service.hpp"
+#include "nd/detail/nd_service_listener.hpp"
 
 namespace asio::rdma {
 

@@ -12,7 +12,7 @@
 #include "asio/execution_context.hpp"
 #include "asio/io_context.hpp"
 #include "ibv/detail/ibv_impl_types.hpp"
-#include "ibv/detail/ibv_device_service.hpp"
+#include "ibv/detail/ibv_service_device.hpp"
 #include "ibv/detail/ibv_op_accept.hpp"
 #include "ibv/detail/ibv_op_connect.hpp"
 #include "ibv/detail/ibv_op_wait_disconnect.hpp"

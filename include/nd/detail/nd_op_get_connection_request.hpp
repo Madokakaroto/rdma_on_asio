@@ -6,7 +6,7 @@
 #include "asio/detail/handler_work.hpp"
 #include "asio/detail/memory.hpp"
 #include "nd/detail/nd_op_base.hpp"
-#include "nd/detail/nd_connector_service.hpp"
+#include "nd/detail/nd_service_connector.hpp"
 #include <span>
 #include "asio/detail/push_options.hpp"
 

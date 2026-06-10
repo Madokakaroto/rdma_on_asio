@@ -5,7 +5,7 @@
 #include "asio/buffer.hpp"
 #include "asio/detail/io_object_impl.hpp"
 #include "asio/io_context.hpp"
-#include "nd/detail/nd_connector_service.hpp"
+#include "nd/detail/nd_service_connector.hpp"
 #include "nd/nd_queue_pair.hpp"
 
 namespace asio::rdma {

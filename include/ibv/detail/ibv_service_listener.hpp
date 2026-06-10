@@ -4,7 +4,7 @@
 #include "asio/execution_context.hpp"
 #include "asio/io_context.hpp"
 #include "ibv/detail/ibv_impl_types.hpp"
-#include "ibv/detail/ibv_device_service.hpp"
+#include "ibv/detail/ibv_service_device.hpp"
 #include "ibv/detail/ibv_op_get_connection_request.hpp"
 #include "ibv/detail/ibv_ops_cm.hpp"
 #include "ibv/detail/ibv_service_base.hpp"

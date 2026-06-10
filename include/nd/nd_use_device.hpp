@@ -3,8 +3,8 @@
 #include "asio/io_context.hpp"
 #include "nd/nd_device.hpp"
 #include "nd/detail/nd_config_derive.hpp"
-#include "nd/detail/nd_device_service.hpp"
-#include "nd/detail/nd_io_completion_service.hpp"
+#include "nd/detail/nd_service_device.hpp"
+#include "nd/detail/nd_service_io_completion.hpp"
 
 namespace asio::rdma {
 

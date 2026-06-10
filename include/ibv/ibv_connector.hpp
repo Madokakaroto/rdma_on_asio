@@ -6,7 +6,7 @@
 #include "asio/detail/io_object_impl.hpp"
 #include "asio/io_context.hpp"
 #include "ibv/ibv_queue_pair.hpp"
-#include "ibv/detail/ibv_connector_service.hpp"
+#include "ibv/detail/ibv_service_connector.hpp"
 
 namespace asio::rdma {
 

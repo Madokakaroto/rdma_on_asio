@@ -14,9 +14,12 @@
 #include "asio/detail/memory.hpp"
 #include "asio/ip/address.hpp"
 #include "nd/detail/nd_service_base.hpp"
-#include "nd/detail/nd_device_service.hpp"
+#include "nd/detail/nd_service_device.hpp"
 #include "nd/detail/nd_ops_cm.hpp"
 #include "nd/detail/nd_op_connect.hpp"
+#include "nd/detail/nd_op_accept.hpp"
+#include "nd/detail/nd_op_disconnect.hpp"
+#include "nd/detail/nd_op_wait_disconnect.hpp"
 #include "nd/detail/nd_config_derive.hpp"
 
 namespace asio::rdma::detail {
@@ -229,7 +232,7 @@ public:
                     asio::const_buffer private_data,
                     Handler& handler, IoExecutor const& io_ex) {
     auto cancel_slot = asio::get_associated_cancellation_slot(handler);
-    using op = nd_disconnect_op<Handler, IoExecutor>;
+    using op = nd_accept_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{impl.connector_.Get(), &impl.connect_state_, handler,
@@ -299,10 +302,10 @@ public:
 
     case connect_state::connected: {
       ::CancelIoEx(impl.connector_handle_.get(), NULL);
-      nd_disconnect_ff_op::Handler h{};
-      nd_disconnect_ff_op::ptr p = {asio::detail::addressof(h),
-                                    nd_disconnect_ff_op::ptr::allocate(h), 0};
-      p.p = new (p.v) nd_disconnect_ff_op{impl.connector_.Get()};
+      nd_disconnect_op::Handler h{};
+      nd_disconnect_op::ptr p = {asio::detail::addressof(h),
+                                    nd_disconnect_op::ptr::allocate(h), 0};
+      p.p = new (p.v) nd_disconnect_op{impl.connector_.Get()};
       this->scheduler_.work_started();
       asio::error_code dec{};
       detail::disconnect(impl.connector_.Get(), p.p, dec);

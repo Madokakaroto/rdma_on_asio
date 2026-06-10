@@ -8,7 +8,7 @@
 #include "asio/detail/io_object_impl.hpp"
 #include "asio/io_context.hpp"
 #include "ibv/ibv_connector.hpp"
-#include "ibv/detail/ibv_listener_service.hpp"
+#include "ibv/detail/ibv_service_listener.hpp"
 
 namespace asio::rdma::detail {
 

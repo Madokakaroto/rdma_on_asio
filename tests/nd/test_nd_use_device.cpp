@@ -4,7 +4,7 @@
 
 #include "asio/io_context.hpp"
 #include "nd/nd_use_device.hpp"
-#include "nd/detail/nd_device_service.hpp"
+#include "nd/detail/nd_service_device.hpp"
 #include "rdma/tcp.hpp"
 
 namespace rdma = asio::rdma;

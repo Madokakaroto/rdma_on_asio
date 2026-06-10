@@ -87,11 +87,11 @@ IO objects:
   nd_use_device.hpp       — use_device(io_ctx, device_ptr, config={}) -> void
 
 Services (detail/):
-  nd_device_service.hpp        — per-io_context: registered device_ptr + effective_config (use_device)
-  nd_io_completion_service.hpp — per-io_context: shared CQ + IOCP notify (arm_notify)
-  nd_verbs_service.hpp         — QP lifecycle + data-plane op dispatch
-  nd_connector_service.hpp     — INDConnector lifecycle + connect/accept/disconnect
-  nd_listener_service.hpp      — INDListen lifecycle + GetConnectionRequest
+  nd_service_device.hpp        — per-io_context: registered device_ptr + effective_config (use_device)
+  nd_service_io_completion.hpp — per-io_context: shared CQ + IOCP notify (arm_notify)
+  nd_service_verbs.hpp         — QP lifecycle + data-plane op dispatch
+  nd_service_connector.hpp     — INDConnector lifecycle + connect/accept/disconnect
+  nd_service_listener.hpp      — INDListen lifecycle + GetConnectionRequest
 
 Types (detail/):
   nd_impl_types.hpp     — native aliases, RAII handles, nd_connector_handle_t, nd_sglist_t
@@ -111,11 +111,11 @@ IO objects:
   ibv_use_device.hpp       — use_device(io_ctx, device_ptr, config={}) -> void
 
 Services (detail/):
-  ibv_device_service.hpp        — per-io_context: registered device_ptr + effective_config (use_device)
-  ibv_io_completion_service.hpp — per-io_context: shared CQ + comp_channel on epoll (arm_notify)
-  ibv_verbs_service.hpp         — QP lifecycle + data-plane op dispatch
-  ibv_connector_service.hpp     — rdma_cm_id lifecycle + connect/accept/disconnect
-  ibv_listener_service.hpp      — listening cm_id + GetConnectionRequest
+  ibv_service_device.hpp        — per-io_context: registered device_ptr + effective_config (use_device)
+  ibv_service_io_completion.hpp — per-io_context: shared CQ + comp_channel on epoll (arm_notify)
+  ibv_service_verbs.hpp         — QP lifecycle + data-plane op dispatch
+  ibv_service_connector.hpp     — rdma_cm_id lifecycle + connect/accept/disconnect
+  ibv_service_listener.hpp      — listening cm_id + GetConnectionRequest
 
 Types (detail/):
   ibv_impl_types.hpp     — native aliases, RAII deleters, ibv_connector_handle_t, ibv_sglist_t

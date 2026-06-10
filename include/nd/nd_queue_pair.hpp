@@ -5,9 +5,9 @@
 #include "asio/system_executor.hpp"
 #include "nd/nd_completion_queue.hpp"
 #include "nd/nd_error.hpp"
-#include "nd/detail/nd_device_service.hpp"
-#include "nd/detail/nd_io_completion_service.hpp"
-#include "nd/detail/nd_verbs_service.hpp"
+#include "nd/detail/nd_service_device.hpp"
+#include "nd/detail/nd_service_io_completion.hpp"
+#include "nd/detail/nd_service_verbs.hpp"
 
 namespace asio::rdma {
 
