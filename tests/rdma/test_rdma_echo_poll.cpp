@@ -73,7 +73,7 @@ void run_server(asio::io_context& io_ctx, rdma::rdma_device_ptr const& device,
 
   rdma::rdma_listener<tcp> listener(io_ctx);
   listener.open(tcp::v4());
-  listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+  listener.bind(port);
   listener.listen();
 
   // Standalone CQ declared before the connector so it outlives the QP, which is

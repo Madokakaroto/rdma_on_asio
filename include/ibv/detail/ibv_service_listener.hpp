@@ -28,6 +28,7 @@ public:
     cm_channel_holder cm_channel_;
     cm_id_holder cm_id_;
     asio::detail::reactor::per_descriptor_data cm_reactor_data_;
+    endpoint_type bind_endpoint_;
   };
 
   explicit ibv_listener_service(asio::execution_context& context)
@@ -78,7 +79,7 @@ public:
 
   // --- open / bind / listen ---
 
-  void open(implementation_type& impl, rdma_port_space ps_type,
+  void open(implementation_type& impl, PortSpace const& ps,
             asio::error_code& ec) {
     if (is_open(impl)) {
       ec = make_error_code(ibv_errc::ext_already_registered);
@@ -93,7 +94,7 @@ public:
       return;
     }
     native_cm_id_t* id = nullptr;
-    if (create_cm_id(channel.get(), &id, nullptr, ps_type, ec) != 0) {
+    if (create_cm_id(channel.get(), &id, nullptr, ps.rdma_type(), ec) != 0) {
       return;
     }
     cm_id_holder cm_id{ id };
@@ -106,11 +107,14 @@ public:
     }
     impl.cm_channel_ = std::move(channel);
     impl.cm_id_ = std::move(cm_id);
+    impl.bind_endpoint_ = ps.any_endpoint(0);
     ec.clear();
   }
 
-  void bind(implementation_type& impl, endpoint_type const& endpoint,
+  void bind(implementation_type& impl, asio::ip::port_type port,
             asio::error_code& ec) {
+    endpoint_type endpoint = impl.bind_endpoint_;
+    endpoint.port(port);
     bind_addr(impl.cm_id_.get(), endpoint.data(), ec);
   }
 

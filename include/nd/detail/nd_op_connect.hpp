@@ -51,6 +51,9 @@ protected:
       case stage_t::connecting:
         return o->process_complete_connect(owner, ec);
       case stage_t::connected:
+        if (!o->mark_connected(ec)) {
+          return status_t::completed;
+        }
         // Capture server's reply private data into the connector's buffer.
         o->capture_remote_pd();
         o->stage_ = stage_t::done;
@@ -63,14 +66,29 @@ protected:
   }
 
   status_t process_complete_connect(void* owner, asio::error_code& ec) {
+    this->reset();
     auto const hr = get_connector()->CompleteConnect(this);
-    if (hr != ND_SUCCESS && hr != ND_PENDING) {
+    if (FAILED(hr)) {
       ec = static_cast<nd_errc>(hr);
       if (state_) state_->store(connect_state::closed, std::memory_order_release);
       stage_ = stage_t::error;
       return status_t::completed;
     }
-    // CAS connecting -> connected; if disconnect() raced to closed, abort.
+
+    stage_ = stage_t::connected;
+    if (hr == ND_PENDING) {
+      return status_t::continuation;
+    }
+
+    if (!mark_connected(ec)) {
+      return status_t::completed;
+    }
+    capture_remote_pd();
+    stage_ = stage_t::done;
+    return status_t::completed;
+  }
+
+  bool mark_connected(asio::error_code& ec) {
     if (state_) {
       connect_state expected = connect_state::connecting;
       if (!state_->compare_exchange_strong(
@@ -78,11 +96,10 @@ protected:
               std::memory_order_acq_rel, std::memory_order_acquire)) {
         ec = asio::error::operation_aborted;
         stage_ = stage_t::error;
-        return status_t::completed;
+        return false;
       }
     }
-    stage_ = stage_t::connected;
-    return status_t::continuation;
+    return true;
   }
 
   void capture_remote_pd() {
@@ -132,7 +149,7 @@ private:
      return;
    }
 
-   if (owner && ec == asio::error::operation_aborted && o->state_) {
+   if (owner && ec && o->state_) {
      o->state_->store(connect_state::closed, std::memory_order_release);
    }
 

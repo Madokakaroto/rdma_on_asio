@@ -100,7 +100,7 @@ struct associator<
 namespace asio::rdma {
 
 // Control-plane listener over rdma_cm. Mirrors asio's acceptor:
-//   - open(port_space) / bind(endpoint) / listen(backlog)
+//   - open(port_space) / bind(port) / listen(backlog)
 //   - async_get_connection()        -> a new connector (peer connection)
 //   - async_get_connection(conn)    -> fill a pre-built connector
 template <typename PortSpace>
@@ -128,17 +128,17 @@ public:
   }
 
   void open(PortSpace const& ps, asio::error_code& ec) {
-    impl_.get_service().open(impl_.get_implementation(), ps.rdma_type(), ec);
+    impl_.get_service().open(impl_.get_implementation(), ps, ec);
   }
 
-  void bind(endpoint_type const& endpoint) {
+  void bind(asio::ip::port_type port) {
     asio::error_code ec;
-    bind(endpoint, ec);
+    bind(port, ec);
     asio::detail::throw_error(ec);
   }
 
-  void bind(endpoint_type const& endpoint, asio::error_code& ec) {
-    impl_.get_service().bind(impl_.get_implementation(), endpoint, ec);
+  void bind(asio::ip::port_type port, asio::error_code& ec) {
+    impl_.get_service().bind(impl_.get_implementation(), port, ec);
   }
 
   void listen(int backlog = 128) {

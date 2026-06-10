@@ -41,6 +41,10 @@ public:
   static tcp v4() noexcept { return tcp{asio::ip::tcp::v4()}; }
   static tcp v6() noexcept { return tcp{asio::ip::tcp::v6()}; }
 
+  endpoint any_endpoint(asio::ip::port_type port) const noexcept {
+    return endpoint{impl_, port};
+  }
+
 #if defined(ASIO_RDMA_BACKEND_ND)
   auto get_adapters(detail::nd_provider_t const& provider) const noexcept
       -> std::vector<detail::nd_adapter_ptr> {

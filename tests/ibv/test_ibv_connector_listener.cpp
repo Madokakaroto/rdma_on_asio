@@ -32,8 +32,7 @@ void test_listener_open_bind_listen() {
   }
   assert(listener.is_open());
 
-  tcp::endpoint ep(asio::ip::address_v4::any(), 0);
-  listener.bind(ep, ec);
+  listener.bind(0, ec);
   if (ec) {
     std::cout << "[SKIP] listener.bind failed: " << ec.message() << "\n";
     return;

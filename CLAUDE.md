@@ -81,7 +81,7 @@ while `rdma_queue_pair`/`rdma_completion_queue`/`rdma_memory_region`/`rdma_devic
 IO objects:
   nd_queue_pair.hpp       — async_send / async_recv / async_read / async_write; (cq) ctor = io_context-free poll mode
   nd_connector.hpp        — open(port_space) / assign / async_connect(qp,..) / async_accept(qp,..) / async_disconnect / get_remote_data
-  nd_listener.hpp         — open(port_space) / bind(endpoint) / listen / async_get_connection
+  nd_listener.hpp         — open(port_space) / bind(port) / listen / async_get_connection
   nd_completion_queue.hpp — standalone poll-mode CQ
   nd_mr.hpp               — RAII memory region `nd_memory_region` + const_buffer / mutable_buffer
   nd_use_device.hpp       — use_device(io_ctx, device_ptr, config={}) -> void
@@ -105,7 +105,7 @@ Types (detail/):
 IO objects:
   ibv_queue_pair.hpp       — async_send / async_recv / async_read / async_write; (cq) ctor = io_context-free poll mode
   ibv_connector.hpp        — open(port_space) / assign / async_connect(qp,..) / async_accept(qp,..) / async_disconnect / get_remote_data
-  ibv_listener.hpp         — open(port_space) / bind(endpoint) / listen / async_get_connection
+  ibv_listener.hpp         — open(port_space) / bind(port) / listen / async_get_connection
   ibv_completion_queue.hpp — standalone poll-mode CQ
   ibv_mr.hpp               — RAII memory region `ibv_memory_region` + const_buffer / mutable_buffer
   ibv_use_device.hpp       — use_device(io_ctx, device_ptr, config={}) -> void
@@ -138,7 +138,7 @@ Types (detail/):
 | Accept | `async_accept(qp, private_data, token)` → `void(error_code)` — creates the QP, then accepts |
 | Disconnect | `async_disconnect(token)` → `void(error_code)` |
 | Peer private data | `connector.get_remote_data()` → `const_buffer` (client req on server, server reply on client) |
-| Listener setup | `listener.open(port_space)` / `listener.bind(endpoint)` / `listener.listen(backlog)` (requires `use_device`) |
+| Listener setup | `listener.open(port_space)` / `listener.bind(port)` / `listener.listen(backlog)` (requires `use_device`) |
 | Get connection | `async_get_connection(token)` → `void(ec, connector)`; fill form `async_get_connection(conn, token)` → `void(ec)` |
 | Send/Recv | `async_send(buffers, token)` / `async_recv(buffers, token)` → `void(ec, size_t)` |
 | RDMA R/W | `async_read(buffers, remote_addr, token)` / `async_write(...)` |

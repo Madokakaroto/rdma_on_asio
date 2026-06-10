@@ -83,7 +83,7 @@ private data) and you accept onto a fresh queue pair:
 ```cpp
 rdma_listener<tcp> listener(io);
 listener.open(tcp::v4());
-listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+listener.bind(port);
 listener.listen();
 
 auto [ec, conn] = co_await listener.async_get_connection(nothrow);  // -> a connector
@@ -159,7 +159,7 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 | `rdma_device_ptr` | Handle to a device (from `get_first_available_device`) |
 | `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` produce send/recv buffers |
 | `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, pd)` / `async_accept(qp, pd)` / `disconnect()` (sync) / `get_remote_data()` |
-| `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(endpoint)` / `listen` / `async_get_connection` → `(ec, connector)` / `cancel()` (abort pending get; listener stays reusable) |
+| `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(port)` / `listen` / `async_get_connection` → `(ec, connector)` / `cancel()` (abort pending get; listener stays reusable) |
 | `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write`. Binds to a completion mechanism: `rdma_queue_pair(io)` = event-driven; `rdma_queue_pair(cq)` = poll-mode (io_context-free data plane). `bind()` (deferred) / `is_bound()` / `bound_type()` → `completion_mode` |
 | `rdma_completion_queue` | Standalone poll-mode CQ; `poll()` / `poll_one()` |
 | `tcp` | Port space: `tcp::endpoint`, `tcp::resolver`, and `tcp::{connector,listener}` (the data-plane `queue_pair` is port-space-agnostic — use `rdma_queue_pair`) |

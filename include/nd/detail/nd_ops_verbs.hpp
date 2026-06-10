@@ -139,18 +139,28 @@ inline native_qp_t* create_qp(native_pd_t* pd,
 /// memory region ops
 inline ULONG to_native_access_flag(mr_acccess_flag_t access_flag,
                                    int extra_access_flag) {
-  ULONG native_access_flag = 0;
-  if (access_flag & mr_access_local_write) {
-    native_access_flag |= ND_MR_FLAG_ALLOW_LOCAL_WRITE;
+  ULONG native_access_flag = ND_MR_FLAG_ALLOW_LOCAL_WRITE |
+                             ND_MR_FLAG_ALLOW_REMOTE_WRITE |
+                             ND_MR_FLAG_ALLOW_REMOTE_READ |
+                             static_cast<ULONG>(extra_access_flag);
+  switch (access_flag) {
+    case mr_access_local_write:
+      native_access_flag = ND_MR_FLAG_ALLOW_LOCAL_WRITE |
+                           static_cast<ULONG>(extra_access_flag);
+      break;
+    case mr_access_remote_read:
+      native_access_flag = ND_MR_FLAG_ALLOW_LOCAL_WRITE |
+                           ND_MR_FLAG_ALLOW_REMOTE_READ |
+                           static_cast<ULONG>(extra_access_flag);
+      break;
+    case mr_access_remote_write:
+      native_access_flag = ND_MR_FLAG_ALLOW_LOCAL_WRITE |
+                           ND_MR_FLAG_ALLOW_REMOTE_WRITE |
+                           ND_MR_FLAG_ALLOW_REMOTE_READ |
+                           static_cast<ULONG>(extra_access_flag);
+      break;
   }
-  if (access_flag & mr_access_remote_read) {
-    native_access_flag |= ND_MR_FLAG_ALLOW_REMOTE_READ;
-  }
-  if (access_flag & mr_access_remote_write) {
-    native_access_flag |= ND_MR_FLAG_ALLOW_REMOTE_WRITE;
-  }
-  native_access_flag |= static_cast<ULONG>(extra_access_flag);
-  return extra_access_flag;
+  return native_access_flag;
 }
 
 // register memory region

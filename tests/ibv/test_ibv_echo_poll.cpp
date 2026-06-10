@@ -69,7 +69,7 @@ void run_server(asio::io_context& io_ctx, rdma::ibv_device_ptr const& device,
 
   rdma::ibv_listener<tcp> listener(io_ctx);
   listener.open(tcp::v4());
-  listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+  listener.bind(port);
   listener.listen();
 
   rdma::ibv_completion_queue cq(device);

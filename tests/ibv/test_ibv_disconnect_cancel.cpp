@@ -73,7 +73,7 @@ bool phase_a(rdma::rdma_device_ptr const& device, std::string const& ip,
 
   rdma::rdma_listener<tcp> listener(io);
   listener.open(tcp::v4());
-  listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+  listener.bind(port);
   listener.listen();
 
   rdma::rdma_connector<tcp> conn(io);
@@ -141,7 +141,7 @@ bool phase_b(rdma::rdma_device_ptr const& device, std::string const& ip,
 
   rdma::rdma_listener<tcp> listener(io);
   listener.open(tcp::v4());
-  listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+  listener.bind(port);
   listener.listen();
 
   // Client connector at outer scope so the MAIN thread can disconnect() it.
@@ -231,7 +231,7 @@ bool phase_c(rdma::rdma_device_ptr const& device, std::string const& ip,
 
   rdma::rdma_listener<tcp> listener(io);
   listener.open(tcp::v4());
-  listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+  listener.bind(port);
   listener.listen();
 
   // Server: accept every incoming connection (each in its own coroutine) and

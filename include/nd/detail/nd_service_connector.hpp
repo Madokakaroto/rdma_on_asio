@@ -445,8 +445,7 @@ private:
       return;
     }
 
-    endpoint_type local_ep{asio::ip::make_address(impl.adapter_->name_),
-                           endpoint.port()};
+    endpoint_type local_ep{asio::ip::make_address(impl.adapter_->name_), 0};
 
     asio::error_code ec{};
     bind_addr(impl.connector_.Get(), local_ep.data(), local_ep.size(), ec);
@@ -463,7 +462,7 @@ private:
             private_data.size() == 0 ? nullptr : private_data.data(),
             static_cast<ULONG>(private_data.size()),
             op, ec);
-    if (ec) {
+    if (ec && ec != nd_errc::pending) {
       this->scheduler_.on_completion(op, ec);
       return;
     }
@@ -490,7 +489,7 @@ private:
            private_data.size() == 0 ? nullptr : private_data.data(),
            static_cast<ULONG>(private_data.size()),
            op, ec);
-    if (ec) {
+    if (ec && ec != nd_errc::pending) {
       this->scheduler_.on_completion(op, ec);
       return;
     }

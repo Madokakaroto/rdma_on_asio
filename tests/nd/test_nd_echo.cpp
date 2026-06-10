@@ -33,7 +33,7 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
 
   rdma::nd_listener<tcp> listener(io_ctx);
   listener.open(tcp::v4());
-  listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+  listener.bind(port);
   listener.listen();
 
   auto [ec_get, conn] = co_await listener.async_get_connection(use_nothrow);

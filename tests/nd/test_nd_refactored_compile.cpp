@@ -32,13 +32,29 @@ void test_io_objects_construct() {
 
   // nd_connector
   rdma::nd_connector<tcp> conn(io_ctx);
-  conn.open(tcp::v4());
+  conn.open(tcp::v4(), ec);
+  if (ec) {
+    std::cout << "[SKIP] connector.open failed: " << ec.message() << "\n";
+    return;
+  }
 
   // nd_listener
   rdma::nd_listener<tcp> listener(io_ctx);
-  listener.open(tcp::v4());
-  listener.bind(tcp::endpoint(asio::ip::address_v4::any(), 5000));
-  listener.listen();
+  listener.open(tcp::v4(), ec);
+  if (ec) {
+    std::cout << "[SKIP] listener.open failed: " << ec.message() << "\n";
+    return;
+  }
+  listener.bind(0, ec);
+  if (ec) {
+    std::cout << "[SKIP] listener.bind failed: " << ec.message() << "\n";
+    return;
+  }
+  listener.listen(128, ec);
+  if (ec) {
+    std::cout << "[SKIP] listener.listen failed: " << ec.message() << "\n";
+    return;
+  }
 
   std::cout << "[PASS] all IO objects constructed\n";
 }

@@ -34,7 +34,7 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
 
   rdma::rdma_listener<tcp> listener(io_ctx);
   listener.open(tcp::v4());
-  listener.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+  listener.bind(port);
   listener.listen();
 
   // Get the next connection request as a ready-to-accept connector.

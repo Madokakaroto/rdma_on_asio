@@ -37,13 +37,24 @@ public:
 
 private:
   static void do_complete(void* owner, asio::detail::operation* base,
-                          const asio::error_code& /*result_ec*/,
+                          const asio::error_code& result_ec,
                           std::size_t /*bytes_transferred*/) {
     nd_wait_disconnect_op* o = static_cast<nd_wait_disconnect_op*>(base);
-    if (o->peer_closed_) {
-      o->peer_closed_->store(true, std::memory_order_release);
+
+    bool const already_closed =
+        o->peer_closed_ &&
+        o->peer_closed_->load(std::memory_order_acquire);
+    asio::error_code ec = result_ec;
+    if (ec == asio::error::operation_aborted && !already_closed) {
+      // Per-operation cancellation of NotifyDisconnect must not make the
+      // connection appear closed. A self/peer disconnect sets peer_closed_ via
+      // disconnect() or a real notification and is reported below.
+    } else {
+      if (o->peer_closed_) {
+        o->peer_closed_->store(true, std::memory_order_release);
+      }
+      ec = make_error_code(nd_errc::ext_disconnected);
     }
-    asio::error_code ec = make_error_code(nd_errc::ext_disconnected);
 
     ptr p = {asio::detail::addressof(o->handler_), o, o};
 

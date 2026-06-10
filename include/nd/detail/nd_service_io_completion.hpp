@@ -141,7 +141,12 @@ private:
   static rdma_verbs_op_base* resolve_wc(native_wc_t const& result) {
     assert(result.RequestContext);
     auto* op = reinterpret_cast<rdma_verbs_op_base*>(result.RequestContext);
-    op->ec_ = static_cast<nd_errc>(result.Status);
+    if (result.Status == ND_CANCELED) {
+      op->ec_ = asio::error::operation_aborted;
+    }
+    else {
+      op->ec_ = static_cast<nd_errc>(result.Status);
+    }
     if (!op->ec_) {
       // send/write byte counts are set on the op at post time.
       if (result.RequestType != ND2_REQUEST_TYPE::Nd2RequestTypeSend &&

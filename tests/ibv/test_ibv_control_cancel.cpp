@@ -68,7 +68,7 @@ bool phase_connect(rdma::rdma_device_ptr const& device, std::string const& ip,
 
   rdma::rdma_listener<tcp> lis(io);
   lis.open(tcp::v4());
-  lis.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+  lis.bind(port);
   lis.listen();
 
   rdma::rdma_connector<tcp> cli(io);
@@ -150,7 +150,7 @@ bool phase_get_connection(rdma::rdma_device_ptr const& device,
 
   rdma::rdma_listener<tcp> lis(io);
   lis.open(tcp::v4());
-  lis.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+  lis.bind(port);
   lis.listen();
 
   bool g1_cancelled = false, g2_ok = false;
@@ -209,7 +209,7 @@ bool phase_wait_disconnect(rdma::rdma_device_ptr const& device,
 
   rdma::rdma_listener<tcp> lis(io);
   lis.open(tcp::v4());
-  lis.bind(tcp::endpoint(asio::ip::address_v4::any(), port));
+  lis.bind(port);
   lis.listen();
 
   bool established = false, wait_cancelled = false, alive_after = false;

@@ -45,6 +45,7 @@ protected:
       assert(owner);
       auto* context = static_cast<asio::detail::win_iocp_io_context*>(owner);
       context->work_started();
+      context->on_pending(this);
     }
     return status;
   }
@@ -52,12 +53,6 @@ protected:
 private:
   status_t do_process(void* owner, asio::error_code& ec) {
     assert(overlapped_);
-
-    auto const hr = this->overlapped_->GetOverlappedResult(this, false);
-    if (hr != ND_SUCCESS) {
-      ec = static_cast<nd_errc>(hr);
-      return status_t::completed;
-    }
 
     if (process_func_) {
       return process_func_(owner, this, ec);

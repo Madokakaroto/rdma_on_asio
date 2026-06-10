@@ -1,18 +1,106 @@
 #pragma once
 
 #include <span>
+#include <type_traits>
 #include <utility>
 
+#include "asio/associator.hpp"
 #include "asio/io_context.hpp"
 #include "asio/detail/io_object_impl.hpp"
 #include "nd/nd_connector.hpp"
 #include "nd/detail/nd_service_listener.hpp"
 
+namespace asio::rdma::detail {
+
+// Associator-forwarding completion adapters for listener::async_get_connection.
+// The service op completes with (ec, native handle, private_data); the public
+// API completes with (ec, connector) [return form] or (ec) [fill form] by
+// building/assigning a connector. Forward the wrapped handler's associators so
+// cancellation slots reach the native GetConnectionRequest op.
+template <typename Handler, typename ConnectorType>
+struct nd_get_connection_adapter {
+  Handler handler_;
+  asio::io_context* io_ctx_;
+
+  void operator()(asio::error_code ec, nd_connector_handle_t handle,
+                  std::span<const std::byte> pd) {
+    ConnectorType conn(*io_ctx_);
+    if (!ec) {
+      asio::error_code aec;
+      conn.assign_with_private_data(std::move(handle), pd, aec);
+      if (aec) ec = aec;
+    }
+    std::move(handler_)(ec, std::move(conn));
+  }
+};
+
+template <typename Handler, typename ConnectorType>
+struct nd_get_connection_fill_adapter {
+  Handler handler_;
+  ConnectorType* conn_;
+
+  void operator()(asio::error_code ec, nd_connector_handle_t handle,
+                  std::span<const std::byte> pd) {
+    if (!ec) {
+      asio::error_code aec;
+      conn_->assign_with_private_data(std::move(handle), pd, aec);
+      if (aec) ec = aec;
+    }
+    std::move(handler_)(ec);
+  }
+};
+
+}  // namespace asio::rdma::detail
+
+namespace asio {
+
+template <template <typename, typename> class Associator, typename Handler,
+          typename ConnectorType, typename Default>
+struct associator<
+    Associator,
+    asio::rdma::detail::nd_get_connection_adapter<Handler, ConnectorType>,
+    Default> : Associator<Handler, Default> {
+  static typename Associator<Handler, Default>::type get(
+      asio::rdma::detail::nd_get_connection_adapter<Handler, ConnectorType> const&
+          a) noexcept {
+    return Associator<Handler, Default>::get(a.handler_);
+  }
+  static auto get(
+      asio::rdma::detail::nd_get_connection_adapter<Handler, ConnectorType> const&
+          a,
+      Default const& d) noexcept
+      -> decltype(Associator<Handler, Default>::get(a.handler_, d)) {
+    return Associator<Handler, Default>::get(a.handler_, d);
+  }
+};
+
+template <template <typename, typename> class Associator, typename Handler,
+          typename ConnectorType, typename Default>
+struct associator<
+    Associator,
+    asio::rdma::detail::nd_get_connection_fill_adapter<Handler, ConnectorType>,
+    Default> : Associator<Handler, Default> {
+  static typename Associator<Handler, Default>::type get(
+      asio::rdma::detail::nd_get_connection_fill_adapter<
+          Handler, ConnectorType> const& a) noexcept {
+    return Associator<Handler, Default>::get(a.handler_);
+  }
+  static auto get(
+      asio::rdma::detail::nd_get_connection_fill_adapter<
+          Handler, ConnectorType> const& a,
+      Default const& d) noexcept
+      -> decltype(Associator<Handler, Default>::get(a.handler_, d)) {
+    return Associator<Handler, Default>::get(a.handler_, d);
+  }
+};
+
+}  // namespace asio
+
 namespace asio::rdma {
 
 // Control-plane listener over NetworkDirect. Mirrors ibv_listener / asio's
 // acceptor:
-//   - open(port_space) / bind(endpoint) / listen(backlog)
+//   - open(port_space) / bind(port) / listen(backlog)
 //   - async_get_connection()        -> a new connector (peer connection)
 //   - async_get_connection(conn)    -> fill a pre-built connector
 template <typename PortSpace>
@@ -43,14 +131,14 @@ public:
     impl_.get_service().open(impl_.get_implementation(), ps, ec);
   }
 
-  void bind(endpoint_type const& endpoint) {
+  void bind(asio::ip::port_type port) {
     asio::error_code ec;
-    bind(endpoint, ec);
+    bind(port, ec);
     asio::detail::throw_error(ec);
   }
 
-  void bind(endpoint_type const& endpoint, asio::error_code& ec) {
-    impl_.get_service().bind(impl_.get_implementation(), endpoint, ec);
+  void bind(asio::ip::port_type port, asio::error_code& ec) {
+    impl_.get_service().bind(impl_.get_implementation(), port, ec);
   }
 
   void listen(int backlog = 128) {
@@ -79,20 +167,9 @@ public:
                                 void(asio::error_code, connector_type)>(
         [this](auto handler) {
           auto io_ex = impl_.get_executor();
-          auto& io_ctx = io_ex.context();
-          // Bind the wrapper to a named local -- the service takes Handler& and
-          // moves it; a temporary won't bind (the same bug fixed on ibv).
-          auto wrapper = [&io_ctx, h = std::move(handler)](
-                             asio::error_code ec, native_connector_type handle,
-                             std::span<const std::byte> pd) mutable {
-            connector_type conn(io_ctx);
-            if (!ec) {
-              asio::error_code aec;
-              conn.assign_with_private_data(std::move(handle), pd, aec);
-              if (aec) ec = aec;
-            }
-            std::move(h)(ec, std::move(conn));
-          };
+          detail::nd_get_connection_adapter<std::decay_t<decltype(handler)>,
+                                            connector_type>
+              wrapper{std::move(handler), &io_ex.context()};
           impl_.get_service().async_get_connection_request(
               impl_.get_implementation(), wrapper, io_ex);
         },
@@ -106,16 +183,9 @@ public:
     return asio::async_initiate<AcceptToken, void(asio::error_code)>(
         [this, &conn](auto handler) {
           auto io_ex = impl_.get_executor();
-          auto wrapper = [&conn, h = std::move(handler)](
-                             asio::error_code ec, native_connector_type handle,
-                             std::span<const std::byte> pd) mutable {
-            if (!ec) {
-              asio::error_code aec;
-              conn.assign_with_private_data(std::move(handle), pd, aec);
-              if (aec) ec = aec;
-            }
-            std::move(h)(ec);
-          };
+          detail::nd_get_connection_fill_adapter<
+              std::decay_t<decltype(handler)>, connector_type>
+              wrapper{std::move(handler), &conn};
           impl_.get_service().async_get_connection_request(
               impl_.get_implementation(), wrapper, io_ex);
         },

@@ -1,22 +1,18 @@
-// Functional test for connector::async_wait_disconnect (on_disconnect) + the
-// synchronous connector::disconnect(). Single process: a server and a client
-// coroutine share one io_context and connect over the local RoCE device. The
-// client disconnect()s; we assert the server's async_wait_disconnect fires with
-// ibv_errc::ext_disconnected, and that arming it again afterwards completes
-// immediately (level-triggered).
+// Functional test for connector::async_wait_disconnect on NetworkDirect.
 //
-// Usage: test_ibv_wait_disconnect <roce-ip> [port]
-// (Needs a working RDMA device + an IP bound to it; skips if no arg given.)
+// Usage: test_nd_wait_disconnect <nd-ip> [port]
+// Skips when no IP is provided because it needs a working ND-capable address.
 #include <chrono>
+#include <cstdint>
 #include <iostream>
 #include <string>
 
+#include "asio/as_tuple.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
-#include "asio/as_tuple.hpp"
 #include "asio/use_awaitable.hpp"
 
 #include "rdma/rdma.hpp"
@@ -27,83 +23,104 @@ using namespace std::chrono_literals;
 
 constexpr auto nothrow = asio::as_tuple(asio::use_awaitable);
 
+void print_error(char const* prefix, asio::error_code const& ec) {
+  std::cerr << prefix << ec.message() << " (value=0x" << std::hex
+            << static_cast<unsigned>(ec.value()) << std::dec
+            << ", category=" << ec.category().name() << ")\n";
+}
+
 struct result_t {
   bool established = false;
   asio::error_code watcher_ec{};
+  asio::error_code client_ec{};
+  asio::error_code server_ec{};
   bool watcher_fired = false;
   bool level_trigger_ok = false;
+  bool client_done = false;
+  bool timed_out = false;
+  std::string phase = "starting";
 };
 
 asio::awaitable<void> run_server(asio::io_context& io,
                                  rdma::rdma_device_ptr const& device,
                                  uint16_t port, result_t& out) {
   rdma::rdma_listener<tcp> listener(io);
+  out.phase = "server.open";
   listener.open(tcp::v4());
+  out.phase = "server.bind";
   listener.bind(port);
+  out.phase = "server.listen";
   listener.listen();
 
+  out.phase = "server.get_connection";
   auto [ec_get, conn] = co_await listener.async_get_connection(nothrow);
   if (ec_get) {
-    std::cerr << "[server] get_connection: " << ec_get.message() << "\n";
+    out.server_ec = ec_get;
+    print_error("[server] get_connection: ", ec_get);
     io.stop();
     co_return;
   }
+
   rdma::rdma_queue_pair qp(io);
   std::string reply = "srv";
+  out.phase = "server.accept";
   auto [ec_acc] = co_await conn.async_accept(qp, asio::buffer(reply), nothrow);
   if (ec_acc) {
-    std::cerr << "[server] accept: " << ec_acc.message() << "\n";
+    out.server_ec = ec_acc;
+    print_error("[server] accept: ", ec_acc);
     io.stop();
     co_return;
   }
-  out.established = true;
-  std::cout << "[server] accepted; arming async_wait_disconnect\n";
 
-  // Block until the peer disconnects (on_disconnect).
+  out.established = true;
+  out.phase = "server.wait_disconnect";
   auto [wec] = co_await conn.async_wait_disconnect(nothrow);
   out.watcher_ec = wec;
   out.watcher_fired = true;
-  std::cout << "[server] wait_disconnect fired: " << wec.message() << "\n";
 
-  // Level-trigger: connection already torn down -> arming again completes now.
+  out.phase = "server.wait_disconnect_level_trigger";
   auto [wec2] = co_await conn.async_wait_disconnect(nothrow);
-  out.level_trigger_ok = (wec2 == rdma::ibv_errc::ext_disconnected);
-  std::cout << "[server] level-trigger re-arm: " << wec2.message() << "\n";
-
+  out.level_trigger_ok = (wec2 == rdma::nd_errc::ext_disconnected);
+  out.phase = "done";
   io.stop();
 }
 
 asio::awaitable<void> run_client(asio::io_context& io,
-                                 rdma::rdma_device_ptr const& device,
-                                 std::string host, uint16_t port) {
+                                 std::string host, uint16_t port,
+                                 result_t& out) {
   rdma::rdma_connector<tcp> conn(io);
   conn.open(tcp::v4());
   rdma::rdma_queue_pair qp(io);
+
   tcp::endpoint ep(asio::ip::make_address(host), port);
   std::string req = "cli";
+  out.phase = "client.connect";
   auto [ec] = co_await conn.async_connect(qp, ep, asio::buffer(req), nothrow);
   if (ec) {
-    std::cerr << "[client] connect: " << ec.message() << "\n";
+    out.client_ec = ec;
+    out.client_done = true;
+    print_error("[client] connect: ", ec);
+    io.stop();
     co_return;
   }
-  std::cout << "[client] connected; waiting then disconnecting\n";
-  // Give the server a beat to arm its watcher (not required for correctness --
-  // a queued DISCONNECTED is read when the watcher arms -- but makes the trace
-  // deterministic).
+
   asio::steady_timer t(io);
   t.expires_after(300ms);
+  out.phase = "client.connected_pause";
   co_await t.async_wait(nothrow);
 
-  conn.disconnect();  // synchronous, non-blocking teardown
-  std::cout << "[client] disconnected (sync)\n";
+  out.phase = "client.disconnect";
+  conn.disconnect();
+  out.client_done = true;
 }
 
 int main(int argc, char* argv[]) {
   if (argc < 2) {
-    std::cout << "[SKIP] usage: " << argv[0] << " <roce-ip> [port] "
-              << "(needs a working RDMA device + IP)\n";
+    std::cout << "[SKIP] usage: " << argv[0] << " <nd-ip> [port] "
+              << "(needs a working NetworkDirect device + IP)\n";
     return 0;
   }
+
   std::string host = argv[1];
   uint16_t port = (argc > 2) ? static_cast<uint16_t>(std::stoi(argv[2])) : 5007;
 
@@ -114,24 +131,45 @@ int main(int argc, char* argv[]) {
     rdma::use_device(io, device);
 
     result_t r;
+    asio::steady_timer watchdog(io);
+    watchdog.expires_after(10s);
+    watchdog.async_wait([&](asio::error_code ec) {
+      if (!ec) {
+        r.timed_out = true;
+        std::cerr << "[TIMEOUT] phase=" << r.phase << "\n";
+        io.stop();
+      }
+    });
+
     asio::co_spawn(io, run_server(io, device, port, r), asio::detached);
-    asio::co_spawn(io, run_client(io, device, host, port), asio::detached);
+    asio::co_spawn(io, run_client(io, host, port, r), asio::detached);
     io.run();
 
-    bool ok = r.established && r.watcher_fired &&
-              r.watcher_ec == rdma::ibv_errc::ext_disconnected &&
-              r.level_trigger_ok;
+    bool const ok = r.established && r.watcher_fired &&
+                    r.watcher_ec == rdma::nd_errc::ext_disconnected &&
+                    r.level_trigger_ok && !r.timed_out;
     if (ok) {
       std::cout << "[PASS] async_wait_disconnect fired with ext_disconnected; "
                    "level-trigger ok\n";
       return 0;
     }
+
     std::cerr << "[FAIL] established=" << r.established
+              << " client_done=" << r.client_done
               << " watcher_fired=" << r.watcher_fired
               << " ec=" << r.watcher_ec.message()
-              << " level_trigger_ok=" << r.level_trigger_ok << "\n";
+              << " level_trigger_ok=" << r.level_trigger_ok
+              << " timed_out=" << r.timed_out
+              << " phase=" << r.phase << "\n";
+    if (r.client_ec) {
+      print_error("[FAIL] client_ec: ", r.client_ec);
+    }
+    if (r.server_ec) {
+      print_error("[FAIL] server_ec: ", r.server_ec);
+    }
     return 1;
-  } catch (std::exception const& e) {
+  }
+  catch (std::exception const& e) {
     std::cerr << "fatal: " << e.what() << "\n";
     return 1;
   }

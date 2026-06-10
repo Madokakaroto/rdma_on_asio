@@ -129,13 +129,14 @@ public:
     return impl.listener_ != nullptr;
   }
 
-  void bind(implementation_type& impl, endpoint_type const& endpoint,
+  void bind(implementation_type& impl, asio::ip::port_type port,
             asio::error_code& ec) {
     if (!is_open(impl)) {
       ec = nd_errc::ext_invalid_listener;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
+    endpoint_type endpoint{asio::ip::make_address(impl.adapter_->name_), port};
     bind_addr(impl.listener_.Get(), endpoint.data(), endpoint.size(), ec);
     if (ec) {
       ASIO_ERROR_LOCATION(ec);
@@ -204,7 +205,7 @@ public:
 
     this->scheduler_.work_started();
     get_connection_request(impl.listener_.Get(), connector_ptr, p.p, ec);
-    if (ec) {
+    if (ec && ec != nd_errc::pending) {
       this->scheduler_.on_completion(p.p, ec);
     } else {
       arm_nd_cancellation(cancel_slot, impl.listener_handle_.get(), p.p);
