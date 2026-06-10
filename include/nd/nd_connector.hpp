@@ -79,10 +79,6 @@ public:
     return impl_.get_service().get_remote_data(impl_.get_implementation());
   }
 
-  void cancel() {
-    impl_.get_service().cancel(impl_.get_implementation());
-  }
-
   // async connect: Bind + Connect using qp.native_handle(). handler(error_code)
   template <typename ConnectToken>
   auto async_connect(nd_queue_pair& qp, endpoint_type const& endpoint,

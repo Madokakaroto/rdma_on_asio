@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 
 #include "asio/detail/bind_handler.hpp"
@@ -25,14 +26,17 @@ protected:
 
 protected:
   stage_t stage_;
+  std::atomic<connect_state>* state_;
   // Where to store the server's reply private data (after CompleteConnect).
   nd_pd_sink remote_pd_;
 
 public:
-  nd_connect_op_base(IND2Connector* connector, nd_pd_sink remote_pd,
-                     func_type complete_func)
+  nd_connect_op_base(IND2Connector* connector,
+                     std::atomic<connect_state>* state,
+                     nd_pd_sink remote_pd, func_type complete_func)
      : nd_op_base(connector, &nd_connect_op_base::do_process, complete_func)
      , stage_(stage_t::connecting)
+     , state_(state)
      , remote_pd_(remote_pd) {
   }
 
@@ -62,10 +66,22 @@ protected:
     auto const hr = get_connector()->CompleteConnect(this);
     if (hr != ND_SUCCESS && hr != ND_PENDING) {
       ec = static_cast<nd_errc>(hr);
+      if (state_) state_->store(connect_state::closed, std::memory_order_release);
       stage_ = stage_t::error;
       return status_t::completed;
     }
-   stage_ = stage_t::connected;
+    // CAS connecting -> connected; if disconnect() raced to closed, abort.
+    if (state_) {
+      connect_state expected = connect_state::connecting;
+      if (!state_->compare_exchange_strong(
+              expected, connect_state::connected,
+              std::memory_order_acq_rel, std::memory_order_acquire)) {
+        ec = asio::error::operation_aborted;
+        stage_ = stage_t::error;
+        return status_t::completed;
+      }
+    }
+    stage_ = stage_t::connected;
     return status_t::continuation;
   }
 
@@ -96,9 +112,10 @@ private:
   asio::detail::handler_work<Handler, IoExecutor> work_;
 
 public:
-  nd_connect_op(IND2Connector* conncetor, nd_pd_sink remote_pd, Handler& handler,
-                const IoExecutor& io_ex)
-      : nd_connect_op_base(conncetor, remote_pd, &nd_connect_op::do_complete)
+  nd_connect_op(IND2Connector* conncetor, std::atomic<connect_state>* state,
+                nd_pd_sink remote_pd, Handler& handler, const IoExecutor& io_ex)
+      : nd_connect_op_base(conncetor, state, remote_pd,
+                           &nd_connect_op::do_complete)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {}
 
@@ -113,6 +130,10 @@ private:
    auto const complete_status = o->resume_process(owner, ec);
    if (complete_status != status_t::completed) {
      return;
+   }
+
+   if (owner && ec == asio::error::operation_aborted && o->state_) {
+     o->state_->store(connect_state::closed, std::memory_order_release);
    }
 
    ptr p = {asio::detail::addressof(o->handler_), o, o};
@@ -148,15 +169,17 @@ private:
 template <typename Handler, typename IoExecutor>
 class nd_disconnect_op final : public nd_op_base {
 private:
+  std::atomic<connect_state>* state_;
   Handler handler_;
   asio::detail::handler_work<Handler, IoExecutor> work_;
 
 public:
   ASIO_DEFINE_HANDLER_PTR(nd_disconnect_op);
-  nd_disconnect_op(IND2Connector* conncetor, Handler& handler,
-                   const IoExecutor& io_ex)
+  nd_disconnect_op(IND2Connector* conncetor, std::atomic<connect_state>* state,
+                   Handler& handler, const IoExecutor& io_ex)
       : nd_op_base(conncetor, &nd_op_base::default_process,
                    &nd_disconnect_op::do_complete)
+      , state_(state)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {}
 
@@ -167,6 +190,13 @@ private:
    asio::error_code ec = result_ec;
 
    nd_disconnect_op* o = static_cast<nd_disconnect_op*>(base);
+
+   if (owner && !ec && o->state_) {
+     o->state_->store(connect_state::connected, std::memory_order_release);
+   } else if (owner && ec == asio::error::operation_aborted && o->state_) {
+     o->state_->store(connect_state::closed, std::memory_order_release);
+   }
+
    ptr p = {asio::detail::addressof(o->handler_), o, o};
 
    ASIO_HANDLER_COMPLETION((*o));
@@ -224,22 +254,22 @@ private:
 
 // Disconnect-notification watcher (on_disconnect). Issues IND2Connector::
 // NotifyDisconnect; when that overlapped completes (connection disconnected), it
-// sets the connector's disconnected_ flag and upcalls handler(ext_disconnected).
-// Mirrors nd_disconnect_op. [Windows verify] NotifyDisconnect completion semantics.
+// sets the connector's peer_closed_ latch and upcalls handler(ext_disconnected).
 template <typename Handler, typename IoExecutor>
 class nd_wait_disconnect_op final : public nd_op_base {
 private:
-  bool* disconnected_;
+  std::atomic<bool>* peer_closed_;
   Handler handler_;
   asio::detail::handler_work<Handler, IoExecutor> work_;
 
 public:
   ASIO_DEFINE_HANDLER_PTR(nd_wait_disconnect_op);
-  nd_wait_disconnect_op(IND2Connector* connector, bool* disconnected,
+  nd_wait_disconnect_op(IND2Connector* connector,
+                        std::atomic<bool>* peer_closed,
                         Handler& handler, const IoExecutor& io_ex)
       : nd_op_base(connector, &nd_op_base::default_process,
                    &nd_wait_disconnect_op::do_complete)
-      , disconnected_(disconnected)
+      , peer_closed_(peer_closed)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {
   }
@@ -249,11 +279,9 @@ private:
                           const asio::error_code& /*result_ec*/,
                           std::size_t /*bytes_transferred*/) {
     nd_wait_disconnect_op* o = static_cast<nd_wait_disconnect_op*>(base);
-    if (o->disconnected_) {
-      *o->disconnected_ = true;
+    if (o->peer_closed_) {
+      o->peer_closed_->store(true, std::memory_order_release);
     }
-    // NotifyDisconnect completing means the connection is gone: report a single
-    // disconnect code (not mapped to a socket error). See D-D.
     asio::error_code ec = make_error_code(nd_errc::ext_disconnected);
 
     ptr p = {asio::detail::addressof(o->handler_), o, o};

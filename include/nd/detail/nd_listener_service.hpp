@@ -1,5 +1,6 @@
 #pragma once
 
+#include "asio/associated_cancellation_slot.hpp"
 #include "asio/detail/config.hpp"
 #include "asio/detail/handler_alloc_helpers.hpp"
 #include "asio/detail/memory.hpp"
@@ -154,13 +155,15 @@ public:
   }
 
   void cancel(implementation_type& impl) {
-    // TODO: cancel in-flight operations
+    if (impl.listener_handle_)
+      ::CancelIoEx(impl.listener_handle_.get(), NULL);
   }
 
   // async get_connection_request
   template <typename Handler, typename IoExecutor>
   void async_get_connection_request(implementation_type& impl,
                                     Handler& handler, IoExecutor const& io_ex) {
+    auto cancel_slot = asio::get_associated_cancellation_slot(handler);
     using op = nd_get_connection_request_op<Handler, IoExecutor>;
 
     asio::error_code ec;
@@ -204,6 +207,7 @@ public:
     if (ec) {
       this->scheduler_.on_completion(p.p, ec);
     } else {
+      arm_nd_cancellation(cancel_slot, impl.listener_handle_.get(), p.p);
       this->scheduler_.on_pending(p.p);
     }
     p.v = p.p = 0;

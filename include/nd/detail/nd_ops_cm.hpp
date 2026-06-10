@@ -1,5 +1,6 @@
 #pragma once
 
+#include "asio/cancellation_type.hpp"
 #include "nd/nd_types.hpp"
 #include "nd/nd_error.hpp"
 
@@ -119,6 +120,31 @@ inline result_type bind_addr(IND2Listener* listener, sockaddr const* addrin,
   }
   ec = static_cast<nd_errc>(hr);
   return hr;
+}
+
+// Per-op cancellation via CancelIoEx (mirrors ibv's cancel_ops_by_key pattern).
+// Stored in the handler's cancellation_slot; when the slot fires (terminal /
+// partial / total), CancelIoEx aborts the specific OVERLAPPED IO.
+struct nd_cm_op_cancellation {
+  HANDLE handle_;
+  LPOVERLAPPED op_;
+
+  void operator()(asio::cancellation_type_t type) {
+    if (!!(type & (asio::cancellation_type::terminal |
+                   asio::cancellation_type::partial |
+                   asio::cancellation_type::total))) {
+      ::CancelIoEx(handle_, op_);
+    }
+  }
+};
+
+template <typename CancellationSlot>
+void arm_nd_cancellation(CancellationSlot slot, HANDLE handle,
+                         LPOVERLAPPED op) {
+  if (slot.is_connected()) {
+    slot.template emplace<nd_cm_op_cancellation>(
+        nd_cm_op_cancellation{handle, op});
+  }
 }
 
 }
