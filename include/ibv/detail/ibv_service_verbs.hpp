@@ -202,6 +202,19 @@ private:
     return sglist;
   }
 
+  // Reject a buffer sequence whose SGE count exceeds the device's max_sge before
+  // posting -- a clean library error instead of a raw EINVAL from ibv_post_*.
+  // Returns true (and sets ec) when over the limit. (sge_max == 0 means the
+  // effective config was never derived; treat as "no limit".)
+  static bool exceeds_sge_limit(std::size_t sge_count, std::uint32_t sge_max,
+                                asio::error_code& ec) {
+    if (sge_max != 0 && sge_count > sge_max) {
+      ec = make_error_code(ibv_errc::ext_too_many_sge);
+      return true;
+    }
+    return false;
+  }
+
   // Post the work request. Returns true if the op completed *immediately* (empty
   // buffer sequence or a synchronous post failure) and so needs the
   // immediate-completion sink; false if it was posted and will complete via a CQE.
@@ -213,6 +226,9 @@ private:
     }
     auto& sglist = get_sglist();
     buffers2sglist(buffers, sglist);
+    if (exceeds_sge_limit(sglist.size(), impl.config_.max_send_sge_, op->ec_)) {
+      return true;
+    }
     verbs_ops::post_send(impl.qp_, op, sglist.data(), sglist.size(), 0, op->ec_);
     return static_cast<bool>(op->ec_);
   }
@@ -225,6 +241,9 @@ private:
     }
     auto& sglist = get_sglist();
     buffers2sglist(buffers, sglist);
+    if (exceeds_sge_limit(sglist.size(), impl.config_.max_recv_sge_, op->ec_)) {
+      return true;
+    }
     verbs_ops::post_recv(impl.qp_, op, sglist.data(), sglist.size(), op->ec_);
     return static_cast<bool>(op->ec_);
   }
@@ -237,6 +256,9 @@ private:
     }
     auto& sglist = get_sglist();
     buffers2sglist(buffers, sglist);
+    if (exceeds_sge_limit(sglist.size(), impl.config_.max_send_sge_, op->ec_)) {
+      return true;
+    }
     auto const& ra = op->get_remote_addr();
     verbs_ops::post_read(impl.qp_, op, sglist.data(), sglist.size(), ra.addr_,
                          ra.token_, 0, op->ec_);
@@ -251,6 +273,9 @@ private:
     }
     auto& sglist = get_sglist();
     buffers2sglist(buffers, sglist);
+    if (exceeds_sge_limit(sglist.size(), impl.config_.max_send_sge_, op->ec_)) {
+      return true;
+    }
     auto const& ra = op->get_remote_addr();
     verbs_ops::post_write(impl.qp_, op, sglist.data(), sglist.size(), ra.addr_,
                           ra.token_, 0, op->ec_);

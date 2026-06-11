@@ -10,17 +10,18 @@ namespace asio::rdma::detail {
 
 template <mr_adapted_buffer_sequence BufferSequence>
 inline void buffers2sglist(BufferSequence const& bs, ibv_sglist_t& sglist) {
-  auto const begin = buffer_sequence_begin(bs);
+  auto it = buffer_sequence_begin(bs);
   auto const end = buffer_sequence_end(bs);
-  auto const size = std::distance(begin, end);
+  auto const size = std::distance(it, end);
   if (size > 0) {
     sglist.resize(static_cast<std::size_t>(size));
-    for (std::size_t loop = 0; loop < static_cast<std::size_t>(size); ++loop) {
-      auto const buffer = begin + loop;
-      auto& sge = sglist[loop];
-      sge.addr = reinterpret_cast<std::uint64_t>(buffer->addr());
-      sge.length = static_cast<std::uint32_t>(buffer->length());
-      sge.lkey = buffer->local_key();
+    // Forward-iterator traversal (++it), not begin + index: supports any forward
+    // buffer sequence (std::list, asio-style iterators), not just random-access.
+    for (std::size_t i = 0; it != end; ++it, ++i) {
+      auto& sge = sglist[i];
+      sge.addr = reinterpret_cast<std::uint64_t>(it->addr());
+      sge.length = static_cast<std::uint32_t>(it->length());
+      sge.lkey = it->local_key();
     }
   }
 }

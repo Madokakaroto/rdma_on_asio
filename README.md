@@ -157,7 +157,7 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 | `rdma_device_manager_t::instance()` | Process-wide device registry; `get_first_available_device(port_space, config)` → `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints) |
 | `use_device(io, device, config = {})` | Install the per-`io_context` completion service for `device`; sets the operating config. Returns `void`; share one `device` across multiple `io_context`s by calling it on each |
 | `rdma_device_ptr` | Handle to a device (from `get_first_available_device`) |
-| `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` produce send/recv buffers |
+| `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` (or `asio::rdma::buffer(mr[, off, n])`) produce value-semantic `const_buffer` / `mutable_buffer` (`{addr, len, lkey}`); `remote_addr(off, n)` → `{addr, rkey}` to advertise a sub-range to a peer |
 | `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, pd)` / `async_accept(qp, pd)` / `disconnect()` (sync) / `get_remote_data()` |
 | `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(port)` / `listen` / `async_get_connection` → `(ec, connector)` / `cancel()` (abort pending get; listener stays reusable) |
 | `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write`. Binds to a completion mechanism: `rdma_queue_pair(io)` = event-driven; `rdma_queue_pair(cq)` = poll-mode (io_context-free data plane). `bind()` (deferred) / `is_bound()` / `bound_type()` → `completion_mode` |
@@ -167,6 +167,28 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 
 `rdma_connector`/`rdma_listener` are templated on the port space (they carry the endpoint
 type); `rdma_queue_pair` and friends are not (the data plane is port-space-agnostic).
+
+### Scatter/gather
+
+A buffer element (`asio::rdma::const_buffer` / `mutable_buffer`) is value-semantic
+(`{addr, length, lkey}`, cross-platform — not per-backend), so any standard buffer sequence is
+a multi-segment SGL: pass a `std::vector` / `std::array` of them (each segment may come from a
+different MR / lkey).
+
+```cpp
+std::vector<rdma_const_buffer> gather{ mr_a.cslice(0, n1), mr_b.cslice(0, n2) };
+co_await qp.async_send(gather, token);     // one SEND, two SGEs spanning two MRs
+
+std::vector<rdma_mutable_buffer> scatter{ rdma::buffer(mr_r1, 0, n1),
+                                          rdma::buffer(mr_r2, 0, n2) };
+co_await qp.async_recv(scatter, token);    // scatter the recv across two MRs
+```
+
+A single buffer is a 1-element sequence, so the plain `qp.async_send(mr.cslice(...))` spelling is
+unchanged. Posting more segments than the device's `max_send_sge` / `max_recv_sge` is rejected
+before it reaches the HCA with `rdma_errc::ext_too_many_sge` (a clean library error, not a raw
+HW failure). The local SGE only ever uses `lkey`; for RDMA read/write the **remote** target is a
+separate `rdma_remote_addr_t` carrying the peer's `rkey` (from its `mr.remote_addr(off, n)`).
 
 ## Requirements
 

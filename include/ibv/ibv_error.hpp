@@ -30,6 +30,9 @@
 #ifndef IBVEXT_CONNECTOR_TERMINAL
 #define IBVEXT_CONNECTOR_TERMINAL -7
 #endif
+#ifndef IBVEXT_TOO_MANY_SGE
+#define IBVEXT_TOO_MANY_SGE -8
+#endif
 
 namespace asio::rdma {
 
@@ -49,6 +52,10 @@ enum class ibv_errc : int {
   // left connect_state_ == closed. async_connect early-exits with this instead of
   // touching the stranded cm_id; the user must create a fresh connector.
   ext_connector_terminal   = IBVEXT_CONNECTOR_TERMINAL,
+  // A send/recv/read/write buffer sequence produced more SGEs than the device's
+  // max_send_sge / max_recv_sge. Rejected before posting (clean error, not a raw
+  // HW EINVAL from ibv_post_*). See sgl_buffer_plan Q-C.
+  ext_too_many_sge         = IBVEXT_TOO_MANY_SGE,
 };
 
 class ibv_error_category : public std::error_category {
@@ -71,6 +78,8 @@ class ibv_error_category : public std::error_category {
         return "IBV_EXT local RDMA device removed";
       case IBVEXT_CONNECTOR_TERMINAL:
         return "IBV_EXT connector is terminal (disconnected/failed); create a new connector";
+      case IBVEXT_TOO_MANY_SGE:
+        return "IBV_EXT scatter/gather list exceeds device max_sge";
       default:
         return "UNKNOWN_IBV_ERROR";
     }

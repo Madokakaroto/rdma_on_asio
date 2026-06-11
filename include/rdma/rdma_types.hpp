@@ -39,6 +39,7 @@ using rdma_memory_region = nd_memory_region;
 using rdma_device = nd_device_t;
 using rdma_device_ptr = nd_device_ptr;
 using rdma_device_manager_t = nd_device_manager_t;
+using rdma_errc = nd_errc;
 
 #elif defined(ASIO_RDMA_BACKEND_VERBS)
 
@@ -53,6 +54,7 @@ using rdma_memory_region = ibv_memory_region;
 using rdma_device = ibv_device_t;
 using rdma_device_ptr = ibv_device_ptr;
 using rdma_device_manager_t = ibv_device_manager_t;
+using rdma_errc = ibv_errc;
 
 #endif
 

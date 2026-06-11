@@ -48,6 +48,9 @@
 #ifndef NDEXT_CONNECTOR_TERMINAL
 #define NDEXT_CONNECTOR_TERMINAL -14
 #endif
+#ifndef NDEXT_TOO_MANY_SGE
+#define NDEXT_TOO_MANY_SGE -15
+#endif
 
 
 
@@ -119,6 +122,10 @@ enum class nd_errc : int {
   // stranded connector; the user must create a fresh one. Mirrors
   // ibv_errc::ext_connector_terminal.
   ext_connector_terminal = NDEXT_CONNECTOR_TERMINAL,
+  // A send/recv/read/write buffer sequence produced more SGEs than the device's
+  // max_send_sge / max_recv_sge. Rejected before posting (clean error). Mirrors
+  // ibv_errc::ext_too_many_sge. See sgl_buffer_plan Q-C.
+  ext_too_many_sge = NDEXT_TOO_MANY_SGE,
 };
 
 class nd_error_category : public std::error_category {
@@ -245,6 +252,8 @@ public:
         return "ND_EXT connection disconnected";
       case NDEXT_CONNECTOR_TERMINAL:
         return "ND_EXT connector is terminal (disconnected/failed); create a new connector";
+      case NDEXT_TOO_MANY_SGE:
+        return "ND_EXT scatter/gather list exceeds device max_sge";
       default:
         return "UNKNOWN_ND_ERROR";
     }
