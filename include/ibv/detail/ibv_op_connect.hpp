@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -43,25 +44,32 @@ protected:
   std::atomic<connect_state>* state_;  // points at the connector's connect_state_
   native_cm_id_t* cm_id_;
   int timeout_;
-  // Outgoing private data must stay valid for the op's lifetime (caller's
-  // responsibility, as in nd). rdma_connect copies it out of conn_param.
-  void const* private_data_;
-  std::uint8_t private_data_len_;
+  // Outgoing request private data, COPIED into the op at construction (the caller
+  // need not keep its buffer alive: rdma_connect is issued asynchronously after
+  // ADDR/ROUTE resolve). Capped at max_outgoing_private_data; the service rejects
+  // oversize (ext_private_data_too_large) before arming, so the copy never truncates
+  // a value the caller expected to go out whole.
+  std::array<std::byte, max_outgoing_private_data> request_buf_{};
+  std::uint8_t request_len_;
+  // Incoming reply (server's accept private_data) -> the caller's mutable buffer,
+  // filled on ESTABLISHED. reply_len_ (bytes written = min(rdma_cm-reported, cap))
+  // is reported through the completion handler.
+  void* reply_buf_;
+  std::size_t reply_cap_;
+  std::size_t reply_len_ = 0;
   // RDMA read/atomic negotiation, sourced from the effective config.
   std::uint8_t responder_resources_;
   std::uint8_t initiator_depth_;
   // Creates the QP on cm_id once it has a context (after ADDR_RESOLVED).
   ibv_create_qp_fn create_qp_;
-  // Where to store the server's reply private data (from ESTABLISHED).
-  ibv_pd_sink remote_pd_;
 
   ibv_connect_op_base(asio::error_code const& success_ec, native_cm_id_t* cm_id,
                       std::atomic<connect_state>* state, int timeout,
-                      void const* private_data, std::size_t private_data_len,
+                      void const* request, std::size_t request_len,
+                      void* reply_buf, std::size_t reply_cap,
                       std::uint8_t responder_resources,
                       std::uint8_t initiator_depth,
-                      ibv_create_qp_fn create_qp, ibv_pd_sink remote_pd,
-                      func_type complete_func)
+                      ibv_create_qp_fn create_qp, func_type complete_func)
       // cm_id may be null if auto-open failed; that path posts an immediate
       // completion (do_perform is never called), so a null channel is fine.
       : ibv_op_cm(success_ec, cm_id ? cm_id->channel : nullptr, &do_perform,
@@ -70,12 +78,16 @@ protected:
       , state_(state)
       , cm_id_(cm_id)
       , timeout_(timeout)
-      , private_data_(private_data)
-      , private_data_len_(static_cast<std::uint8_t>(private_data_len))
+      , request_len_(static_cast<std::uint8_t>(
+            (std::min)(request_len, max_outgoing_private_data)))
+      , reply_buf_(reply_buf)
+      , reply_cap_(reply_cap)
       , responder_resources_(responder_resources)
       , initiator_depth_(initiator_depth)
-      , create_qp_(std::move(create_qp))
-      , remote_pd_(remote_pd) {
+      , create_qp_(std::move(create_qp)) {
+    if (request_len_) {
+      std::memcpy(request_buf_.data(), request, request_len_);
+    }
   }
 
 private:
@@ -186,8 +198,8 @@ private:
           return aborted_by_disconnect();  // disconnect won: do not connect
         }
         rdma_conn_param param{};
-        param.private_data = private_data_;
-        param.private_data_len = private_data_len_;
+        param.private_data = request_len_ ? request_buf_.data() : nullptr;
+        param.private_data_len = request_len_;
         param.responder_resources = responder_resources_;
         param.initiator_depth = initiator_depth_;
         param.retry_count = 7;
@@ -219,15 +231,14 @@ private:
         if (state_->compare_exchange_strong(e, connect_state::connected,
                                             std::memory_order_acq_rel,
                                             std::memory_order_acquire)) {
-          // We won: normal establishment. Capture the server's reply pd.
+          // We won: normal establishment. Copy the server's reply pd into the
+          // caller's reply buffer; reply_len_ is reported via the completion.
           auto const& cp = event->param.conn;
-          if (remote_pd_.buf && remote_pd_.len && cp.private_data &&
-              cp.private_data_len) {
-            std::size_t n =
+          if (reply_buf_ && reply_cap_ && cp.private_data && cp.private_data_len) {
+            reply_len_ =
                 (std::min)(static_cast<std::size_t>(cp.private_data_len),
-                           remote_pd_.cap);
-            std::memcpy(remote_pd_.buf, cp.private_data, n);
-            *remote_pd_.len = n;
+                           reply_cap_);
+            std::memcpy(reply_buf_, cp.private_data, reply_len_);
           }
           this->ec_ = asio::error_code{};
         }
@@ -273,14 +284,14 @@ private:
 public:
   ibv_connect_op(asio::error_code const& success_ec, native_cm_id_t* cm_id,
                  std::atomic<connect_state>* state, int timeout,
-                 void const* private_data, std::size_t private_data_len,
-                 std::uint8_t responder_resources, std::uint8_t initiator_depth,
-                 ibv_create_qp_fn create_qp, ibv_pd_sink remote_pd,
+                 void const* request, std::size_t request_len, void* reply_buf,
+                 std::size_t reply_cap, std::uint8_t responder_resources,
+                 std::uint8_t initiator_depth, ibv_create_qp_fn create_qp,
                  Handler& handler, IoExecutor const& io_ex)
-      : ibv_connect_op_base(success_ec, cm_id, state, timeout, private_data,
-                            private_data_len, responder_resources,
-                            initiator_depth, std::move(create_qp), remote_pd,
-                            &ibv_connect_op::do_complete)
+      : ibv_connect_op_base(success_ec, cm_id, state, timeout, request,
+                            request_len, reply_buf, reply_cap,
+                            responder_resources, initiator_depth,
+                            std::move(create_qp), &ibv_connect_op::do_complete)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {
   }
@@ -308,14 +319,14 @@ private:
 
     ASIO_ERROR_LOCATION(o->ec_);
 
-    asio::detail::binder1<Handler, asio::error_code> handler(o->handler_,
-                                                             o->ec_);
+    asio::detail::binder2<Handler, asio::error_code, std::size_t> handler(
+        o->handler_, o->ec_, o->reply_len_);
     p.h = asio::detail::addressof(handler.handler_);
     p.reset();
 
     if (owner) {
       asio::detail::fenced_block b(asio::detail::fenced_block::half);
-      ASIO_HANDLER_INVOCATION_BEGIN((handler.arg1_));
+      ASIO_HANDLER_INVOCATION_BEGIN((handler.arg1_, handler.arg2_));
       w.complete(handler, handler.handler_);
       ASIO_HANDLER_INVOCATION_END;
     }

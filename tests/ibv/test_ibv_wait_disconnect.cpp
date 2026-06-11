@@ -42,7 +42,8 @@ asio::awaitable<void> run_server(asio::io_context& io,
   listener.bind(port);
   listener.listen();
 
-  auto [ec_get, conn] = co_await listener.async_get_connection(nothrow);
+  auto [ec_get, conn, rqn] =
+      co_await listener.async_get_connection(asio::mutable_buffer{}, nothrow);
   if (ec_get) {
     std::cerr << "[server] get_connection: " << ec_get.message() << "\n";
     io.stop();
@@ -81,7 +82,8 @@ asio::awaitable<void> run_client(asio::io_context& io,
   rdma::rdma_queue_pair qp(io);
   tcp::endpoint ep(asio::ip::make_address(host), port);
   std::string req = "cli";
-  auto [ec] = co_await conn.async_connect(qp, ep, asio::buffer(req), nothrow);
+  auto [ec, rpn] = co_await conn.async_connect(qp, ep, asio::buffer(req),
+                                               asio::mutable_buffer{}, nothrow);
   if (ec) {
     std::cerr << "[client] connect: " << ec.message() << "\n";
     co_return;

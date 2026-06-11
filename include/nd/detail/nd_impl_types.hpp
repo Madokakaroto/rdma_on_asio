@@ -162,6 +162,10 @@ struct nd_connector_handle_t {
 // Upper bound for copied CM private data (mirrors ibv_impl_types.hpp).
 inline constexpr std::size_t max_private_data_size = 256;
 
+// Cap for OUTGOING connect/accept private_data (mirrors ibv: unified at 255).
+// Oversize is rejected at initiation (ext_private_data_too_large).
+inline constexpr std::size_t max_outgoing_private_data = 255;
+
 // Connection lifecycle for the nd connector. Per-platform by design: ND's
 // IND2Connector::Connect hides address/route resolution inside the provider, so
 // nd has NONE of ibv's resolve stages -- this enum is intentionally smaller than

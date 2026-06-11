@@ -47,7 +47,8 @@ constexpr auto nothrow = asio::as_tuple(asio::use_awaitable);
 asio::awaitable<void> server_echo_once(asio::io_context& io,
                                        rdma::rdma_device_ptr device,
                                        rdma::rdma_listener<tcp>& lis) {
-  auto [ecg, conn] = co_await lis.async_get_connection(nothrow);
+  auto [ecg, conn, rqn] =
+      co_await lis.async_get_connection(asio::mutable_buffer{}, nothrow);
   if (ecg) co_return;
   rdma::rdma_queue_pair qp(io);
   std::string srv_pd = "s";
@@ -94,8 +95,8 @@ bool phase_gather_scatter(rdma::rdma_device_ptr const& device,
         rdma::rdma_queue_pair qp(io);
         tcp::endpoint ep(asio::ip::make_address(ip), port);
         std::string cli_pd = "c";
-        auto [ecc] =
-            co_await conn.async_connect(qp, ep, asio::buffer(cli_pd), nothrow);
+        auto [ecc, rpn] = co_await conn.async_connect(
+            qp, ep, asio::buffer(cli_pd), asio::mutable_buffer{}, nothrow);
         if (ecc) co_return;
 
         // Two SOURCE MRs; the payload is gathered from a segment of each.
@@ -183,8 +184,8 @@ bool phase_too_many_sge(rdma::rdma_device_ptr const& device,
         rdma::rdma_queue_pair qp(io);
         tcp::endpoint ep(asio::ip::make_address(ip), port);
         std::string cli_pd = "c";
-        auto [ecc] =
-            co_await conn.async_connect(qp, ep, asio::buffer(cli_pd), nothrow);
+        auto [ecc, rpn] = co_await conn.async_connect(
+            qp, ep, asio::buffer(cli_pd), asio::mutable_buffer{}, nothrow);
         if (ecc) co_return;
 
         std::array<char, 64> buf{};

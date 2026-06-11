@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cstring>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -23,16 +25,20 @@ template <typename Handler, typename ConnectorType>
 struct get_connection_adapter {
   Handler handler_;
   asio::io_context* io_ctx_;
+  asio::mutable_buffer request_;  // caller's buffer for the client's request pd
 
   void operator()(asio::error_code ec, ibv_connector_handle_t handle,
                   std::span<const std::byte> pd) {
     ConnectorType conn(*io_ctx_);
+    std::size_t n = 0;
     if (!ec) {
+      n = (std::min)(pd.size(), request_.size());
+      if (n) std::memcpy(request_.data(), pd.data(), n);
       asio::error_code aec;
-      conn.assign_with_private_data(std::move(handle), pd, aec);
+      conn.assign(std::move(handle), aec);
       if (aec) ec = aec;
     }
-    std::move(handler_)(ec, std::move(conn));
+    std::move(handler_)(ec, std::move(conn), n);
   }
 };
 
@@ -40,15 +46,19 @@ template <typename Handler, typename ConnectorType>
 struct get_connection_fill_adapter {
   Handler handler_;
   ConnectorType* conn_;
+  asio::mutable_buffer request_;  // caller's buffer for the client's request pd
 
   void operator()(asio::error_code ec, ibv_connector_handle_t handle,
                   std::span<const std::byte> pd) {
+    std::size_t n = 0;
     if (!ec) {
+      n = (std::min)(pd.size(), request_.size());
+      if (n) std::memcpy(request_.data(), pd.data(), n);
       asio::error_code aec;
-      conn_->assign_with_private_data(std::move(handle), pd, aec);
+      conn_->assign(std::move(handle), aec);
       if (aec) ec = aec;
     }
-    std::move(handler_)(ec);
+    std::move(handler_)(ec, n);
   }
 };
 
@@ -159,33 +169,40 @@ public:
     impl_.get_service().cancel(impl_.get_implementation());
   }
 
-  // Return form: handler(error_code, connector_type). The connector is built on
-  // the listener's io_context with the adopted cm_id + client's private data.
+  // Return form: handler(error_code, connector_type, std::size_t request_len).
+  // The connector is built on the listener's io_context with the adopted cm_id;
+  // the client's request private data is copied into `request` (request_len =
+  // bytes written = min(rdma_cm-reported len, buffer size); transport-padded, NOT
+  // the sender's exact length). `request` must stay valid until completion; pass
+  // {} to ignore the request data.
   template <typename AcceptToken>
-  auto async_get_connection(AcceptToken&& token) {
-    return asio::async_initiate<AcceptToken,
-                                void(asio::error_code, connector_type)>(
-        [this](auto handler) {
+  auto async_get_connection(asio::mutable_buffer request, AcceptToken&& token) {
+    return asio::async_initiate<
+        AcceptToken, void(asio::error_code, connector_type, std::size_t)>(
+        [this, request](auto handler) {
           auto io_ex = impl_.get_executor();
           detail::get_connection_adapter<std::decay_t<decltype(handler)>,
                                          connector_type>
-              adapter{std::move(handler), &io_ex.context()};
+              adapter{std::move(handler), &io_ex.context(), request};
           impl_.get_service().async_get_connection_request(
               impl_.get_implementation(), adapter, io_ex);
         },
         token);
   }
 
-  // Fill form: handler(error_code); assigns the connection into a pre-built
-  // (empty) connector — lets the caller pick its io_context.
+  // Fill form: handler(error_code, std::size_t request_len); assigns the
+  // connection into a pre-built (empty) connector -- lets the caller pick its
+  // io_context. `request` semantics as above.
   template <typename AcceptToken>
-  auto async_get_connection(connector_type& conn, AcceptToken&& token) {
-    return asio::async_initiate<AcceptToken, void(asio::error_code)>(
-        [this, &conn](auto handler) {
+  auto async_get_connection(connector_type& conn, asio::mutable_buffer request,
+                            AcceptToken&& token) {
+    return asio::async_initiate<AcceptToken,
+                                void(asio::error_code, std::size_t)>(
+        [this, &conn, request](auto handler) {
           auto io_ex = impl_.get_executor();
           detail::get_connection_fill_adapter<std::decay_t<decltype(handler)>,
                                               connector_type>
-              adapter{std::move(handler), &conn};
+              adapter{std::move(handler), &conn, request};
           impl_.get_service().async_get_connection_request(
               impl_.get_implementation(), adapter, io_ex);
         },

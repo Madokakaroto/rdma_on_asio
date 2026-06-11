@@ -27,8 +27,11 @@ protected:
 protected:
   stage_t stage_;
   std::atomic<connect_state>* state_;
-  // Where to store the server's reply private data (after CompleteConnect).
+  // Where to store the server's reply private data (after CompleteConnect): the
+  // CALLER's reply buffer (buf/cap). reply_len_ (bytes written) is reported
+  // through the completion handler (mirrors ibv).
   nd_pd_sink remote_pd_;
+  std::size_t reply_len_ = 0;
 
 public:
   nd_connect_op_base(IND2Connector* connector,
@@ -103,7 +106,7 @@ protected:
   }
 
   void capture_remote_pd() {
-    if (!remote_pd_.buf || !remote_pd_.len || remote_pd_.cap == 0) {
+    if (!remote_pd_.buf || remote_pd_.cap == 0) {
       return;
     }
     void const* pd_ptr = nullptr;
@@ -113,7 +116,7 @@ protected:
       std::size_t n = (std::min)(static_cast<std::size_t>(pd_size),
                                  remote_pd_.cap);
       std::memcpy(remote_pd_.buf, pd_ptr, n);
-      *remote_pd_.len = n;
+      reply_len_ = n;
     }
   }
 };
@@ -169,14 +172,15 @@ private:
    // with the handler. Consequently, a local copy of the handler is required
    // to ensure that any owning sub-object remains valid until after we have
    // deallocated the memory here.
-   asio::detail::binder1<Handler, asio::error_code> handler(o->handler_, ec);
+   asio::detail::binder2<Handler, asio::error_code, std::size_t> handler(
+       o->handler_, ec, o->reply_len_);
    p.h = asio::detail::addressof(handler.handler_);
    p.reset();
 
    // Make the upcall if required.
    if (owner) {
      asio::detail::fenced_block b(asio::detail::fenced_block::half);
-     ASIO_HANDLER_INVOCATION_BEGIN((handler.arg1_));
+     ASIO_HANDLER_INVOCATION_BEGIN((handler.arg1_, handler.arg2_));
      w.complete(handler, handler.handler_);
      ASIO_HANDLER_INVOCATION_END;
    }

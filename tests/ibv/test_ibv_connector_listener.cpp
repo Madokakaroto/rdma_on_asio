@@ -82,19 +82,23 @@ void compile_only_async_surface(bool run) {
   asio::const_buffer pd;
   tcp::endpoint ep(asio::ip::address_v4::loopback(), 0);
 
-  connector.async_connect(qp, ep, pd, [](asio::error_code) {});
+  asio::mutable_buffer reply;   // connect: receives the server's reply pd
+  asio::mutable_buffer request;  // get_connection: receives the client's request pd
+  connector.async_connect(qp, ep, pd, reply,
+                          [](asio::error_code, std::size_t) {});
   connector.async_accept(qp, pd, [](asio::error_code) {});
   asio::error_code dec;
   connector.disconnect(dec);  // now synchronous
   connector.async_wait_disconnect([](asio::error_code) {});  // on_disconnect
-  (void)connector.get_remote_data();
 
-  // return form: handler(error_code, connector)
+  // return form: handler(error_code, connector, std::size_t request_len)
   listener.async_get_connection(
-      [](asio::error_code, asio::rdma::ibv_connector<tcp>) {});
-  // fill form: handler(error_code)
+      request,
+      [](asio::error_code, asio::rdma::ibv_connector<tcp>, std::size_t) {});
+  // fill form: handler(error_code, std::size_t request_len)
   asio::rdma::ibv_connector<tcp> peer(io);
-  listener.async_get_connection(peer, [](asio::error_code) {});
+  listener.async_get_connection(peer, request,
+                                [](asio::error_code, std::size_t) {});
 }
 
 int main() {

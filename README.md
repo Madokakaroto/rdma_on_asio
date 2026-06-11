@@ -56,7 +56,10 @@ asio::awaitable<void> client(asio::io_context& io, rdma_device_ptr dev,
 
   std::string hello = "client-hello";
   co_await conn.async_connect(qp, tcp::endpoint(asio::ip::make_address(host), port),
-                              asio::buffer(hello), nothrow); // QP is created during connect
+                              asio::buffer(hello), nothrow); // send request pd; QP created here
+  // (to also receive the server's reply pd, pass a mutable buffer:
+  //  auto [ec, reply_len] = co_await conn.async_connect(qp, ep, asio::buffer(hello),
+  //                                                     asio::buffer(reply), nothrow);)
 
   std::array<char, 4096> buf{};
   rdma_memory_region mr(dev, buf.data(), buf.size());       // register memory
@@ -86,12 +89,13 @@ listener.open(tcp::v4());
 listener.bind(port);
 listener.listen();
 
-auto [ec, conn] = co_await listener.async_get_connection(nothrow);  // -> a connector
-// conn.get_remote_data() is the client's private data
+std::array<char, 256> request{};                                    // receives the client's request pd
+auto [ec, conn, request_len] =
+    co_await listener.async_get_connection(asio::buffer(request), nothrow);  // -> a connector
 
 rdma_queue_pair qp(io);
-std::string reply = "server-hello";
-co_await conn.async_accept(qp, asio::buffer(reply), nothrow);        // QP created during accept
+co_await conn.async_accept(qp, nothrow);                            // QP created during accept (no reply pd)
+// (to send reply pd: co_await conn.async_accept(qp, asio::buffer(reply), nothrow);)
 // ... qp.async_recv / qp.async_send ...
 ```
 
@@ -158,8 +162,8 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 | `use_device(io, device, config = {})` | Install the per-`io_context` completion service for `device`; sets the operating config. Returns `void`; share one `device` across multiple `io_context`s by calling it on each |
 | `rdma_device_ptr` | Handle to a device (from `get_first_available_device`) |
 | `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` (or `asio::rdma::buffer(mr[, off, n])`) produce value-semantic `const_buffer` / `mutable_buffer` (`{addr, len, lkey}`); `remote_addr(off, n)` → `{addr, rkey}` to advertise a sub-range to a peer |
-| `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, pd)` / `async_accept(qp, pd)` / `disconnect()` (sync) / `get_remote_data()` |
-| `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(port)` / `listen` / `async_get_connection` → `(ec, connector)` / `cancel()` (abort pending get; listener stays reusable) |
+| `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, request, reply)` → `(ec, reply_len)` (or no-reply `async_connect(qp, ep, request)` → `(ec)`) / `async_accept(qp, reply)` → `(ec)` (or no-reply `async_accept(qp)`) / `disconnect()` (sync) |
+| `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(port)` / `listen` / `async_get_connection(request)` → `(ec, connector, request_len)` (recv the client's request pd) / `cancel()` (abort pending get; listener stays reusable) |
 | `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write`. Binds to a completion mechanism: `rdma_queue_pair(io)` = event-driven; `rdma_queue_pair(cq)` = poll-mode (io_context-free data plane). `bind()` (deferred) / `is_bound()` / `bound_type()` → `completion_mode` |
 | `rdma_completion_queue` | Standalone poll-mode CQ; `poll()` / `poll_one()` |
 | `tcp` | Port space: `tcp::endpoint`, `tcp::resolver`, and `tcp::{connector,listener}` (the data-plane `queue_pair` is port-space-agnostic — use `rdma_queue_pair`) |
@@ -189,6 +193,32 @@ unchanged. Posting more segments than the device's `max_send_sge` / `max_recv_sg
 before it reaches the HCA with `rdma_errc::ext_too_many_sge` (a clean library error, not a raw
 HW failure). The local SGE only ever uses `lkey`; for RDMA read/write the **remote** target is a
 separate `rdma_remote_addr_t` carrying the peer's `rkey` (from its `mr.remote_addr(off, n)`).
+
+### Private data (connect/accept)
+
+The CM handshake exchanges a small private-data payload each direction. The API is **symmetric**:
+you **send** with a `const_buffer` arg and **receive** into a `mutable_buffer` out-param (filled on
+completion), with a `std::size_t` telling you how many bytes were written:
+
+```cpp
+// client: send request, receive the server's reply
+auto [ec, reply_len] = co_await conn.async_connect(qp, ep, asio::buffer(req),
+                                                   asio::buffer(reply), token);
+// server: receive the client's request, then send a reply
+auto [ec, conn, request_len] = co_await lis.async_get_connection(asio::buffer(req), token);
+co_await conn.async_accept(qp, asio::buffer(reply), token);
+```
+
+Notes:
+- **Don't need the received pd?** Use the convenience overloads: `async_connect(qp, ep, request, token)`
+  (completion `void(ec)`, no `reply_len`) and `async_accept(qp, token)` (send no reply).
+- Each direction is independent — one side may send while the other sends nothing (pass `{}`).
+- **The received length is rdma_cm's transport-padded length, not the sender's exact length**
+  (the receiver gets a fixed zero-filled field). If you need the exact length, frame it yourself
+  (e.g. a length prefix).
+- Outgoing private data is capped at 255 bytes (`rdma_conn_param.private_data_len` is a `uint8_t`);
+  larger is rejected with `rdma_errc::ext_private_data_too_large`. The outgoing buffer need not
+  outlive the call (it is copied at initiation); the receive buffer must stay valid until completion.
 
 ## Requirements
 

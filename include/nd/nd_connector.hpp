@@ -1,12 +1,53 @@
 #pragma once
 
+#include <cstddef>
 #include <span>
+#include <utility>
 
+#include "asio/associator.hpp"
 #include "asio/buffer.hpp"
 #include "asio/detail/io_object_impl.hpp"
 #include "asio/io_context.hpp"
 #include "nd/detail/nd_service_connector.hpp"
 #include "nd/nd_queue_pair.hpp"
+
+namespace asio::rdma::detail {
+
+// Adapts the full async_connect's void(ec, size_t reply_len) completion down to
+// void(ec) for the no-reply convenience overload (drops reply_len). Associator-
+// forwarding so the wrapped handler's cancellation_slot / allocator / executor
+// still reach the underlying connect op. Mirrors ibv.
+template <typename Handler>
+struct nd_connect_drop_reply_adapter {
+  Handler handler_;
+  void operator()(asio::error_code ec, std::size_t /*reply_len*/) {
+    std::move(handler_)(ec);
+  }
+};
+
+}  // namespace asio::rdma::detail
+
+namespace asio {
+
+template <template <typename, typename> class Associator, typename Handler,
+          typename Default>
+struct associator<Associator,
+                  asio::rdma::detail::nd_connect_drop_reply_adapter<Handler>,
+                  Default> : Associator<Handler, Default> {
+  static typename Associator<Handler, Default>::type get(
+      asio::rdma::detail::nd_connect_drop_reply_adapter<Handler> const& a)
+      noexcept {
+    return Associator<Handler, Default>::get(a.handler_);
+  }
+  static auto get(
+      asio::rdma::detail::nd_connect_drop_reply_adapter<Handler> const& a,
+      Default const& d) noexcept
+      -> decltype(Associator<Handler, Default>::get(a.handler_, d)) {
+    return Associator<Handler, Default>::get(a.handler_, d);
+  }
+};
+
+}  // namespace asio
 
 namespace asio::rdma {
 
@@ -66,30 +107,52 @@ public:
 
   void assign(native_connector_type&& handle, asio::error_code& ec) {
     impl_.get_service().assign(impl_.get_implementation(), std::move(handle),
-                               std::span<const std::byte>{}, ec);
+                               ec);
   }
 
   bool is_open() const noexcept {
     return impl_.get_service().is_open(impl_.get_implementation());
   }
 
-  // The peer's private data: the client's request data on the server side, the
-  // server's reply data on the client side (after connect/accept completes).
-  asio::const_buffer get_remote_data() const noexcept {
-    return impl_.get_service().get_remote_data(impl_.get_implementation());
-  }
+  // Private data is exchanged via the connect/accept/get_connection buffers
+  // (request -> async_get_connection's buffer; reply -> async_connect's reply
+  // buffer); there is no separate get_remote_data() accessor. Mirrors ibv.
 
-  // async connect: Bind + Connect using qp.native_handle(). handler(error_code)
+  // async connect: Bind + Connect using qp.native_handle(). Sends
+  // `outgoing_request` (copied; may be {}), receives the server's reply private
+  // data into `incoming_reply` (may be {}). `outgoing_request` need not outlive
+  // the call (copied into the op); `incoming_reply` must stay valid until
+  // completion. handler(error_code, std::size_t reply_len).
   template <typename ConnectToken>
   auto async_connect(nd_queue_pair& qp, endpoint_type const& endpoint,
-                     asio::const_buffer outgoing_private_data,
+                     asio::const_buffer outgoing_request,
+                     asio::mutable_buffer incoming_reply,
                      ConnectToken&& token) {
-    return asio::async_initiate<ConnectToken, void(asio::error_code)>(
-        [this, &qp, &endpoint, outgoing_private_data](auto handler) {
+    return asio::async_initiate<ConnectToken,
+                                void(asio::error_code, std::size_t)>(
+        [this, &qp, &endpoint, outgoing_request, incoming_reply](auto handler) {
           auto io_ex = impl_.get_executor();
           impl_.get_service().async_connect(
               impl_.get_implementation(), qp.native_handle(), endpoint,
-              outgoing_private_data, handler, io_ex);
+              outgoing_request, incoming_reply, handler, io_ex);
+        },
+        token);
+  }
+
+  // Convenience: connect without receiving the server's reply private data.
+  // Completion is void(error_code) (no reply_len). Mirrors ibv.
+  template <typename ConnectToken>
+  auto async_connect(nd_queue_pair& qp, endpoint_type const& endpoint,
+                     asio::const_buffer outgoing_request,
+                     ConnectToken&& token) {
+    return asio::async_initiate<ConnectToken, void(asio::error_code)>(
+        [this, &qp, &endpoint, outgoing_request](auto handler) {
+          auto io_ex = impl_.get_executor();
+          detail::nd_connect_drop_reply_adapter<std::decay_t<decltype(handler)>>
+              adapter{std::move(handler)};
+          impl_.get_service().async_connect(
+              impl_.get_implementation(), qp.native_handle(), endpoint,
+              outgoing_request, asio::mutable_buffer{}, adapter, io_ex);
         },
         token);
   }
@@ -108,6 +171,13 @@ public:
                                            io_ex);
         },
         token);
+  }
+
+  // Convenience: accept without sending reply private data. handler(error_code)
+  template <typename AcceptToken>
+  auto async_accept(nd_queue_pair& qp, AcceptToken&& token) {
+    return async_accept(qp, asio::const_buffer{},
+                        std::forward<AcceptToken>(token));
   }
 
   // disconnect: synchronous, non-blocking, abrupt teardown (mirrors socket
@@ -136,15 +206,6 @@ public:
                                                     handler, io_ex);
         },
         token);
-  }
-
-  // Internal: assign a handle + the peer's request private data (used by the
-  // listener when delivering a connection). Not part of the user surface.
-  void assign_with_private_data(native_connector_type&& handle,
-                                std::span<const std::byte> remote_pd,
-                                asio::error_code& ec) {
-    impl_.get_service().assign(impl_.get_implementation(), std::move(handle),
-                               remote_pd, ec);
   }
 
 private:

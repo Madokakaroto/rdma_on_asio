@@ -89,7 +89,7 @@ bool phase_a(rdma::rdma_device_ptr const& device, std::string const& ip,
   asio::co_spawn(
       io,
       [&]() -> asio::awaitable<void> {
-        auto [ecg, srv_conn] = co_await listener.async_get_connection(nothrow);
+        auto [ecg, srv_conn, rqn] = co_await listener.async_get_connection(asio::mutable_buffer{}, nothrow);
         if (ecg) co_return;
         got_req.store(true, std::memory_order_release);
         asio::steady_timer park(io);
@@ -100,7 +100,8 @@ bool phase_a(rdma::rdma_device_ptr const& device, std::string const& ip,
 
   std::string req = "x";
   tcp::endpoint ep(asio::ip::make_address(ip), port);
-  conn.async_connect(qp, ep, asio::buffer(req), [&](asio::error_code ec) {
+  conn.async_connect(qp, ep, asio::buffer(req), asio::mutable_buffer{},
+                     [&](asio::error_code ec, std::size_t) {
     cec = ec;
     done.store(true, std::memory_order_release);
   });
@@ -157,7 +158,7 @@ bool phase_b(rdma::rdma_device_ptr const& device, std::string const& ip,
   asio::co_spawn(
       io,
       [&]() -> asio::awaitable<void> {
-        auto [ecg, conn] = co_await listener.async_get_connection(nothrow);
+        auto [ecg, conn, rqn] = co_await listener.async_get_connection(asio::mutable_buffer{}, nothrow);
         if (ecg) co_return;
         rdma::rdma_queue_pair qp_s(io);
         std::string rep = "s";
@@ -173,7 +174,7 @@ bool phase_b(rdma::rdma_device_ptr const& device, std::string const& ip,
       [&]() -> asio::awaitable<void> {
         tcp::endpoint ep(asio::ip::make_address(ip), port);
         std::string req = "c";
-        auto [ecc] = co_await cli.async_connect(qp_c, ep, asio::buffer(req), nothrow);
+        auto [ecc, rpn] = co_await cli.async_connect(qp_c, ep, asio::buffer(req), asio::mutable_buffer{}, nothrow);
         if (ecc) {
           std::cerr << "[client] connect: " << ecc.message() << "\n";
           co_return;
@@ -240,7 +241,7 @@ bool phase_c(rdma::rdma_device_ptr const& device, std::string const& ip,
       io,
       [&]() -> asio::awaitable<void> {
         for (;;) {
-          auto [ecg, conn] = co_await listener.async_get_connection(nothrow);
+          auto [ecg, conn, rqn] = co_await listener.async_get_connection(asio::mutable_buffer{}, nothrow);
           if (ecg) co_return;  // listener cancelled at io.stop()
           asio::co_spawn(
               io,
@@ -280,7 +281,8 @@ bool phase_c(rdma::rdma_device_ptr const& device, std::string const& ip,
 
     slot* sp = s.get();
     std::string req = "c";
-    c->async_connect(*q, ep, asio::buffer(req), [sp](asio::error_code ec) {
+    c->async_connect(*q, ep, asio::buffer(req), asio::mutable_buffer{},
+                     [sp](asio::error_code ec, std::size_t) {
       sp->ec = ec;
       sp->done.store(true, std::memory_order_release);
     });
@@ -347,7 +349,8 @@ bool phase_d(rdma::rdma_device_ptr const& device, std::string const& ip,
   asio::error_code cec;
   tcp::endpoint ep(asio::ip::make_address(ip), port);
   std::string req = "x";
-  conn.async_connect(qp, ep, asio::buffer(req), [&](asio::error_code ec) {
+  conn.async_connect(qp, ep, asio::buffer(req), asio::mutable_buffer{},
+                     [&](asio::error_code ec, std::size_t) {
     cec = ec;
     done.store(true, std::memory_order_release);
   });

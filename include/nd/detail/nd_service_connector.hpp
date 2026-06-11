@@ -44,9 +44,6 @@ public:
     nd2_connector_ptr connector_;
     unique_handle_t connector_handle_;
     nd_adapter_ptr adapter_;
-    // Peer's private data (client request on server; server reply on client).
-    std::array<std::byte, max_private_data_size> private_data_buffer_{};
-    std::size_t private_data_length_ = 0;
     // Teardown/lifecycle state machine (aligned with ibv's connect_state_):
     // idle -> connecting -> connected -> closed. Atomic: disconnect() is
     // MT-safe (callable from any thread) via CAS arbitration.
@@ -96,8 +93,6 @@ public:
     impl.connector_ = std::move(other_impl.connector_);
     impl.connector_handle_ = std::move(other_impl.connector_handle_);
     impl.adapter_ = std::move(other_impl.adapter_);
-    impl.private_data_buffer_ = other_impl.private_data_buffer_;
-    impl.private_data_length_ = other_impl.private_data_length_;
     impl.connect_state_.store(
         other_impl.connect_state_.load(std::memory_order_relaxed),
         std::memory_order_relaxed);
@@ -116,8 +111,6 @@ public:
     impl.connector_ = std::move(other_impl.connector_);
     impl.connector_handle_ = std::move(other_impl.connector_handle_);
     impl.adapter_ = std::move(other_impl.adapter_);
-    impl.private_data_buffer_ = other_impl.private_data_buffer_;
-    impl.private_data_length_ = other_impl.private_data_length_;
     impl.connect_state_.store(
         other_impl.connect_state_.load(std::memory_order_relaxed),
         std::memory_order_relaxed);
@@ -134,10 +127,11 @@ public:
     do_open(impl, ec);
   }
 
-  // assign (server): adopt a connector handle from the listener and store the
-  // client's request private data so remote_private_data() can return it.
+  // assign (server): adopt a connector handle from the listener. The client's
+  // request private data is delivered separately, into the caller's buffer at
+  // async_get_connection (see nd_listener), so it is not stored here. Mirrors ibv.
   void assign(implementation_type& impl, native_connector_type&& handle,
-              std::span<const std::byte> remote_pd, asio::error_code& ec) {
+              asio::error_code& ec) {
     if (impl.connector_) {
       ec = asio::error::already_open;
       ASIO_ERROR_LOCATION(ec);
@@ -160,16 +154,10 @@ public:
     impl.adapter_ = std::move(handle.adapter_);
     impl.connect_state_.store(connect_state::idle, std::memory_order_relaxed);
     impl.peer_closed_.store(false, std::memory_order_relaxed);
-    store_remote_pd(impl, remote_pd);
   }
 
   bool is_open(implementation_type const& impl) const noexcept {
     return impl.connector_ != nullptr;
-  }
-
-  asio::const_buffer get_remote_data(implementation_type const& impl) const {
-    return asio::buffer(impl.private_data_buffer_.data(),
-                        impl.private_data_length_);
   }
 
   // cancel() is intentionally removed from the connector -- disconnect() is the
@@ -181,7 +169,7 @@ public:
   template <typename Handler, typename IoExecutor>
   void async_connect(implementation_type& impl, native_qp_t* qp,
                      endpoint_type const& endpoint,
-                     asio::const_buffer private_data,
+                     asio::const_buffer request, asio::mutable_buffer reply,
                      Handler& handler, IoExecutor const& io_ex) {
     auto cancel_slot = asio::get_associated_cancellation_slot(handler);
     // Auto-open (mirrors asio socket.connect opening with the protocol).
@@ -193,12 +181,21 @@ public:
     using op = nd_connect_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
+    // reply is the caller's mutable buffer, filled with the server's reply pd on
+    // CompleteConnect. The request (below) is copied by ND2 Connect synchronously.
     p.p = new (p.v) op{impl.connector_.Get(), &impl.connect_state_,
-                       pd_sink(impl), handler, io_ex};
+                       reply_sink(reply), handler, io_ex};
 
     if (open_ec) {
       this->scheduler_.work_started();
       this->scheduler_.on_completion(p.p, open_ec);
+      p.v = p.p = 0;
+      return;
+    }
+    if (request.size() > max_outgoing_private_data) {
+      asio::error_code ec = nd_errc::ext_private_data_too_large;
+      this->scheduler_.work_started();
+      this->scheduler_.on_completion(p.p, ec);
       p.v = p.p = 0;
       return;
     }
@@ -221,7 +218,7 @@ public:
       p.v = p.p = 0;
       return;
     }
-    start_connect_op(impl, qp, endpoint, private_data, p.p);
+    start_connect_op(impl, qp, endpoint, request, p.p);
     arm_nd_cancellation(cancel_slot, impl.connector_handle_.get(), p.p);
     p.v = p.p = 0;
   }
@@ -239,6 +236,13 @@ public:
                        io_ex};
     if (!device_registered()) {
       asio::error_code ec = nd_errc::ext_device_not_registered;
+      this->scheduler_.work_started();
+      this->scheduler_.on_completion(p.p, ec);
+      p.v = p.p = 0;
+      return;
+    }
+    if (private_data.size() > max_outgoing_private_data) {
+      asio::error_code ec = nd_errc::ext_private_data_too_large;
       this->scheduler_.work_started();
       this->scheduler_.on_completion(p.p, ec);
       p.v = p.p = 0;
@@ -416,19 +420,11 @@ private:
                                        : nd_config_t{};
   }
 
-  nd_pd_sink pd_sink(implementation_type& impl) {
-    return {impl.private_data_buffer_.data(), impl.private_data_buffer_.size(),
-            &impl.private_data_length_};
-  }
-
-  void store_remote_pd(implementation_type& impl,
-                       std::span<const std::byte> pd) {
-    impl.private_data_length_ =
-        (std::min)(pd.size(), impl.private_data_buffer_.size());
-    if (impl.private_data_length_) {
-      std::memcpy(impl.private_data_buffer_.data(), pd.data(),
-                  impl.private_data_length_);
-    }
+  // Build the reply sink for a connect op from the caller's reply buffer (the
+  // server's reply private data is copied here on CompleteConnect; reply_len is
+  // reported via the completion). len is unused (the op tracks reply_len_ itself).
+  static nd_pd_sink reply_sink(asio::mutable_buffer reply) {
+    return {static_cast<std::byte*>(reply.data()), reply.size(), nullptr};
   }
 
   void start_connect_op(implementation_type& impl, native_qp_t* qp,

@@ -80,8 +80,8 @@ bool phase_pending_connect_abort(rdma::rdma_device_ptr const& device,
   asio::co_spawn(
       io,
       [&]() -> asio::awaitable<void> {
-        auto [ecg, server_conn] =
-            co_await listener.async_get_connection(nothrow);
+        auto [ecg, server_conn, rqn] =
+            co_await listener.async_get_connection(asio::mutable_buffer{}, nothrow);
         if (ecg) {
           co_return;
         }
@@ -94,7 +94,8 @@ bool phase_pending_connect_abort(rdma::rdma_device_ptr const& device,
 
   std::string req = "x";
   tcp::endpoint ep(asio::ip::make_address(ip), port);
-  conn.async_connect(qp, ep, asio::buffer(req), [&](asio::error_code ec) {
+  conn.async_connect(qp, ep, asio::buffer(req), asio::mutable_buffer{},
+                     [&](asio::error_code ec, std::size_t) {
     connect_ec = ec;
     done.store(true, std::memory_order_release);
   });
@@ -149,8 +150,8 @@ bool phase_established_recv_abort(rdma::rdma_device_ptr const& device,
   asio::co_spawn(
       io,
       [&]() -> asio::awaitable<void> {
-        auto [ecg, server_conn] =
-            co_await listener.async_get_connection(nothrow);
+        auto [ecg, server_conn, rqn] =
+            co_await listener.async_get_connection(asio::mutable_buffer{}, nothrow);
         if (ecg) {
           print_error("[server] get_connection: ", ecg);
           co_return;
@@ -173,8 +174,8 @@ bool phase_established_recv_abort(rdma::rdma_device_ptr const& device,
       [&]() -> asio::awaitable<void> {
         tcp::endpoint ep(asio::ip::make_address(ip), port);
         std::string req = "c";
-        auto [ecc] = co_await client.async_connect(
-            client_qp, ep, asio::buffer(req), nothrow);
+        auto [ecc, rpn] = co_await client.async_connect(
+            client_qp, ep, asio::buffer(req), asio::mutable_buffer{}, nothrow);
         if (ecc) {
           print_error("[client] connect: ", ecc);
           co_return;
@@ -235,7 +236,8 @@ bool phase_terminal_reconnect(rdma::rdma_device_ptr const& device,
   arm_watchdog(io, watchdog, "terminal_reconnect", timed_out);
   tcp::endpoint ep(asio::ip::make_address(ip), port);
   std::string req = "x";
-  conn.async_connect(qp, ep, asio::buffer(req), [&](asio::error_code ec) {
+  conn.async_connect(qp, ep, asio::buffer(req), asio::mutable_buffer{},
+                     [&](asio::error_code ec, std::size_t) {
     connect_ec = ec;
     done.store(true, std::memory_order_release);
   });

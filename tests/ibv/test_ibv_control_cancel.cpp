@@ -82,7 +82,7 @@ bool phase_connect(rdma::rdma_device_ptr const& device, std::string const& ip,
   asio::co_spawn(
       io,
       [&]() -> asio::awaitable<void> {
-        auto [ecg, sconn] = co_await lis.async_get_connection(nothrow);
+        auto [ecg, sconn, rqn] = co_await lis.async_get_connection(asio::mutable_buffer{}, nothrow);
         if (ecg) co_return;
         got_req.store(true, std::memory_order_release);
         asio::steady_timer park(io);
@@ -94,9 +94,9 @@ bool phase_connect(rdma::rdma_device_ptr const& device, std::string const& ip,
   asio::cancellation_signal sig;
   tcp::endpoint ep(asio::ip::make_address(ip), port);
   std::string req = "c";
-  cli.async_connect(qp_c, ep, asio::buffer(req),
+  cli.async_connect(qp_c, ep, asio::buffer(req), asio::mutable_buffer{},
                     asio::bind_cancellation_slot(
-                        sig.slot(), [&](asio::error_code ec) {
+                        sig.slot(), [&](asio::error_code ec, std::size_t) {
                           conn_ec = ec;
                           conn_done.store(true, std::memory_order_release);
                         }));
@@ -114,7 +114,8 @@ bool phase_connect(rdma::rdma_device_ptr const& device, std::string const& ip,
   // Connector is now terminal: a reconnect must be rejected up front.
   std::atomic<bool> re_done{false};
   asio::error_code re_ec;
-  cli.async_connect(qp_c, ep, asio::buffer(req), [&](asio::error_code ec) {
+  cli.async_connect(qp_c, ep, asio::buffer(req), asio::mutable_buffer{},
+                    [&](asio::error_code ec, std::size_t) {
     re_ec = ec;
     re_done.store(true, std::memory_order_release);
   });
@@ -162,7 +163,7 @@ bool phase_get_connection(rdma::rdma_device_ptr const& device,
         // cancels it per-op.
         asio::steady_timer t(io);
         t.expires_after(300ms);
-        auto r = co_await (lis.async_get_connection(nothrow) ||
+        auto r = co_await (lis.async_get_connection(asio::mutable_buffer{}, nothrow) ||
                            t.async_wait(nothrow));
         g1_cancelled = (r.index() == 1);  // timer won -> get was cancelled
 
@@ -176,11 +177,11 @@ bool phase_get_connection(rdma::rdma_device_ptr const& device,
               rdma::rdma_queue_pair qp(io);
               tcp::endpoint ep(asio::ip::make_address(ip), port);
               std::string req = "c";
-              co_await cli.async_connect(qp, ep, asio::buffer(req), nothrow);
+              co_await cli.async_connect(qp, ep, asio::buffer(req), asio::mutable_buffer{}, nothrow);
             },
             asio::detached);
 
-        auto [e2, c2] = co_await lis.async_get_connection(nothrow);
+        auto [e2, c2, rqn2] = co_await lis.async_get_connection(asio::mutable_buffer{}, nothrow);
         g2_ok = (!e2);
         io.stop();
       },
@@ -218,7 +219,7 @@ bool phase_wait_disconnect(rdma::rdma_device_ptr const& device,
   asio::co_spawn(
       io,
       [&]() -> asio::awaitable<void> {
-        auto [ecg, conn] = co_await lis.async_get_connection(nothrow);
+        auto [ecg, conn, rqn] = co_await lis.async_get_connection(asio::mutable_buffer{}, nothrow);
         if (ecg) { io.stop(); co_return; }
         rdma::rdma_queue_pair qp_s(io);
         std::string rep = "s";
@@ -242,7 +243,7 @@ bool phase_wait_disconnect(rdma::rdma_device_ptr const& device,
         rdma::rdma_queue_pair qp_c(io);
         tcp::endpoint ep(asio::ip::make_address(ip), port);
         std::string req = "c";
-        auto [ecc] = co_await conn.async_connect(qp_c, ep, asio::buffer(req), nothrow);
+        auto [ecc, rpn] = co_await conn.async_connect(qp_c, ep, asio::buffer(req), asio::mutable_buffer{}, nothrow);
         if (ecc) co_return;
         established = true;
 

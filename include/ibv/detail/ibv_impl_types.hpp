@@ -128,6 +128,11 @@ enum class connect_state : int {
 // Upper bound for copied CM private data (transports cap this well below 256).
 inline constexpr std::size_t max_private_data_size = 256;
 
+// Cap for OUTGOING connect/accept private_data. rdma_conn_param.private_data_len
+// is a uint8_t, so 255 is the hard wire limit; oversize is rejected at
+// initiation (ext_private_data_too_large) rather than silently truncated.
+inline constexpr std::size_t max_outgoing_private_data = 255;
+
 // Where an async op writes the peer's private data (the connector's buffer), so
 // it outlives the op. buf/len point into the connector's implementation_type.
 struct ibv_pd_sink {

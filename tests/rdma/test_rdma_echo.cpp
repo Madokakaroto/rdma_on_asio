@@ -37,14 +37,17 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   listener.bind(port);
   listener.listen();
 
-  // Get the next connection request as a ready-to-accept connector.
-  auto [ec_get, conn] = co_await listener.async_get_connection(use_nothrow);
+  // Get the next connection request as a ready-to-accept connector; the client's
+  // request private data is delivered into req_pd_buf.
+  std::array<char, 256> req_pd_buf{};
+  auto [ec_get, conn, req_pd_len] = co_await listener.async_get_connection(
+      asio::buffer(req_pd_buf), use_nothrow);
   if (ec_get) {
     std::cerr << "[server] get_connection failed: " << ec_get.message() << "\n";
     co_return;
   }
   std::cout << "[server] connection request; client private data: \""
-            << pd_view(conn.get_remote_data()) << "\"\n";
+            << pd_view(asio::buffer(req_pd_buf.data(), req_pd_len)) << "\"\n";
 
   rdma::rdma_queue_pair qp(io_ctx);
   std::string reply_pd = "server-hello";
@@ -95,14 +98,16 @@ asio::awaitable<void> run_client(asio::io_context& io_ctx,
 
   tcp::endpoint endpoint(asio::ip::make_address(host), port);
   std::string req_pd = "client-hello";
-  auto [ec_conn] =
-      co_await conn.async_connect(qp, endpoint, asio::buffer(req_pd), use_nothrow);
+  std::array<char, 256> reply_pd_buf{};
+  auto [ec_conn, reply_pd_len] = co_await conn.async_connect(
+      qp, endpoint, asio::buffer(req_pd), asio::buffer(reply_pd_buf),
+      use_nothrow);
   if (ec_conn) {
     std::cerr << "[client] connect failed: " << ec_conn.message() << "\n";
     co_return;
   }
   std::cout << "[client] connected; server private data: \""
-            << pd_view(conn.get_remote_data()) << "\"\n";
+            << pd_view(asio::buffer(reply_pd_buf.data(), reply_pd_len)) << "\"\n";
 
   std::array<char, kBufSize> raw_buf{};
   rdma::rdma_memory_region mr(device, raw_buf.data(), raw_buf.size());

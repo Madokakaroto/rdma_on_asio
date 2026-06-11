@@ -42,9 +42,6 @@ public:
     cm_channel_holder cm_channel_;
     cm_id_holder cm_id_;
     asio::detail::reactor::per_descriptor_data cm_reactor_data_;
-    // Peer's private data (client request on server; server reply on client).
-    std::array<std::byte, max_private_data_size> private_data_buffer_{};
-    std::size_t private_data_length_ = 0;
     // Teardown arbiter: mirrors the connect/accept op's stage and is the SOLE
     // basis for disconnect()'s decision. Atomic so disconnect() is thread-safe
     // (callable from any thread, no strand). See docs/cancellation_stage1_object.md.
@@ -85,8 +82,6 @@ public:
     base_move_construct(impl, other_impl);
     impl.cm_channel_ = std::move(other_impl.cm_channel_);
     impl.cm_id_ = std::move(other_impl.cm_id_);
-    impl.private_data_buffer_ = other_impl.private_data_buffer_;
-    impl.private_data_length_ = other_impl.private_data_length_;
     impl.connect_state_.store(
         other_impl.connect_state_.load(std::memory_order_relaxed),
         std::memory_order_relaxed);
@@ -106,8 +101,6 @@ public:
     close_for_destruction(impl);
     impl.cm_channel_ = std::move(other_impl.cm_channel_);
     impl.cm_id_ = std::move(other_impl.cm_id_);
-    impl.private_data_buffer_ = other_impl.private_data_buffer_;
-    impl.private_data_length_ = other_impl.private_data_length_;
     impl.connect_state_.store(
         other_impl.connect_state_.load(std::memory_order_relaxed),
         std::memory_order_relaxed);
@@ -155,10 +148,11 @@ public:
     ec.clear();
   }
 
-  // Adopt a connector handle produced by the listener (server). Also store the
-  // client's request private data so get_remote_data() can return it.
+  // Adopt a connector handle produced by the listener (server). The client's
+  // request private data is delivered separately, into the caller's buffer at
+  // async_get_connection (see ibv_listener), so it is not stored here.
   void assign(implementation_type& impl, native_connector_type&& handle,
-              std::span<const std::byte> remote_pd, asio::error_code& ec) {
+              asio::error_code& ec) {
     if (is_open(impl)) {
       ec = make_error_code(ibv_errc::ext_already_registered);
       return;
@@ -176,17 +170,11 @@ public:
     impl.cm_id_ = std::move(handle.cm_id_);
     impl.connect_state_.store(connect_state::idle, std::memory_order_relaxed);
     impl.peer_closed_.store(false, std::memory_order_relaxed);
-    store_remote_pd(impl, remote_pd);
     ec.clear();
   }
 
   bool is_open(implementation_type const& impl) const {
     return impl.cm_id_ != nullptr;
-  }
-
-  asio::const_buffer get_remote_data(implementation_type const& impl) const {
-    return asio::buffer(impl.private_data_buffer_.data(),
-                        impl.private_data_length_);
   }
 
   // NOTE: connector has no public cancel(). Object-level teardown -- including
@@ -199,8 +187,8 @@ public:
   template <typename Handler, typename IoExecutor>
   void async_connect(implementation_type& impl, ibv_create_qp_fn create_qp,
                      endpoint_type const& endpoint,
-                     asio::const_buffer private_data, Handler& handler,
-                     IoExecutor const& io_ex) {
+                     asio::const_buffer request, asio::mutable_buffer reply,
+                     Handler& handler, IoExecutor const& io_ex) {
     // Capture the cancellation slot BEFORE the op ctor moves `handler`.
     auto cancel_slot = asio::get_associated_cancellation_slot(handler);
     // Auto-open (asio socket.connect opens with the endpoint's protocol).
@@ -213,15 +201,23 @@ public:
     using op = ibv_connect_op<Handler, IoExecutor>;
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
+    // request is COPIED into the op (capped at max_outgoing_private_data; the
+    // oversize check below rejects before connecting). reply is the caller's
+    // mutable buffer, filled with the server's reply pd on ESTABLISHED.
     p.p = new (p.v) op{this->success_ec_,         impl.cm_id_.get(),
                        &impl.connect_state_,      cm_timeout(),
-                       private_data.data(),       private_data.size(),
+                       request.data(),            request.size(),
+                       reply.data(),              reply.size(),
                        to_u8(eff.inbound_read_limit_),
                        to_u8(eff.outbound_read_limit_),
-                       std::move(create_qp),      pd_sink(impl),
-                       handler,                   io_ex};
+                       std::move(create_qp),      handler, io_ex};
     if (open_ec) {
       p.p->ec_ = open_ec;
+      this->reactor_.post_immediate_completion(p.p, false);
+    }
+    else if (request.size() > max_outgoing_private_data) {
+      // Reject oversize private data up front (do not silently truncate).
+      p.p->ec_ = make_error_code(ibv_errc::ext_private_data_too_large);
       this->reactor_.post_immediate_completion(p.p, false);
     }
     else if (impl.connect_state_.load(std::memory_order_acquire) !=
@@ -256,6 +252,12 @@ public:
                        handler, io_ex};
     if (!device_registered()) {
       p.p->ec_ = make_error_code(ibv_errc::ext_device_not_registered);
+      this->reactor_.post_immediate_completion(p.p, false);
+      p.v = p.p = 0;
+      return;
+    }
+    if (private_data.size() > max_outgoing_private_data) {
+      p.p->ec_ = make_error_code(ibv_errc::ext_private_data_too_large);
       this->reactor_.post_immediate_completion(p.p, false);
       p.v = p.p = 0;
       return;
@@ -375,18 +377,6 @@ private:
     return static_cast<std::uint8_t>(v > 255u ? 255u : v);
   }
 
-  ibv_pd_sink pd_sink(implementation_type& impl) {
-    return {impl.private_data_buffer_.data(), impl.private_data_buffer_.size(), &impl.private_data_length_};
-  }
-
-  void store_remote_pd(implementation_type& impl,
-                       std::span<const std::byte> pd) {
-    impl.private_data_length_ = (std::min)(pd.size(), impl.private_data_buffer_.size());
-    if (impl.private_data_length_) {
-      std::memcpy(impl.private_data_buffer_.data(), pd.data(), impl.private_data_length_);
-    }
-  }
-
   void start_connect_op(implementation_type& impl,
                         endpoint_type const& endpoint,
                         asio::detail::reactor_op* op) {
@@ -441,7 +431,10 @@ private:
     }
     auto const eff = effective_config();
     rdma_conn_param param{};
-    param.private_data = private_data.data();
+    // Empty reply -> send no private data (nullptr/0); rdma_accept consumes it
+    // synchronously here, so no copy is needed.
+    param.private_data =
+        private_data.size() == 0 ? nullptr : private_data.data();
     param.private_data_len = static_cast<std::uint8_t>(private_data.size());
     param.responder_resources = to_u8(eff.inbound_read_limit_);
     param.initiator_depth = to_u8(eff.outbound_read_limit_);

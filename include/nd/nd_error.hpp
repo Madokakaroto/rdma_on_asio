@@ -51,6 +51,9 @@
 #ifndef NDEXT_TOO_MANY_SGE
 #define NDEXT_TOO_MANY_SGE -15
 #endif
+#ifndef NDEXT_PRIVATE_DATA_TOO_LARGE
+#define NDEXT_PRIVATE_DATA_TOO_LARGE -16
+#endif
 
 
 
@@ -126,6 +129,9 @@ enum class nd_errc : int {
   // max_send_sge / max_recv_sge. Rejected before posting (clean error). Mirrors
   // ibv_errc::ext_too_many_sge. See sgl_buffer_plan Q-C.
   ext_too_many_sge = NDEXT_TOO_MANY_SGE,
+  // Outgoing connect/accept private_data exceeds the CM private-data cap
+  // (max_outgoing_private_data = 255). Mirrors ibv_errc::ext_private_data_too_large.
+  ext_private_data_too_large = NDEXT_PRIVATE_DATA_TOO_LARGE,
 };
 
 class nd_error_category : public std::error_category {
@@ -254,6 +260,8 @@ public:
         return "ND_EXT connector is terminal (disconnected/failed); create a new connector";
       case NDEXT_TOO_MANY_SGE:
         return "ND_EXT scatter/gather list exceeds device max_sge";
+      case NDEXT_PRIVATE_DATA_TOO_LARGE:
+        return "ND_EXT outgoing private_data exceeds the CM cap (255 bytes)";
       default:
         return "UNKNOWN_ND_ERROR";
     }

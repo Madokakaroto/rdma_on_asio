@@ -77,9 +77,12 @@ void run_server(asio::io_context& io_ctx, rdma::ibv_device_ptr const& device,
   rdma::ibv_queue_pair qp(cq);            // poll-mode QP: bound to cq, no io
 
   // --- control plane: get connection (fill form) ---
+  std::array<char, 256> req_pd_buf{};
   asio::error_code get_ec;
-  listener.async_get_connection(conn,
-                                [&](asio::error_code ec) { get_ec = ec; });
+  std::size_t req_pd_len = 0;
+  listener.async_get_connection(
+      conn, asio::buffer(req_pd_buf),
+      [&](asio::error_code ec, std::size_t n) { get_ec = ec; req_pd_len = n; });
   io_ctx.run();
   io_ctx.restart();
   if (get_ec) {
@@ -87,7 +90,7 @@ void run_server(asio::io_context& io_ctx, rdma::ibv_device_ptr const& device,
     return;
   }
   std::cout << "[server] client private data: \""
-            << pd_view(conn.get_remote_data()) << "\"\n";
+            << pd_view(asio::buffer(req_pd_buf.data(), req_pd_len)) << "\"\n";
 
   // --- control plane: accept ---
   asio::error_code accept_ec;
@@ -146,9 +149,12 @@ void run_client(asio::io_context& io_ctx, rdma::ibv_device_ptr const& device,
   // --- control plane: connect ---
   tcp::endpoint endpoint(asio::ip::make_address(host), port);
   std::string req_pd = "client-hello";
+  std::array<char, 256> reply_pd_buf{};
   asio::error_code conn_ec;
-  conn.async_connect(qp, endpoint, asio::buffer(req_pd),
-                     [&](asio::error_code ec) { conn_ec = ec; });
+  std::size_t reply_pd_len = 0;
+  conn.async_connect(
+      qp, endpoint, asio::buffer(req_pd), asio::buffer(reply_pd_buf),
+      [&](asio::error_code ec, std::size_t n) { conn_ec = ec; reply_pd_len = n; });
   io_ctx.run();
   io_ctx.restart();
   if (conn_ec) {
@@ -156,7 +162,7 @@ void run_client(asio::io_context& io_ctx, rdma::ibv_device_ptr const& device,
     return;
   }
   std::cout << "[client] connected; server private data: \""
-            << pd_view(conn.get_remote_data()) << "\"\n";
+            << pd_view(asio::buffer(reply_pd_buf.data(), reply_pd_len)) << "\"\n";
 
   // --- data plane: poll thread + use_future (io_context-free) ---
   std::array<char, kBufSize> raw_buf{};
