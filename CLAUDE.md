@@ -80,7 +80,7 @@ while `rdma_queue_pair`/`rdma_completion_queue`/`rdma_memory_region`/`rdma_devic
 ```
 IO objects:
   nd_queue_pair.hpp       — async_send / async_recv / async_read / async_write; (cq) ctor = io_context-free poll mode
-  nd_connector.hpp        — open(port_space) / assign / async_connect(qp,..) / async_accept(qp,..) / async_disconnect / get_remote_data
+  nd_connector.hpp        — open(port_space) / assign / async_connect(qp,..) / async_accept(qp,..) / async_disconnect
   nd_listener.hpp         — open(port_space) / bind(port) / listen / async_get_connection
   nd_completion_queue.hpp — standalone poll-mode CQ
   nd_mr.hpp               — RAII memory region `nd_memory_region` + const_buffer / mutable_buffer
@@ -104,7 +104,7 @@ Types (detail/):
 ```
 IO objects:
   ibv_queue_pair.hpp       — async_send / async_recv / async_read / async_write; (cq) ctor = io_context-free poll mode
-  ibv_connector.hpp        — open(port_space) / assign / async_connect(qp,..) / async_accept(qp,..) / async_disconnect / get_remote_data
+  ibv_connector.hpp        — open(port_space) / assign / async_connect(qp,..) / async_accept(qp,..) / async_disconnect
   ibv_listener.hpp         — open(port_space) / bind(port) / listen / async_get_connection
   ibv_completion_queue.hpp — standalone poll-mode CQ
   ibv_mr.hpp               — RAII memory region `ibv_memory_region` + const_buffer / mutable_buffer
@@ -134,12 +134,12 @@ Types (detail/):
 | Queue pair state | `is_bound()` → bool (bound to a completion mechanism); `bound_type()` → `completion_mode {none, event, poll}` |
 | Connector open | `connector.open(port_space)` — create the cm_id/connector (client side); requires `use_device` on this io_context |
 | Connector adopt | `connector.assign(native_handle&&)` — adopt a handle from the listener (server side) |
-| Connect | `async_connect(qp, endpoint, private_data, token)` → `void(error_code)` — creates the QP, then connects |
+| Connect | `async_connect(qp, endpoint, request_private_data, reply_buffer, token)` → `void(error_code, size_t reply_len)`; no-reply overload adapts to `void(error_code)` |
 | Accept | `async_accept(qp, private_data, token)` → `void(error_code)` — creates the QP, then accepts |
 | Disconnect | `async_disconnect(token)` → `void(error_code)` |
-| Peer private data | `connector.get_remote_data()` → `const_buffer` (client req on server, server reply on client) |
+| Peer private data | request private data is copied into the caller's `async_get_connection(request_buffer, token)` buffer; reply private data is copied into the caller's `async_connect(..., reply_buffer, token)` buffer |
 | Listener setup | `listener.open(port_space)` / `listener.bind(port)` / `listener.listen(backlog)` (requires `use_device`) |
-| Get connection | `async_get_connection(token)` → `void(ec, connector)`; fill form `async_get_connection(conn, token)` → `void(ec)` |
+| Get connection | `async_get_connection(request_buffer, token)` → `void(ec, connector, size_t request_len)`; fill form `async_get_connection(conn, request_buffer, token)` → `void(ec, size_t request_len)` |
 | Send/Recv | `async_send(buffers, token)` / `async_recv(buffers, token)` → `void(ec, size_t)` |
 | RDMA R/W | `async_read(buffers, remote_addr, token)` / `async_write(...)` |
 

@@ -1,10 +1,6 @@
 #pragma once
 
-#include <algorithm>
-#include <array>
 #include <atomic>
-#include <cstring>
-#include <span>
 
 #include "asio/associated_cancellation_slot.hpp"
 #include "asio/buffer.hpp"
@@ -184,7 +180,7 @@ public:
     // reply is the caller's mutable buffer, filled with the server's reply pd on
     // CompleteConnect. The request (below) is copied by ND2 Connect synchronously.
     p.p = new (p.v) op{impl.connector_.Get(), &impl.connect_state_,
-                       reply_sink(reply), handler, io_ex};
+                       reply, handler, io_ex};
 
     if (open_ec) {
       this->scheduler_.work_started();
@@ -418,13 +414,6 @@ private:
   nd_config_t effective_config() {
     return device_svc_.is_registered() ? device_svc_.get_effective_config()
                                        : nd_config_t{};
-  }
-
-  // Build the reply sink for a connect op from the caller's reply buffer (the
-  // server's reply private data is copied here on CompleteConnect; reply_len is
-  // reported via the completion). len is unused (the op tracks reply_len_ itself).
-  static nd_pd_sink reply_sink(asio::mutable_buffer reply) {
-    return {static_cast<std::byte*>(reply.data()), reply.size(), nullptr};
   }
 
   void start_connect_op(implementation_type& impl, native_qp_t* qp,

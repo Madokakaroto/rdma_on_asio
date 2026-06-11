@@ -2,8 +2,8 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cstring>
 
+#include "asio/buffer.hpp"
 #include "asio/detail/bind_handler.hpp"
 #include "asio/detail/fenced_block.hpp"
 #include "asio/detail/handler_alloc_helpers.hpp"
@@ -27,20 +27,19 @@ protected:
 protected:
   stage_t stage_;
   std::atomic<connect_state>* state_;
-  // Where to store the server's reply private data (after CompleteConnect): the
-  // CALLER's reply buffer (buf/cap). reply_len_ (bytes written) is reported
-  // through the completion handler (mirrors ibv).
-  nd_pd_sink remote_pd_;
+  // Caller-owned reply buffer passed to async_connect. The op only stores the
+  // lightweight Asio buffer view; the caller owns the underlying memory.
+  asio::mutable_buffer reply_;
   std::size_t reply_len_ = 0;
 
 public:
   nd_connect_op_base(IND2Connector* connector,
                      std::atomic<connect_state>* state,
-                     nd_pd_sink remote_pd, func_type complete_func)
+                     asio::mutable_buffer reply, func_type complete_func)
      : nd_op_base(connector, &nd_connect_op_base::do_process, complete_func)
      , stage_(stage_t::connecting)
      , state_(state)
-     , remote_pd_(remote_pd) {
+     , reply_(reply) {
   }
 
 protected:
@@ -57,8 +56,6 @@ protected:
         if (!o->mark_connected(ec)) {
           return status_t::completed;
         }
-        // Capture server's reply private data into the connector's buffer.
-        o->capture_remote_pd();
         o->stage_ = stage_t::done;
         return status_t::completed;
       default:
@@ -69,6 +66,9 @@ protected:
   }
 
   status_t process_complete_connect(void* owner, asio::error_code& ec) {
+    // ND exposes the accept/reject private data after Connect completes and
+    // before CompleteConnect is called.
+    capture_remote_pd();
     this->reset();
     auto const hr = get_connector()->CompleteConnect(this);
     if (FAILED(hr)) {
@@ -86,7 +86,6 @@ protected:
     if (!mark_connected(ec)) {
       return status_t::completed;
     }
-    capture_remote_pd();
     stage_ = stage_t::done;
     return status_t::completed;
   }
@@ -106,17 +105,14 @@ protected:
   }
 
   void capture_remote_pd() {
-    if (!remote_pd_.buf || remote_pd_.cap == 0) {
+    if (!reply_.data() || reply_.size() == 0) {
       return;
     }
-    void const* pd_ptr = nullptr;
-    ULONG pd_size = 0;
-    auto const hr = get_connector()->GetPrivateData(&pd_ptr, &pd_size);
-    if (SUCCEEDED(hr) && pd_ptr && pd_size > 0) {
-      std::size_t n = (std::min)(static_cast<std::size_t>(pd_size),
-                                 remote_pd_.cap);
-      std::memcpy(remote_pd_.buf, pd_ptr, n);
-      reply_len_ = n;
+    ULONG pd_size = static_cast<ULONG>(reply_.size());
+    auto const hr = get_connector()->GetPrivateData(reply_.data(), &pd_size);
+    if (SUCCEEDED(hr) || hr == ND_BUFFER_OVERFLOW) {
+      reply_len_ = (std::min)(static_cast<std::size_t>(pd_size),
+                              reply_.size());
     }
   }
 };
@@ -133,8 +129,9 @@ private:
 
 public:
   nd_connect_op(IND2Connector* conncetor, std::atomic<connect_state>* state,
-                nd_pd_sink remote_pd, Handler& handler, const IoExecutor& io_ex)
-      : nd_connect_op_base(conncetor, state, remote_pd,
+                asio::mutable_buffer reply, Handler& handler,
+                const IoExecutor& io_ex)
+      : nd_connect_op_base(conncetor, state, reply,
                            &nd_connect_op::do_complete)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {}

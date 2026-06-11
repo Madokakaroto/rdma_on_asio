@@ -133,14 +133,6 @@ inline constexpr std::size_t max_private_data_size = 256;
 // initiation (ext_private_data_too_large) rather than silently truncated.
 inline constexpr std::size_t max_outgoing_private_data = 255;
 
-// Where an async op writes the peer's private data (the connector's buffer), so
-// it outlives the op. buf/len point into the connector's implementation_type.
-struct ibv_pd_sink {
-  std::byte* buf = nullptr;
-  std::size_t cap = 0;
-  std::size_t* len = nullptr;
-};
-
 // Scatter-gather list of ibv_sge with small-buffer optimization. SGE counts are
 // small in practice; spill to the heap only beyond the inline capacity.
 class ibv_sglist_t {

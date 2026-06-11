@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include "asio/detail/bind_handler.hpp"
 #include "asio/detail/fenced_block.hpp"
 #include "asio/detail/handler_alloc_helpers.hpp"
@@ -33,6 +35,8 @@ public:
 
 private:
   nd_connector_handle_t connector_handle_;
+  std::array<std::byte, max_private_data_size> private_data_buf_{};
+  std::size_t private_data_len_ = 0;
   Handler handler_;
   asio::detail::handler_work<Handler, IoExecutor> work_;
 
@@ -42,18 +46,21 @@ private:
     asio::error_code ec = result_ec;
     auto* o = static_cast<nd_get_connection_request_op*>(base);
 
-    // Retrieve private data from the connector
-    std::span<const std::byte> private_data;
-    ULONG pd_size = 0;
+    // Retrieve private data from the connector before moving it to the wrapper.
     if (!ec && o->connector_handle_.connector_) {
       auto* connector = o->connector_handle_.connector_.Get();
-      void const* pd_ptr = nullptr;
-      auto const hr = connector->GetPrivateData(&pd_ptr, &pd_size);
-      if (SUCCEEDED(hr) && pd_ptr && pd_size > 0) {
-        private_data = std::span<const std::byte>(
-            static_cast<const std::byte*>(pd_ptr), pd_size);
+      ULONG pd_size = static_cast<ULONG>(o->private_data_buf_.size());
+      auto const hr = connector->GetPrivateData(o->private_data_buf_.data(),
+                                                &pd_size);
+      if (SUCCEEDED(hr) || hr == ND_BUFFER_OVERFLOW) {
+        o->private_data_len_ =
+            (std::min)(static_cast<std::size_t>(pd_size),
+                       o->private_data_buf_.size());
       }
     }
+
+    auto pd_buf = o->private_data_buf_;
+    std::size_t const pd_len = o->private_data_len_;
 
     nd_connector_handle_t connector = std::move(o->connector_handle_);
 
@@ -72,6 +79,7 @@ private:
     p.reset();
 
     if (owner) {
+      std::span<const std::byte> private_data(pd_buf.data(), pd_len);
       asio::detail::fenced_block b(asio::detail::fenced_block::half);
       ASIO_HANDLER_INVOCATION_BEGIN((ec));
       handler(ec, std::move(connector), private_data);

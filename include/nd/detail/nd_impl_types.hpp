@@ -179,15 +179,6 @@ enum class connect_state : int {
   closed,      // disconnected / failed -- terminal, discarded
 };
 
-// Where an async op writes the peer's private data (the connector's buffer), so
-// it outlives the op. buf/len point into the connector's implementation_type.
-struct nd_pd_sink {
-  std::byte* buf = nullptr;
-  std::size_t cap = 0;
-  std::size_t* len = nullptr;
-};
-
-
 }
 
 namespace asio::rdma::detail {
