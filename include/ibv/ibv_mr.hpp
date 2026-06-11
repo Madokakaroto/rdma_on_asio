@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 
+#include "rdma/rdma_buffer.hpp"
 #include "ibv/ibv_device.hpp"
 #include "ibv/ibv_error.hpp"
 #include "ibv/detail/ibv_impl_types.hpp"
@@ -84,6 +85,17 @@ class ibv_memory_region {
   void* addr() noexcept { return addr_; }
   std::size_t length() const noexcept { return length_; }
 
+  // Advertise a sub-range of this MR to the peer (the rkey/remote-access role,
+  // distinct from the local-SGE buffer elements which only carry lkey). The
+  // returned {addr, rkey} is what the peer's RDMA read/write targets.
+  rdma_remote_addr_t remote_addr(std::size_t offset, std::size_t length) const {
+    if (!is_in_mr(offset, length)) {
+      return rdma_remote_addr_t{0, 0};
+    }
+    return rdma_remote_addr_t{
+        reinterpret_cast<std::uint64_t>(addr_) + offset, remote_key()};
+  }
+
  private:
   static detail::unique_ibv_mr_ptr throw_reg_mr(ibv_device_ptr const& device,
                                                 void* addr, std::size_t length,
@@ -100,88 +112,13 @@ class ibv_memory_region {
   }
 
  public:
-  class const_buffer {
-   public:
-    using rdma_buffer_tag = detail::rdma_const_buffer_tag;
-
-   private:
-    ibv_memory_region const& mr_;
-    void const* addr_;
-    std::size_t length_;
-
-   public:
-    explicit const_buffer(ibv_memory_region const& mr)
-        : mr_(mr), addr_(nullptr), length_(0) {}
-    const_buffer(ibv_memory_region const& mr, void const* addr, std::size_t length)
-        : mr_(mr), addr_(addr), length_(length) {}
-    const_buffer(const_buffer const&) = default;
-    const_buffer& operator=(const_buffer const&) = delete;
-
-    void const* addr() const noexcept { return addr_; }
-    std::size_t length() const noexcept { return length_; }
-    ibv_memory_region const& get_mr() const noexcept { return mr_; }
-    std::uint32_t local_key() const { return get_mr().local_key(); }
-    std::uint32_t remote_key() const { return get_mr().remote_key(); }
-
-    friend const_buffer const* buffer_sequence_begin(
-        const_buffer const& one) noexcept {
-      return std::addressof(one);
-    }
-    friend const_buffer const* buffer_sequence_end(
-        const_buffer const& one) noexcept {
-      return std::addressof(one) + 1;
-    }
-  };
-
-  class mutable_buffer {
-   public:
-    using rdma_buffer_tag = detail::rdma_mutable_buffer_tag;
-
-   private:
-    ibv_memory_region const& mr_;
-    void* addr_;
-    std::size_t length_;
-
-   public:
-    explicit mutable_buffer(ibv_memory_region const& mr)
-        : mr_(mr), addr_(nullptr), length_(0) {}
-    mutable_buffer(ibv_memory_region const& mr, void* addr, std::size_t length)
-        : mr_(mr), addr_(addr), length_(length) {}
-    mutable_buffer(mutable_buffer const&) = default;
-    mutable_buffer& operator=(mutable_buffer const&) = delete;
-
-    void* addr() const noexcept { return addr_; }
-    std::size_t length() const noexcept { return length_; }
-    ibv_memory_region const& get_mr() const noexcept { return mr_; }
-    std::uint32_t local_key() const { return get_mr().local_key(); }
-    std::uint32_t remote_key() const { return get_mr().remote_key(); }
-
-    friend mutable_buffer const* buffer_sequence_begin(
-        mutable_buffer const& one) noexcept {
-      return std::addressof(one);
-    }
-    friend mutable_buffer const* buffer_sequence_end(
-        mutable_buffer const& one) noexcept {
-      return std::addressof(one) + 1;
-    }
-  };
-
- public:
+  // slice/cslice return the shared, value-semantic asio::rdma::{mutable,const}_buffer.
   mutable_buffer slice(std::size_t offset, std::size_t length) {
-    if (is_in_mr(offset, length)) {
-      return mutable_buffer{
-          *this, reinterpret_cast<std::uint8_t*>(addr()) + offset, length};
-    }
-    return mutable_buffer{*this};
+    return asio::rdma::buffer(*this, offset, length);
   }
 
   const_buffer slice(std::size_t offset, std::size_t length) const {
-    if (is_in_mr(offset, length)) {
-      return const_buffer{
-          *this, reinterpret_cast<std::uint8_t const*>(addr()) + offset,
-          length};
-    }
-    return const_buffer{*this};
+    return asio::rdma::buffer(*this, offset, length);
   }
 
   const_buffer cslice(std::size_t offset, std::size_t length) {

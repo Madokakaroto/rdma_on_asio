@@ -1,6 +1,7 @@
 #pragma once
 
 #include <iostream>
+#include "rdma/rdma_buffer.hpp"
 #include "nd/nd_device.hpp"
 #include "nd/detail/nd_ops_verbs.hpp"
 
@@ -81,6 +82,18 @@ class nd_memory_region {
     return length_;
   }
 
+  // Advertise a sub-range of this MR to the peer (the rkey/remote-access role,
+  // distinct from the local-SGE buffer elements which only carry lkey/local
+  // token). The returned {addr, remote token} is what the peer's RDMA
+  // read/write targets.
+  rdma_remote_addr_t remote_addr(std::size_t offset, std::size_t length) const {
+    if (!is_in_mr(offset, length)) {
+      return rdma_remote_addr_t{0, 0};
+    }
+    return rdma_remote_addr_t{
+        reinterpret_cast<std::uint64_t>(addr_) + offset, remote_key()};
+  }
+
  private:
   static detail::nd2_memory_region_ptr throw_reg_mr(nd_device_ptr const& device,
                                                     void* addr,
@@ -98,129 +111,14 @@ class nd_memory_region {
     return result;
   }
 
- public:
-  class const_buffer {
-   public:
-     using rdma_buffer_tag = detail::rdma_const_buffer_tag;
-
-   private:
-    nd_memory_region const& mr_;
-    void const* addr_;
-    std::size_t length_;
-
-   public:
-    explicit const_buffer(nd_memory_region const& mr)
-        : mr_(mr), addr_(nullptr), length_(0) {}
-    const_buffer(nd_memory_region const& mr, void const* addr, std::size_t length)
-        : mr_(mr), addr_(addr), length_(length) {}
-    const_buffer(const_buffer const&) = default;
-    const_buffer& operator=(const_buffer const&) = delete;
-
-   public:
-    void const* addr() const noexcept {
-      return addr_;
-    }
-
-    std::size_t length() const noexcept {
-      return length_;
-    }
-
-    bool is_valid() const noexcept {
-      return addr_ != nullptr && length_ >= 0 && mr_.is_in_mr(addr_, length_);
-    }
-
-    nd_memory_region const& get_mr() const noexcept {
-      return mr_;
-    }
-
-    std::uint32_t local_key() const {
-      return get_mr().local_key();
-    }
-
-    std::uint32_t remote_key() const {
-      return get_mr().remote_key();
-    }
-
-    friend const_buffer const* buffer_sequence_begin(
-        const_buffer const& one_buffer) noexcept {
-      return std::addressof(one_buffer);
-    }
-
-    friend const_buffer const* buffer_sequence_end(
-        const_buffer const& one_buffer) noexcept {
-      return std::addressof(one_buffer) + 1;
-    }
-  };
-
-  class mutable_buffer {
-   public:
-    using rdma_buffer_tag = detail::rdma_mutable_buffer_tag;
-
-   private:
-    nd_memory_region const& mr_;
-    void* addr_;
-    std::size_t length_;
-
-   public:
-    explicit mutable_buffer(nd_memory_region const& mr)
-        : mr_(mr), addr_(nullptr), length_(0) {}
-    mutable_buffer(nd_memory_region const& mr, void* addr, std::size_t length)
-        : mr_(mr), addr_(addr), length_(length) {}
-    mutable_buffer(mutable_buffer const&) = default;
-    mutable_buffer& operator=(mutable_buffer const&) = delete;
-
-   public:
-    void* addr() const noexcept { 
-      return addr_;
-    }
-
-    std::size_t length() const noexcept {
-      return length_;
-    }
-
-    bool is_valid() const noexcept {
-      return addr_ != nullptr && length_ >= 0 && mr_.is_in_mr(addr_, length_);
-    }
-
-    nd_memory_region const& get_mr() const noexcept { 
-      return mr_;
-    }
-
-    std::uint32_t local_key() const {
-      return get_mr().local_key();
-    }
-
-    std::uint32_t remote_key() const {
-      return get_mr().remote_key();
-    }
-
-    friend mutable_buffer const* buffer_sequence_begin(
-        mutable_buffer const& one_buffer) noexcept {
-      return std::addressof(one_buffer);
-    }
-
-    friend mutable_buffer const* buffer_sequence_end(
-        mutable_buffer const& one_buffer) noexcept {
-      return std::addressof(one_buffer) + 1;
-    }
-  };
-
 public:
+  // slice/cslice return the shared, value-semantic asio::rdma::{mutable,const}_buffer.
   mutable_buffer slice(std::size_t offset, std::size_t length) {
-    if (is_in_mr(offset, length)) {
-      return mutable_buffer{
-          *this, reinterpret_cast<uint8_t*>(this->addr()) + offset, length};
-    }
-    return mutable_buffer{*this};
+    return asio::rdma::buffer(*this, offset, length);
   }
 
   const_buffer slice(std::size_t offset, std::size_t length) const {
-    if (is_in_mr(offset, length)) {
-      return const_buffer{
-          *this, reinterpret_cast<uint8_t const*>(this->addr()) + offset,
-          length};
-    }
-    return const_buffer{*this};
+    return asio::rdma::buffer(*this, offset, length);
   }
 
   mutable_buffer slice(void* addr, std::size_t length) {
@@ -229,7 +127,7 @@ public:
     if (ptr_diff > 0) {
       return slice(static_cast<std::size_t>(ptr_diff), length);
     }
-    return mutable_buffer{*this};
+    return mutable_buffer{};
   }
 
   const_buffer slice(void const* addr, std::size_t length) const {
@@ -238,7 +136,7 @@ public:
     if (ptr_diff > 0) {
       return cslice(static_cast<size_t>(ptr_diff), length);
     }
-    return const_buffer{*this};
+    return const_buffer{};
   }
 
   const_buffer cslice(std::size_t offset, std::size_t length) {

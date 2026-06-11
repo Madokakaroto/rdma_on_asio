@@ -1,15 +1,141 @@
 #pragma once
 
+#include <concepts>
+#include <cstdint>
 #include <iterator>
+#include <memory>
 #include <numeric>
 #include <ranges>
+#include <type_traits>
 
 #include "rdma/rdma_commons.hpp"
 
-// Backend-independent memory-region buffer concepts and helpers shared by nd
-// and ibv. The only platform-specific piece is buffers2sglist (it fills the
-// native SGE type), which stays in each backend's buffer header.
+// Backend-independent memory-region buffer concepts, value-semantic buffer
+// elements, the asio::buffer-style buffer() factory, and helpers -- all shared
+// by nd and ibv. The only platform-specific piece is buffers2sglist (it fills
+// the native SGE type), which stays in each backend's buffer header.
 namespace asio::rdma {
+
+// ---------------------------------------------------------------------------
+// Value-semantic SGL buffer elements (cross-platform; NOT per-backend).
+//
+// One element = a {addr, length, lkey} view into a registered region. It is
+// value-semantic (default-constructible + copyable/assignable) so it can live
+// in std::vector / std::array / initializer_list -> real scatter/gather.
+//
+// Only lkey is carried: the SGE (struct ibv_sge / ND2_SGE), filled by
+// buffers2sglist, is the sole consumer and needs only {addr, length, lkey}.
+// rkey / advertising "my memory to the peer" is a different role, handled by
+// the MR (memory_region::remote_addr(offset, length) -> rdma_remote_addr_t).
+// ---------------------------------------------------------------------------
+class mutable_buffer;
+
+class const_buffer {
+ public:
+  using rdma_buffer_tag = detail::rdma_const_buffer_tag;
+
+  const_buffer() = default;
+  const_buffer(void const* addr, std::size_t length,
+               std::uint32_t lkey) noexcept
+      : addr_(addr), length_(length), lkey_(lkey) {}
+  // Implicit mutable -> const (mirrors asio::const_buffer). Defined below.
+  const_buffer(mutable_buffer const& b) noexcept;
+
+  void const* addr() const noexcept { return addr_; }
+  void const* data() const noexcept { return addr_; }
+  std::size_t length() const noexcept { return length_; }
+  std::uint32_t local_key() const noexcept { return lkey_; }
+
+  friend const_buffer const* buffer_sequence_begin(
+      const_buffer const& one) noexcept {
+    return std::addressof(one);
+  }
+  friend const_buffer const* buffer_sequence_end(
+      const_buffer const& one) noexcept {
+    return std::addressof(one) + 1;
+  }
+
+ private:
+  void const* addr_ = nullptr;
+  std::size_t length_ = 0;
+  std::uint32_t lkey_ = 0;
+};
+
+class mutable_buffer {
+ public:
+  using rdma_buffer_tag = detail::rdma_mutable_buffer_tag;
+
+  mutable_buffer() = default;
+  mutable_buffer(void* addr, std::size_t length, std::uint32_t lkey) noexcept
+      : addr_(addr), length_(length), lkey_(lkey) {}
+
+  void* addr() const noexcept { return addr_; }
+  void* data() const noexcept { return addr_; }
+  std::size_t length() const noexcept { return length_; }
+  std::uint32_t local_key() const noexcept { return lkey_; }
+
+  friend mutable_buffer const* buffer_sequence_begin(
+      mutable_buffer const& one) noexcept {
+    return std::addressof(one);
+  }
+  friend mutable_buffer const* buffer_sequence_end(
+      mutable_buffer const& one) noexcept {
+    return std::addressof(one) + 1;
+  }
+
+ private:
+  void* addr_ = nullptr;
+  std::size_t length_ = 0;
+  std::uint32_t lkey_ = 0;
+};
+
+inline const_buffer::const_buffer(mutable_buffer const& b) noexcept
+    : addr_(b.addr()), length_(b.length()), lkey_(b.local_key()) {}
+
+// rdma_* aliases (naming-convention parity with rdma_memory_region etc.).
+using rdma_const_buffer = const_buffer;
+using rdma_mutable_buffer = mutable_buffer;
+
+// ---------------------------------------------------------------------------
+// buffer() factory -- asio::buffer-style, cross-platform. It only touches the
+// MR's portable interface (addr/length/local_key/is_in_mr), so it is a single
+// template over the MR type -- no per-backend overloads. mutable_buffer for a
+// non-const MR, const_buffer for a const MR (mirrors asio::buffer's selection).
+// ---------------------------------------------------------------------------
+template <typename MR>
+concept memory_region_like = requires(MR& mr, std::size_t off, std::size_t n) {
+  { mr.length() } -> std::convertible_to<std::size_t>;
+  { mr.local_key() } -> std::convertible_to<std::uint32_t>;
+  { mr.is_in_mr(off, n) } -> std::convertible_to<bool>;
+};
+
+template <typename MR>
+  requires memory_region_like<MR> && (!std::is_const_v<MR>)
+inline mutable_buffer buffer(MR& mr) {
+  return mutable_buffer{mr.addr(), mr.length(), mr.local_key()};
+}
+
+template <typename MR>
+  requires memory_region_like<MR>
+inline const_buffer buffer(MR const& mr) {
+  return const_buffer{mr.addr(), mr.length(), mr.local_key()};
+}
+
+template <typename MR>
+  requires memory_region_like<MR> && (!std::is_const_v<MR>)
+inline mutable_buffer buffer(MR& mr, std::size_t offset, std::size_t n) {
+  if (!mr.is_in_mr(offset, n)) return mutable_buffer{};
+  return mutable_buffer{static_cast<std::uint8_t*>(mr.addr()) + offset, n,
+                        mr.local_key()};
+}
+
+template <typename MR>
+  requires memory_region_like<MR>
+inline const_buffer buffer(MR const& mr, std::size_t offset, std::size_t n) {
+  if (!mr.is_in_mr(offset, n)) return const_buffer{};
+  return const_buffer{static_cast<std::uint8_t const*>(mr.addr()) + offset, n,
+                      mr.local_key()};
+}
 
 template <typename Buffer>
 concept mr_buffer = requires { typename Buffer::rdma_buffer_tag; };
