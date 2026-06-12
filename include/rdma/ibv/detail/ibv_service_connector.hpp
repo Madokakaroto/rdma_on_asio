@@ -291,6 +291,11 @@ public:
   // acts second performs the single rdma_disconnect. Callable from any thread.
   // See docs/cancellation_stage1_object.md (design A.5).
   void disconnect(implementation_type& impl, asio::error_code& ec) {
+    if (!is_open(impl)) {
+      ec = make_error_code(rdma_errc::invalid_handle);
+      return;
+    }
+
     ec.clear();
     connect_state old = impl.connect_state_.load(std::memory_order_acquire);
     for (;;) {

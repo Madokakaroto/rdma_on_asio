@@ -61,7 +61,11 @@ public:
   }
 
   // poll mode: bind to a standalone completion_queue (no io_context).
-  explicit ibv_queue_pair(ibv_completion_queue& cq) { bind(cq); }
+  explicit ibv_queue_pair(ibv_completion_queue& cq) {
+    asio::error_code ec;
+    bind(cq, ec);
+    asio::detail::throw_error(ec);
+  }
 
   // deferred bind --event mode (the io_context's managed CQ)
   void bind(asio::io_context& io_ctx) {
@@ -71,6 +75,11 @@ public:
   }
 
   void bind(asio::io_context& io_ctx, asio::error_code& ec) {
+    if (is_bound()) {
+      ec = asio::error::already_open;
+      return;
+    }
+
     auto& dev_svc = asio::use_service<detail::ibv_device_service>(io_ctx);
     if (!dev_svc.is_registered()) {
       ec = make_error_code(rdma_errc::device_not_registered);
@@ -92,12 +101,24 @@ public:
 
   // deferred bind --poll mode (a user-owned completion_queue)
   void bind(ibv_completion_queue& cq) {
+    asio::error_code ec;
+    bind(cq, ec);
+    asio::detail::throw_error(ec);
+  }
+
+  void bind(ibv_completion_queue& cq, asio::error_code& ec) {
+    if (is_bound()) {
+      ec = asio::error::already_open;
+      return;
+    }
+
     io_ctx_ = nullptr;
     verbs_svc_ = nullptr;  // poll mode uses the static service entry points
     impl_.device_ = cq.device();
     impl_.cq_ = cq.native_handle();
     impl_.config_ = cq.effective_config();
     impl_.poll_cq_ = &cq;
+    ec.clear();
   }
 
   // Bound to a completion mechanism? (Not "native QP exists" --on ibv the QP is

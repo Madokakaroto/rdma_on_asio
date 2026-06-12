@@ -113,12 +113,22 @@ public:
 
   void bind(implementation_type& impl, asio::ip::port_type port,
             asio::error_code& ec) {
+    if (!is_open(impl)) {
+      ec = make_error_code(rdma_errc::invalid_handle);
+      return;
+    }
+
     endpoint_type endpoint = impl.bind_endpoint_;
     endpoint.port(port);
     bind_addr(impl.cm_id_.get(), endpoint.data(), ec);
   }
 
   void listen(implementation_type& impl, int backlog, asio::error_code& ec) {
+    if (!is_open(impl)) {
+      ec = make_error_code(rdma_errc::invalid_handle);
+      return;
+    }
+
     detail::listen(impl.cm_id_.get(), backlog, ec);
   }
 

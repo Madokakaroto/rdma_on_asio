@@ -27,6 +27,10 @@ class nd_memory_region {
       , extra_flag_(extra_flag) {}
 
   ~nd_memory_region() {
+    if (!mr_) {
+      return;
+    }
+
     asio::error_code ec{};
     detail::verbs_ops::dereg_mr(mr_.Get(), ec);
     if (ec) {

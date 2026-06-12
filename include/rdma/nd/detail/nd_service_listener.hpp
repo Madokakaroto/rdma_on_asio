@@ -169,6 +169,19 @@ public:
 
     asio::error_code ec;
     nd_connector_handle_t connector_handle;
+
+    if (!is_open(impl) || !impl.adapter_) {
+      typename op::ptr p = {asio::detail::addressof(handler),
+                            op::ptr::allocate(handler), 0};
+      p.p = new (p.v) op{impl.listener_.Get(),
+                          std::move(connector_handle), handler, io_ex};
+      this->scheduler_.work_started();
+      this->scheduler_.on_completion(
+          p.p, make_error_code(rdma_errc::invalid_handle));
+      p.v = p.p = 0;
+      return;
+    }
+
     connector_handle.adapter_ = impl.adapter_;
     connector_handle.overlapped_handle_.reset(
         create_overlapped_file(impl.adapter_->adapter_.Get(), ec));

@@ -87,13 +87,16 @@ target_link_libraries(test_ibv_control_cancel PRIVATE PkgConfig::IBVERBS PkgConf
 add_test(NAME test_ibv_link COMMAND test_ibv_link)
 set_tests_properties(test_ibv_link PROPERTIES LABELS "compile;ibv;legacy")
 
-add_test(NAME test_ibv_device_manager COMMAND test_ibv_device_manager)
-set_tests_properties(test_ibv_device_manager
-    PROPERTIES LABELS "integration;ibv;legacy")
+if(RDMA_ENABLE_HARDWARE_TESTS)
+  add_test(NAME integration_ibv_device_manager COMMAND test_ibv_device_manager)
+  set_tests_properties(integration_ibv_device_manager
+      PROPERTIES LABELS "integration;hardware;ibv;legacy")
 
-add_test(NAME test_ibv_connector_listener COMMAND test_ibv_connector_listener)
-set_tests_properties(test_ibv_connector_listener
-    PROPERTIES LABELS "integration;ibv;legacy")
+  add_test(NAME integration_ibv_connector_listener
+           COMMAND test_ibv_connector_listener)
+  set_tests_properties(integration_ibv_connector_listener
+      PROPERTIES LABELS "integration;hardware;ibv;legacy")
+endif()
 
 if(RDMA_ENABLE_HARDWARE_TESTS AND RDMA_TEST_ADDR)
   math(EXPR RDMA_TEST_WAIT_DISCONNECT_PORT "${RDMA_TEST_BASE_PORT} + 7")

@@ -5,7 +5,13 @@ find_package(Threads REQUIRED)
 # echo (event-driven, shared service CQ) and echo_poll (user-owned poll-mode CQ
 # spun on a dedicated thread) share build settings; only the poll variant needs
 # Threads, but linking it to both is harmless.
-foreach(rdma_test test_rdma_error test_rdma_echo test_rdma_echo_poll test_rdma_sgl test_rdma_private_data)
+foreach(rdma_test
+        test_rdma_error
+        test_rdma_echo
+        test_rdma_echo_poll
+        test_rdma_sgl
+        test_rdma_private_data
+        test_rdma_regression)
   add_executable(${rdma_test} ${rdma_test}.cpp)
 
   target_include_directories(${rdma_test} PRIVATE
@@ -30,6 +36,7 @@ set_tests_properties(test_rdma_error PROPERTIES LABELS "unit;rdma;legacy")
 if(RDMA_ENABLE_HARDWARE_TESTS AND RDMA_TEST_ADDR)
   math(EXPR RDMA_TEST_SGL_PORT "${RDMA_TEST_BASE_PORT} + 60")
   math(EXPR RDMA_TEST_PRIVATE_DATA_PORT "${RDMA_TEST_BASE_PORT} + 80")
+  math(EXPR RDMA_TEST_REGRESSION_PORT "${RDMA_TEST_BASE_PORT} + 120")
 
   add_test(NAME integration_rdma_sgl
            COMMAND test_rdma_sgl ${RDMA_TEST_ADDR} ${RDMA_TEST_SGL_PORT})
@@ -40,5 +47,11 @@ if(RDMA_ENABLE_HARDWARE_TESTS AND RDMA_TEST_ADDR)
            COMMAND test_rdma_private_data
                    ${RDMA_TEST_ADDR} ${RDMA_TEST_PRIVATE_DATA_PORT})
   set_tests_properties(integration_rdma_private_data
+      PROPERTIES LABELS "integration;hardware;rdma")
+
+  add_test(NAME integration_rdma_regression
+           COMMAND test_rdma_regression
+                   ${RDMA_TEST_ADDR} ${RDMA_TEST_REGRESSION_PORT})
+  set_tests_properties(integration_rdma_regression
       PROPERTIES LABELS "integration;hardware;rdma")
 endif()

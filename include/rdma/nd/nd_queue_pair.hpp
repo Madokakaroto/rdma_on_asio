@@ -75,6 +75,12 @@ public:
   }
 
   void bind(asio::io_context& io_ctx, asio::error_code& ec) {
+    if (is_bound()) {
+      ec = asio::error::already_open;
+      ASIO_ERROR_LOCATION(ec);
+      return;
+    }
+
     auto& dev_svc = asio::use_service<detail::nd_device_service>(io_ctx);
     if (!dev_svc.is_registered()) {
       ec = rdma_errc::device_not_registered;
@@ -105,6 +111,12 @@ public:
   }
 
   void bind(nd_completion_queue& cq, asio::error_code& ec) {
+    if (is_bound()) {
+      ec = asio::error::already_open;
+      ASIO_ERROR_LOCATION(ec);
+      return;
+    }
+
     io_ctx_ = nullptr;
     verbs_svc_ = nullptr;  // poll mode uses the static service entry points
     impl_.device_ = cq.device();

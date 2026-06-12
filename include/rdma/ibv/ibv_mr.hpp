@@ -53,14 +53,14 @@ class ibv_memory_region {
 
   std::uint32_t local_key() const {
     if (!mr_) {
-      asio::detail::throw_error(make_error_code(rdma_errc::invalid_device));
+      asio::detail::throw_error(make_error_code(rdma_errc::invalid_handle));
     }
     return mr_->lkey;
   }
 
   std::uint32_t remote_key() const {
     if (!mr_) {
-      asio::detail::throw_error(make_error_code(rdma_errc::invalid_device));
+      asio::detail::throw_error(make_error_code(rdma_errc::invalid_handle));
     }
     return mr_->rkey;
   }

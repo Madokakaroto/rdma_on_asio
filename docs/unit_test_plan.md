@@ -33,19 +33,47 @@ Initial execution has landed:
   invalid connector assignment, unopened listener bind/listen, null-device
   `use_device`, null-device memory-region construction, and immediate
   `async_connect` / `async_accept` failures before `use_device`.
+- Stage 4 public API guard coverage has started:
+  - throwing overloads now verify the same no-`use_device` / null-device errors
+    as their `error_code&` counterparts;
+  - unopened connector `disconnect` and `async_wait_disconnect` now return
+    `rdma_errc::invalid_handle`;
+  - unopened listener `async_get_connection` return-form and fill-form now
+    complete with `rdma_errc::invalid_handle` and preserve connector state;
+  - compile guards assert that backend listener `bind` accepts only a port, not
+    an address/endpoint.
 - IBV counterpart unit tests in the same shape, built on IBV configurations.
 - Backend headers moved to `include/rdma/nd/...` and `include/rdma/ibv/...`.
 - Existing hardware integration tests registered behind
   `RDMA_ENABLE_HARDWARE_TESTS` and `RDMA_TEST_ADDR` where the executable can
   run as a single process.
+- Hardware-capable public API guard coverage has landed in
+  `test_rdma_regression`:
+  - connector/listener duplicate `open()` -> `asio::error::already_open`;
+  - queue-pair default state, event bind, poll bind, and duplicate bind;
+  - empty completion-queue `poll_one()` / `poll()`;
+  - memory-region metadata, slices, remote addresses, invalid ranges, and
+    moved-from `invalid_handle` behavior.
+- Stage 6 correctness regressions have landed in `test_rdma_regression`:
+  - RDMA read/write round trip;
+  - zero-length send/recv immediate completion on an established QP;
+  - multi-message send/recv ordering;
+  - negative connect to a port with no listener.
+- Default CTest registration is now limited to unit/compile/safe legacy tests.
+  Hardware/provider integration tests are opt-in through
+  `RDMA_ENABLE_HARDWARE_TESTS`; tests needing an address additionally require
+  `RDMA_TEST_ADDR`.
 
 Deferred from the default unit gate:
 
-- Unopened `async_wait_disconnect` and unopened `async_get_connection` should be
-  covered after their immediate-failure behavior is made deterministic. A direct
-  unit attempt exposed unstable/crashing behavior on the ND path, so these cases
-  should be fixed in production code first and then reintroduced as regression
-  tests.
+- Unopened `async_wait_disconnect` and unopened `async_get_connection` are no
+  longer deferred; their immediate-failure behavior is now covered by the
+  service guard tests.
+- Hardware-backed Stage 4/5/6 tests are intentionally outside the default unit
+  gate and run only when hardware testing is enabled.
+- Two-process echo/example executables remain built but are not default CTest
+  entries; single-process hardware regressions cover the correctness paths that
+  can be run reliably under CTest.
 
 The project already has useful tests, but most of them are closer to smoke or
 integration tests. The next iteration should make the test suite smaller,
@@ -295,7 +323,9 @@ Key observations:
 - `unit_test.hpp` lives inside `unit/` and is included by unit test sources.
 - Each `.cpp` is normally built as its own test executable.
 - `properties/` is for compiler/standard/build-property checks.
-- `performance/` and `latency/` are not ordinary unit tests.
+- `performance/` and `latency/` are not ordinary unit tests. RDMA-specific
+  stress, performance, and latency work is tracked separately in
+  `docs/rdma_stress_performance_plan.md`.
 - Standalone Asio does not provide a CMake test layout; its source package uses
   `Makefile.am` / platform build files to enumerate executables.
 
@@ -425,12 +455,6 @@ tests/
   properties/
     public_headers.cpp
     no_exceptions.cpp
-  performance/
-    send_recv.cpp
-    read_write.cpp
-  latency/
-    send_recv.cpp
-    read_write.cpp
 ```
 
 This can be staged without moving files immediately:
@@ -438,8 +462,11 @@ This can be staged without moving files immediately:
 - First add `tests/unit/...` for new deterministic tests.
 - Keep current tests in place.
 - Later move existing tests into `integration` when CMake cleanup happens.
-- Add `properties/`, `performance/`, and `latency/` only when there is a real
-  test in that category; do not create empty directories.
+- Add `properties/` only when there is a real test in that category; do not
+  create empty directories.
+- Stress, performance, and latency programs are intentionally outside this unit
+  test plan. Keep their scope in `docs/rdma_stress_performance_plan.md` so the
+  default correctness gate stays fast and deterministic.
 
 ## CMake And CTest Plan
 
@@ -680,15 +707,31 @@ once the unit-test foundation is in place.
 These tests should be labelled `hardware` and `integration`; cancellation and
 race-oriented tests should also be labelled `race`.
 
-### Batch 6 -- Later Regression And Stress Tests
+Status:
+
+- Single-process hardware tests are registered behind
+  `RDMA_ENABLE_HARDWARE_TESTS`.
+- Address-dependent tests are additionally gated by `RDMA_TEST_ADDR`.
+- Two-process echo/example executables remain manual until a dedicated launcher
+  or fixture harness exists.
+
+### Batch 6 -- Later Hardware Regression Tests
 
 - RDMA read/write round trip.
 - Zero-length send/recv behavior.
 - Multi-message ordering.
-- Multiple QPs sharing the event-mode completion service.
-- Multi-thread shared-CQ stress: several `io_context::run()` threads plus
-  several submitter threads.
-- Repeated connect/disconnect soak for connector state-machine regressions.
+- Negative connect behavior: unreachable address, no listener, invalid port
+  family.
+
+Stress, performance, latency, multi-QP throughput, and soak tests are moved to
+`docs/rdma_stress_performance_plan.md`.
+
+Status:
+
+- `test_rdma_regression` covers read/write round trip, zero-length behavior,
+  multi-message ordering, and no-listener negative connect.
+- Invalid port-family and broader unreachable-address matrices can be added as
+  future targeted regressions if a bug or backend discrepancy appears.
 
 ## Unit Coverage Matrix
 
@@ -885,10 +928,10 @@ Add later:
 - RDMA read/write round-trip test.
 - Multi-message ordering test.
 - Zero-length send/recv behavior.
-- Concurrent QPs sharing the event-mode CQ.
-- MT stress test: multiple `io_context::run()` threads plus concurrent data-plane
-  submissions.
 - Negative connect tests: unreachable address, no listener, invalid port family.
+
+Concurrency stress and performance-oriented multi-QP coverage is tracked in
+`docs/rdma_stress_performance_plan.md`.
 
 ## Test Style Guidelines
 
@@ -1052,13 +1095,22 @@ Planned CI matrix:
   `RDMA_ENABLE_HARDWARE_TESTS`.
 - Add CMake cache args for IP/port.
 - Split long/race tests into `race` label so fast hardware smoke can run
-  separately from stress.
+  separately from longer stress runs owned by
+  `docs/rdma_stress_performance_plan.md`.
 
-### Stage 6 -- Stress And Regression Suite
+Status: completed for single-process hardware tests and existing race tests.
+Two-process example-style echo programs remain manual executables.
 
-- Add multi-thread shared-CQ stress.
+### Stage 6 -- Hardware Regression Suite
+
 - Add read/write integration tests.
-- Add repeated connect/disconnect soak for connector state-machine regressions.
+- Add zero-length and multi-message ordering integration tests.
+- Add negative connect integration tests.
+- Keep soak, stress, throughput, and latency programs in
+  `docs/rdma_stress_performance_plan.md`.
+
+Status: completed in `tests/rdma/test_rdma_regression.cpp` for the first
+read/write, zero-length, ordering, and no-listener negative-connect matrix.
 
 ## Acceptance Criteria
 
@@ -1070,3 +1122,5 @@ Planned CI matrix:
 - Critical `detail` helpers have deterministic tests that fail with clear
   expected/actual diagnostics.
 - ND and IBV backend parity is visible in the test matrix.
+- Stress/performance/latency acceptance criteria are owned by
+  `docs/rdma_stress_performance_plan.md`.

@@ -271,7 +271,7 @@ public:
   // from `connected`. Idempotent: second call is a no-op.
   void disconnect(implementation_type& impl, asio::error_code& ec) {
     if (!impl.connector_) {
-      ec = asio::error::bad_descriptor;
+      ec = rdma_errc::invalid_handle;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
