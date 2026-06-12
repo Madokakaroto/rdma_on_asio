@@ -292,10 +292,22 @@ completes them as `operation_aborted`.
 
 ## TODO
 
-- **Unit tests** -- broaden coverage badly needed: config derivation, error mapping,
-  MR slicing/bounds, completion dispatch, poll-mode CQ, connector/listener edge cases.
 - **Benchmark** -- add a throughput/latency benchmark harness (send/recv, RDMA read/write).
 - **Compare against `perftest`** -- publish numbers next to `ib_send_bw` / `ib_read_bw` /
   `ib_write_lat` (rdma-core `perftest`) to quantify the abstraction's overhead.
+
+Both are performance work, tracked in
+[`docs/rdma_stress_performance_plan.md`](docs/rdma_stress_performance_plan.md).
+
+**Done:** a deterministic, no-hardware unit-test suite (Asio-style harness,
+`RDMA_BUILD_UNIT_TESTS`, default `ctest`) plus opt-in hardware integration/regression
+tests (`RDMA_ENABLE_HARDWARE_TESTS` + `RDMA_TEST_ADDR`) now cover the public API,
+buffer/op/config/error logic, and service-state guards -- see
+[`docs/unit_test_plan.md`](docs/unit_test_plan.md).
+
+**Known issue:** the single-process multi-message echo regression
+(`tests/rdma/test_rdma_regression.cpp`, hardware-gated) stalls at the 3rd back-to-back
+exchange -- a data-plane RNR/flow stall under shared-CQ single-thread ping-pong (the
+event-mode poller is ruled out); under investigation.
 
 See [`CLAUDE.md`](CLAUDE.md) for the detailed architecture and design notes.

@@ -56,22 +56,6 @@ if(RDMA_BACKEND STREQUAL "ibv")
   message(STATUS "RDMA backend: ibv (libibverbs ${IBVERBS_VERSION}, librdmacm ${RDMACM_VERSION})")
 endif()
 
-# Main executable
-add_executable(${PROJECT_NAME} src/main.cpp)
-
-target_include_directories(${PROJECT_NAME} PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/third_party/asio/include
-)
-
-target_compile_definitions(${PROJECT_NAME} PRIVATE ASIO_STANDALONE)
-
-if(RDMA_BACKEND STREQUAL "nd")
-  target_link_libraries(${PROJECT_NAME} PRIVATE ndutil)
-elseif(RDMA_BACKEND STREQUAL "ibv")
-  target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
-endif()
-
 # Unit tests
 if(RDMA_BUILD_UNIT_TESTS)
   add_subdirectory(tests/unit)
