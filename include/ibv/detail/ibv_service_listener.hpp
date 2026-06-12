@@ -156,7 +156,7 @@ private:
   void start_get_connection_request_op(implementation_type& impl,
                                        asio::detail::reactor_op* op) {
     if (!is_open(impl)) {
-      op->ec_ = asio::error::bad_descriptor;
+      op->ec_ = make_error_code(rdma_errc::invalid_handle);
       this->reactor_.post_immediate_completion(op, false);
       return;
     }

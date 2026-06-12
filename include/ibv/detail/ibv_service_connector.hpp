@@ -349,7 +349,7 @@ public:
       this->reactor_.post_immediate_completion(p.p, false);
     }
     else if (!is_open(impl)) {
-      p.p->ec_ = asio::error::bad_descriptor;
+      p.p->ec_ = make_error_code(rdma_errc::invalid_handle);
       this->reactor_.post_immediate_completion(p.p, false);
     }
     else {
