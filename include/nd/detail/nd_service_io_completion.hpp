@@ -56,12 +56,12 @@ public:
   void initialize(nd_adapter_ptr const& device, std::uint32_t cqe,
                   asio::error_code& ec) {
     if (cq_) {
-      ec = nd_errc::ext_already_registered;
+      ec = rdma_errc::already_registered;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
     if (!device || !device->adapter_) {
-      ec = nd_errc::ext_invalid_device;
+      ec = rdma_errc::invalid_device;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
@@ -188,9 +188,9 @@ private:
         .type_ = ND_CQ_NOTIFY_ANY,
         .op_ = p.p,
     };
-    verbs_ops::notify_cq(cq_.Get(), notify_attr, ec);
+    auto const hr = verbs_ops::notify_cq(cq_.Get(), notify_attr, ec);
     scheduler_.work_started();
-    if (!ec || ec == nd_errc::pending) {
+    if (!ec && hr == ND_PENDING) {
       scheduler_.on_pending(p.p);
     }
     else {

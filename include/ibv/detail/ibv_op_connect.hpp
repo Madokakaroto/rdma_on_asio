@@ -47,7 +47,7 @@ protected:
   // Outgoing request private data, COPIED into the op at construction (the caller
   // need not keep its buffer alive: rdma_connect is issued asynchronously after
   // ADDR/ROUTE resolve). Capped at max_outgoing_private_data; the service rejects
-  // oversize (ext_private_data_too_large) before arming, so the copy never truncates
+  // oversize (rdma_errc::private_data_too_large) before arming, so the copy never truncates
   // a value the caller expected to go out whole.
   std::array<std::byte, max_outgoing_private_data> request_buf_{};
   std::uint8_t request_len_;
@@ -151,7 +151,7 @@ private:
       case stage_t::connect:
         return do_process_connect(event);
       default:
-        this->ec_ = make_error_code(ibv_errc::ext_invalid_device);
+        this->ec_ = make_error_code(rdma_errc::invalid_device);
         return status::done;
     }
   }
@@ -305,7 +305,7 @@ private:
 
     // Per-op cancel completes the op via the reactor (operation_aborted),
     // bypassing do_process's claim_closed. Mark the connector terminal so a later
-    // async_connect is cleanly rejected (-> ext_connector_terminal). Keyed strictly
+    // async_connect is cleanly rejected (-> rdma_errc::connector_terminal). Keyed strictly
     // on operation_aborted so transient guard errors stay retryable; aborted <=>
     // not established, so this never clobbers a live `connected`.
     if (owner && o->ec_ == asio::error::operation_aborted) {

@@ -15,7 +15,7 @@ namespace asio::rdma::detail {
 // Disconnect-notification watcher (on_disconnect). Issues IND2Connector::
 // NotifyDisconnect; when that overlapped completes (connection disconnected),
 // it sets the connector's peer_closed_ latch and upcalls handler with
-// ext_disconnected. Mirrors ibv_wait_disconnect_op.
+// rdma_errc::disconnected. Mirrors ibv_wait_disconnect_op.
 template <typename Handler, typename IoExecutor>
 class nd_wait_disconnect_op final : public nd_op_base {
 private:
@@ -53,7 +53,7 @@ private:
       if (o->peer_closed_) {
         o->peer_closed_->store(true, std::memory_order_release);
       }
-      ec = make_error_code(nd_errc::ext_disconnected);
+      ec = make_error_code(rdma_errc::disconnected);
     }
 
     ptr p = {asio::detail::addressof(o->handler_), o, o};

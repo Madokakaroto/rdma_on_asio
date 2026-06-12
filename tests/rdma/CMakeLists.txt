@@ -5,7 +5,7 @@ find_package(Threads REQUIRED)
 # echo (event-driven, shared service CQ) and echo_poll (user-owned poll-mode CQ
 # spun on a dedicated thread) share build settings; only the poll variant needs
 # Threads, but linking it to both is harmless.
-foreach(rdma_test test_rdma_echo test_rdma_echo_poll test_rdma_sgl test_rdma_private_data)
+foreach(rdma_test test_rdma_error test_rdma_echo test_rdma_echo_poll test_rdma_sgl test_rdma_private_data)
   add_executable(${rdma_test} ${rdma_test}.cpp)
 
   target_include_directories(${rdma_test} PRIVATE
@@ -23,3 +23,5 @@ foreach(rdma_test test_rdma_echo test_rdma_echo_poll test_rdma_sgl test_rdma_pri
     target_link_libraries(${rdma_test} PRIVATE ndutil)
   endif()
 endforeach()
+
+add_test(NAME test_rdma_error COMMAND test_rdma_error)

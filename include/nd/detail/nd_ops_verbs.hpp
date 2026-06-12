@@ -104,6 +104,8 @@ inline result_type notify_cq(native_cq_t* cq,
   auto const hr = cq->Notify(attr.type_, attr.op_);
   if (hr != ND_SUCCESS && hr != ND_PENDING) {
     ec = static_cast<nd_errc>(hr);
+  } else {
+    ec.clear();
   }
   return hr;
 }

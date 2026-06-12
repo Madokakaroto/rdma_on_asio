@@ -62,7 +62,7 @@ public:
       return ec;
     }
     if (!impl.device_ || !impl.device_->pd_ || !impl.cq_) {
-      ec = nd_errc::ext_invalid_device;
+      ec = rdma_errc::invalid_device;
       ASIO_ERROR_LOCATION(ec);
       return ec;
     }
@@ -208,7 +208,7 @@ private:
   static bool exceeds_sge_limit(std::size_t sge_count, std::uint32_t sge_max,
                                 asio::error_code& ec) {
     if (sge_max != 0 && sge_count > sge_max) {
-      ec = make_error_code(nd_errc::ext_too_many_sge);
+      ec = make_error_code(rdma_errc::too_many_sge);
       return true;
     }
     return false;

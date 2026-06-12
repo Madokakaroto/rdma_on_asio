@@ -163,7 +163,7 @@ struct nd_connector_handle_t {
 inline constexpr std::size_t max_private_data_size = 256;
 
 // Cap for OUTGOING connect/accept private_data (mirrors ibv: unified at 255).
-// Oversize is rejected at initiation (ext_private_data_too_large).
+// Oversize is rejected at initiation (rdma_errc::private_data_too_large).
 inline constexpr std::size_t max_outgoing_private_data = 255;
 
 // Connection lifecycle for the nd connector. Per-platform by design: ND's

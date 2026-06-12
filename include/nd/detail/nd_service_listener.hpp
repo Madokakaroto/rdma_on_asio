@@ -92,7 +92,7 @@ public:
     }
 
     if (!device_svc_.is_registered()) {
-      ec = nd_errc::ext_device_not_registered;
+      ec = rdma_errc::device_not_registered;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
@@ -132,7 +132,7 @@ public:
   void bind(implementation_type& impl, asio::ip::port_type port,
             asio::error_code& ec) {
     if (!is_open(impl)) {
-      ec = nd_errc::ext_invalid_listener;
+      ec = rdma_errc::invalid_handle;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
@@ -145,7 +145,7 @@ public:
 
   void listen(implementation_type& impl, int backlog, asio::error_code& ec) {
     if (!is_open(impl)) {
-      ec = nd_errc::ext_invalid_listener;
+      ec = rdma_errc::invalid_handle;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
@@ -204,12 +204,15 @@ public:
                         std::move(connector_handle), handler, io_ex};
 
     this->scheduler_.work_started();
-    get_connection_request(impl.listener_.Get(), connector_ptr, p.p, ec);
-    if (ec && ec != nd_errc::pending) {
+    auto const hr =
+        get_connection_request(impl.listener_.Get(), connector_ptr, p.p, ec);
+    if (ec) {
       this->scheduler_.on_completion(p.p, ec);
-    } else {
+    } else if (hr == ND_PENDING) {
       arm_nd_cancellation(cancel_slot, impl.listener_handle_.get(), p.p);
       this->scheduler_.on_pending(p.p);
+    } else {
+      this->scheduler_.on_completion(p.p, ec);
     }
     p.v = p.p = 0;
   }

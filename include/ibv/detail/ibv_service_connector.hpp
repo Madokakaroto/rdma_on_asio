@@ -120,11 +120,11 @@ public:
   void open(implementation_type& impl, rdma_port_space ps_type,
             asio::error_code& ec) {
     if (is_open(impl)) {
-      ec = make_error_code(ibv_errc::ext_already_registered);
+      ec = asio::error::already_open;
       return;
     }
     if (!device_registered()) {
-      ec = make_error_code(ibv_errc::ext_device_not_registered);
+      ec = make_error_code(rdma_errc::device_not_registered);
       return;
     }
     cm_channel_holder channel{ create_event_channel(ec) };
@@ -154,11 +154,11 @@ public:
   void assign(implementation_type& impl, native_connector_type&& handle,
               asio::error_code& ec) {
     if (is_open(impl)) {
-      ec = make_error_code(ibv_errc::ext_already_registered);
+      ec = asio::error::already_open;
       return;
     }
     if (!handle.cm_channel_ || !handle.cm_id_) {
-      ec = make_error_code(ibv_errc::ext_invalid_device);
+      ec = make_error_code(rdma_errc::invalid_handle);
       return;
     }
     if (int err = this->reactor_.register_descriptor(handle.cm_channel_->fd,
@@ -217,7 +217,7 @@ public:
     }
     else if (request.size() > max_outgoing_private_data) {
       // Reject oversize private data up front (do not silently truncate).
-      p.p->ec_ = make_error_code(ibv_errc::ext_private_data_too_large);
+      p.p->ec_ = make_error_code(rdma_errc::private_data_too_large);
       this->reactor_.post_immediate_completion(p.p, false);
     }
     else if (impl.connect_state_.load(std::memory_order_acquire) !=
@@ -228,7 +228,7 @@ public:
       // reusable). Early-exit with a clear code instead of driving resolve_addr
       // on a non-IDLE cm_id (raw EINVAL); the user must create a fresh connector.
       // See docs/cancellation_stage1_object.md.
-      p.p->ec_ = make_error_code(ibv_errc::ext_connector_terminal);
+      p.p->ec_ = make_error_code(rdma_errc::connector_terminal);
       this->reactor_.post_immediate_completion(p.p, false);
     }
     else {
@@ -251,13 +251,20 @@ public:
     p.p = new (p.v) op{this->success_ec_, impl.cm_id_.get(), &impl.connect_state_,
                        handler, io_ex};
     if (!device_registered()) {
-      p.p->ec_ = make_error_code(ibv_errc::ext_device_not_registered);
+      p.p->ec_ = make_error_code(rdma_errc::device_not_registered);
       this->reactor_.post_immediate_completion(p.p, false);
       p.v = p.p = 0;
       return;
     }
     if (private_data.size() > max_outgoing_private_data) {
-      p.p->ec_ = make_error_code(ibv_errc::ext_private_data_too_large);
+      p.p->ec_ = make_error_code(rdma_errc::private_data_too_large);
+      this->reactor_.post_immediate_completion(p.p, false);
+      p.v = p.p = 0;
+      return;
+    }
+    if (impl.connect_state_.load(std::memory_order_acquire) !=
+        connect_state::idle) {
+      p.p->ec_ = make_error_code(rdma_errc::connector_terminal);
       this->reactor_.post_immediate_completion(p.p, false);
       p.v = p.p = 0;
       return;
@@ -324,8 +331,8 @@ public:
   // connection is already torn down (peer_closed_ latch set, or connect_state_
   // == closed from a self disconnect()), completes immediately (level-triggered);
   // otherwise a watcher stays armed on the CM fd until a peer
-  // DISCONNECTED/DEVICE_REMOVAL arrives. Completion code: ext_disconnected (peer
-  // disconnect) / ext_device_removed (local device gone) -- see D-D.
+  // DISCONNECTED/DEVICE_REMOVAL arrives. Completion code: rdma_errc::disconnected
+  // (peer disconnect) / rdma_errc::device_removed (local device gone) -- see D-D.
   template <typename Handler, typename IoExecutor>
   void async_wait_disconnect(implementation_type& impl, Handler& handler,
                              IoExecutor const& io_ex) {
@@ -338,7 +345,7 @@ public:
     if (impl.peer_closed_.load(std::memory_order_acquire) ||
         impl.connect_state_.load(std::memory_order_acquire) ==
             connect_state::closed) {
-      p.p->ec_ = make_error_code(ibv_errc::ext_disconnected);
+      p.p->ec_ = make_error_code(rdma_errc::disconnected);
       this->reactor_.post_immediate_completion(p.p, false);
     }
     else if (!is_open(impl)) {

@@ -82,11 +82,11 @@ public:
   void open(implementation_type& impl, PortSpace const& ps,
             asio::error_code& ec) {
     if (is_open(impl)) {
-      ec = make_error_code(ibv_errc::ext_already_registered);
+      ec = asio::error::already_open;
       return;
     }
     if (!device_svc_.is_registered()) {
-      ec = make_error_code(ibv_errc::ext_device_not_registered);
+      ec = make_error_code(rdma_errc::device_not_registered);
       return;
     }
     cm_channel_holder channel{ create_event_channel(ec) };

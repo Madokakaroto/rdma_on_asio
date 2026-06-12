@@ -53,14 +53,14 @@ class ibv_memory_region {
 
   std::uint32_t local_key() const {
     if (!mr_) {
-      asio::detail::throw_error(make_error_code(ibv_errc::ext_invalid_device));
+      asio::detail::throw_error(make_error_code(rdma_errc::invalid_device));
     }
     return mr_->lkey;
   }
 
   std::uint32_t remote_key() const {
     if (!mr_) {
-      asio::detail::throw_error(make_error_code(ibv_errc::ext_invalid_device));
+      asio::detail::throw_error(make_error_code(rdma_errc::invalid_device));
     }
     return mr_->rkey;
   }
@@ -102,7 +102,7 @@ class ibv_memory_region {
                                                 mr_acccess_flag_t flag,
                                                 int extra_flag) {
     if (!device || !device->pd_) {
-      asio::detail::throw_error(make_error_code(ibv_errc::ext_invalid_device));
+      asio::detail::throw_error(make_error_code(rdma_errc::invalid_device));
     }
     asio::error_code ec{};
     detail::unique_ibv_mr_ptr result{detail::verbs_ops::reg_mr(

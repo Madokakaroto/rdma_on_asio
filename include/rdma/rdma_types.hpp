@@ -8,6 +8,7 @@
 // connector/listener; here we add the remaining backend headers -- including the
 // port-space-agnostic queue_pair -- and define the aliases.
 #include "rdma/tcp.hpp"
+#include "rdma/rdma_error.hpp"
 
 #if defined(ASIO_RDMA_BACKEND_ND)
 #  include "nd/nd_queue_pair.hpp"
@@ -39,7 +40,6 @@ using rdma_memory_region = nd_memory_region;
 using rdma_device = nd_device_t;
 using rdma_device_ptr = nd_device_ptr;
 using rdma_device_manager_t = nd_device_manager_t;
-using rdma_errc = nd_errc;
 
 #elif defined(ASIO_RDMA_BACKEND_VERBS)
 
@@ -54,7 +54,6 @@ using rdma_memory_region = ibv_memory_region;
 using rdma_device = ibv_device_t;
 using rdma_device_ptr = ibv_device_ptr;
 using rdma_device_manager_t = ibv_device_manager_t;
-using rdma_errc = ibv_errc;
 
 #endif
 

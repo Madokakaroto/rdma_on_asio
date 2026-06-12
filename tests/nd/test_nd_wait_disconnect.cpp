@@ -80,7 +80,7 @@ asio::awaitable<void> run_server(asio::io_context& io,
 
   out.phase = "server.wait_disconnect_level_trigger";
   auto [wec2] = co_await conn.async_wait_disconnect(nothrow);
-  out.level_trigger_ok = (wec2 == rdma::nd_errc::ext_disconnected);
+  out.level_trigger_ok = (wec2 == rdma::rdma_errc::disconnected);
   out.phase = "done";
   io.stop();
 }
@@ -146,10 +146,10 @@ int main(int argc, char* argv[]) {
     io.run();
 
     bool const ok = r.established && r.watcher_fired &&
-                    r.watcher_ec == rdma::nd_errc::ext_disconnected &&
+                    r.watcher_ec == rdma::rdma_errc::disconnected &&
                     r.level_trigger_ok && !r.timed_out;
     if (ok) {
-      std::cout << "[PASS] async_wait_disconnect fired with ext_disconnected; "
+      std::cout << "[PASS] async_wait_disconnect fired with disconnected; "
                    "level-trigger ok\n";
       return 0;
     }

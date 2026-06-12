@@ -137,7 +137,7 @@ bool phase_connect_cancel(rdma::rdma_device_ptr const& device,
   bool const ok = reqd && fired &&
                   conn_ec == asio::error::operation_aborted &&
                   re_fired && !timed_out &&
-                  re_ec == rdma::nd_errc::ext_connector_terminal;
+                  re_ec == rdma::rdma_errc::connector_terminal;
   if (ok) {
     std::cout << "[PASS] async_connect cancellation slot aborts op; "
                  "connector becomes terminal\n";

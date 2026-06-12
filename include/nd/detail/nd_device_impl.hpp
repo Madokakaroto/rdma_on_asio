@@ -456,7 +456,7 @@ std::vector<nd_provider_ptr> get_providers(asio::error_code& ec) {
     std::ranges::end(providers)
   };
   if (result.empty()) {
-    ec = nd_errc::ext_no_available_provider;
+    ec = rdma_errc::no_available_device;
   }
   return result;
 }

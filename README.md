@@ -190,7 +190,7 @@ co_await qp.async_recv(scatter, token);    // scatter the recv across two MRs
 
 A single buffer is a 1-element sequence, so the plain `qp.async_send(mr.cslice(...))` spelling is
 unchanged. Posting more segments than the device's `max_send_sge` / `max_recv_sge` is rejected
-before it reaches the HCA with `rdma_errc::ext_too_many_sge` (a clean library error, not a raw
+before it reaches the HCA with `rdma_errc::too_many_sge` (a clean library error, not a raw
 HW failure). The local SGE only ever uses `lkey`; for RDMA read/write the **remote** target is a
 separate `rdma_remote_addr_t` carrying the peer's `rkey` (from its `mr.remote_addr(off, n)`).
 
@@ -217,7 +217,7 @@ Notes:
   (the receiver gets a fixed zero-filled field). If you need the exact length, frame it yourself
   (e.g. a length prefix).
 - Outgoing private data is capped at 255 bytes (`rdma_conn_param.private_data_len` is a `uint8_t`);
-  larger is rejected with `rdma_errc::ext_private_data_too_large`. The outgoing buffer need not
+  larger is rejected with `rdma_errc::private_data_too_large`. The outgoing buffer need not
   outlive the call (it is copied at initiation); the receive buffer must stay valid until completion.
 
 ## Requirements
@@ -267,7 +267,7 @@ design, pending Windows verification).**
   aborts an in-flight `async_connect`/`async_accept`, **or** tears down an established connection
   (pending data-plane ops then flush to `operation_aborted`). Because an rdma_cm `cm_id` is
   single-use, a connector is **terminal** after disconnect — a reused `async_connect` is rejected
-  up front with `ext_connector_terminal`; create a fresh connector. `listener::cancel()` aborts a
+  up front with `rdma_errc::connector_terminal`; create a fresh connector. `listener::cancel()` aborts a
   pending `async_get_connection` and leaves the listener in `LISTEN` (reusable, like
   `acceptor::cancel()`).
 - *Per-operation (Asio cancellation slots).* `async_connect`, `async_accept`,

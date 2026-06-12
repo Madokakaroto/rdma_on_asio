@@ -16,7 +16,7 @@ namespace asio::rdma::detail {
 inline ibv_device_ptr create_device(native_context_t* context,
                                     asio::error_code& ec) {
   if (!context) {
-    ec = make_error_code(ibv_errc::ext_invalid_device);
+    ec = make_error_code(rdma_errc::invalid_device);
     return nullptr;
   }
 
@@ -67,7 +67,7 @@ inline std::vector<ibv_device_ptr> get_devices(asio::error_code& ec) {
   int count = 0;
   native_context_t** array = ::rdma_get_devices(&count);
   if (!array || count <= 0) {
-    ec = make_error_code(ibv_errc::ext_no_available_device);
+    ec = make_error_code(rdma_errc::no_available_device);
     if (array) {
       ::rdma_free_devices(array);
     }
@@ -88,7 +88,7 @@ inline std::vector<ibv_device_ptr> get_devices(asio::error_code& ec) {
   ::rdma_free_devices(array);
 
   if (devices.empty()) {
-    ec = make_error_code(ibv_errc::ext_no_available_device);
+    ec = make_error_code(rdma_errc::no_available_device);
   }
   else {
     ec.clear();

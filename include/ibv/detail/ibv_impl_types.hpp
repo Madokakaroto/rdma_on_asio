@@ -130,7 +130,7 @@ inline constexpr std::size_t max_private_data_size = 256;
 
 // Cap for OUTGOING connect/accept private_data. rdma_conn_param.private_data_len
 // is a uint8_t, so 255 is the hard wire limit; oversize is rejected at
-// initiation (ext_private_data_too_large) rather than silently truncated.
+// initiation (rdma_errc::private_data_too_large) rather than silently truncated.
 inline constexpr std::size_t max_outgoing_private_data = 255;
 
 // Scatter-gather list of ibv_sge with small-buffer optimization. SGE counts are

@@ -41,7 +41,11 @@ inline result_type accept(IND2Connector* connector, IND2QueuePair* qp,
       connector->Accept(qp, inbound_read_limit, outbound_read_limit,
                         private_data, private_data_size, overlapped);
 
-  ec = static_cast<nd_errc>(hr);
+  if (hr != ND_SUCCESS && hr != ND_PENDING) {
+    ec = static_cast<nd_errc>(hr);
+  } else {
+    ec.clear();
+  }
   return hr;
 }
 
@@ -56,7 +60,11 @@ inline result_type connect(IND2Connector* connector, IND2QueuePair* qp,
       qp, addrin, static_cast<size_type>(address_size), inbound_read_limit,
       outbound_read_limit, private_data, data_size, overlapped);
 
-  ec = static_cast<nd_errc>(hr);
+  if (hr != ND_SUCCESS && hr != ND_PENDING) {
+    ec = static_cast<nd_errc>(hr);
+  } else {
+    ec.clear();
+  }
   return hr;
 }
 
@@ -64,7 +72,11 @@ inline result_type disconnect(IND2Connector* connector, OVERLAPPED* overlapped,
                               asio::error_code& ec) {
   assert(connector);
   auto const hr = connector->Disconnect(overlapped);
-  ec = static_cast<nd_errc>(hr);
+  if (hr != ND_SUCCESS && hr != ND_PENDING) {
+    ec = static_cast<nd_errc>(hr);
+  } else {
+    ec.clear();
+  }
   return hr;
 }
 
@@ -75,7 +87,11 @@ inline result_type notify_disconnect(IND2Connector* connector,
                                      asio::error_code& ec) {
   assert(connector);
   auto const hr = connector->NotifyDisconnect(overlapped);
-  ec = static_cast<nd_errc>(hr);
+  if (hr != ND_SUCCESS && hr != ND_PENDING) {
+    ec = static_cast<nd_errc>(hr);
+  } else {
+    ec.clear();
+  }
   return hr;
 }
 
@@ -107,7 +123,11 @@ inline result_type get_connection_request(IND2Listener* listener,
   assert(connector);
   auto const hr =
       listener->GetConnectionRequest(connector, overlapped);
-  ec = static_cast<nd_errc>(hr);
+  if (hr != ND_SUCCESS && hr != ND_PENDING) {
+    ec = static_cast<nd_errc>(hr);
+  } else {
+    ec.clear();
+  }
   return hr;
 }
 

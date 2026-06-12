@@ -77,7 +77,7 @@ public:
   void bind(asio::io_context& io_ctx, asio::error_code& ec) {
     auto& dev_svc = asio::use_service<detail::nd_device_service>(io_ctx);
     if (!dev_svc.is_registered()) {
-      ec = nd_errc::ext_device_not_registered;
+      ec = rdma_errc::device_not_registered;
       ASIO_ERROR_LOCATION(ec);
       return;
     }

@@ -24,20 +24,20 @@ void test_open_without_use_device_fails() {
 
   rdma::nd_connector<tcp> connector(io);
   connector.open(tcp::v4(), ec);
-  assert(ec == rdma::nd_errc::ext_device_not_registered);
+  assert(ec == rdma::rdma_errc::device_not_registered);
 
   rdma::nd_listener<tcp> listener(io);
   listener.open(tcp::v4(), ec);
-  assert(ec == rdma::nd_errc::ext_device_not_registered);
+  assert(ec == rdma::rdma_errc::device_not_registered);
 
   rdma::nd_queue_pair qp;
   qp.bind(io, ec);
-  assert(ec == rdma::nd_errc::ext_device_not_registered);
+  assert(ec == rdma::rdma_errc::device_not_registered);
   assert(!qp.is_bound());
   assert(qp.bound_type() == rdma::completion_mode::none);
 
   std::cout << "[PASS] open/bind without use_device returns "
-               "ext_device_not_registered\n";
+               "device_not_registered\n";
 }
 
 void test_listener_open_bind_listen() {

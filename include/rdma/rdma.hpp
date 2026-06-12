@@ -11,4 +11,5 @@
 //
 // Include this and write against the rdma_* / tcp::* names for portable code.
 #include "rdma/rdma_commons.hpp"
+#include "rdma/rdma_error.hpp"
 #include "rdma/rdma_types.hpp"

@@ -17,8 +17,8 @@ namespace asio::rdma::detail {
 
 // Disconnect-notification watcher (on_disconnect). A reactor_op that stays armed
 // on the CM event channel fd until it observes a teardown event:
-//   RDMA_CM_EVENT_DISCONNECTED   -> complete with ibv_errc::ext_disconnected
-//   RDMA_CM_EVENT_DEVICE_REMOVAL -> complete with ibv_errc::ext_device_removed
+//   RDMA_CM_EVENT_DISCONNECTED   -> complete with rdma_errc::disconnected
+//   RDMA_CM_EVENT_DEVICE_REMOVAL -> complete with rdma_errc::device_removed
 // Other events (e.g. TIMEWAIT_EXIT) are acked (by the unique_ptr deleter) and
 // ignored -- the op returns not_done to stay armed. On the terminal event it sets
 // the connector's peer_closed_ latch so a subsequent async_wait_disconnect
@@ -58,13 +58,13 @@ private:
         if (op->peer_closed_) {
           op->peer_closed_->store(true, std::memory_order_release);
         }
-        op->ec_ = make_error_code(ibv_errc::ext_disconnected);
+        op->ec_ = make_error_code(rdma_errc::disconnected);
         return status::done;
       case RDMA_CM_EVENT_DEVICE_REMOVAL:
         if (op->peer_closed_) {
           op->peer_closed_->store(true, std::memory_order_release);
         }
-        op->ec_ = make_error_code(ibv_errc::ext_device_removed);
+        op->ec_ = make_error_code(rdma_errc::device_removed);
         return status::done;
       default:
         // TIMEWAIT_EXIT / ADDR_CHANGE / etc: acked above, keep waiting.

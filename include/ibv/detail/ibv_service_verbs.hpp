@@ -59,7 +59,7 @@ public:
                                     native_cm_id_t* cm_id) {
     asio::error_code ec;
     if (!impl.device_ || !impl.device_->pd_ || !impl.cq_) {
-      ec = make_error_code(ibv_errc::ext_invalid_device);
+      ec = make_error_code(rdma_errc::invalid_device);
       return ec;
     }
     auto const& eff = impl.config_;
@@ -209,7 +209,7 @@ private:
   static bool exceeds_sge_limit(std::size_t sge_count, std::uint32_t sge_max,
                                 asio::error_code& ec) {
     if (sge_max != 0 && sge_count > sge_max) {
-      ec = make_error_code(ibv_errc::ext_too_many_sge);
+      ec = make_error_code(rdma_errc::too_many_sge);
       return true;
     }
     return false;

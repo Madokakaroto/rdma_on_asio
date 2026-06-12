@@ -332,7 +332,7 @@ bool phase_c(rdma::rdma_device_ptr const& device, std::string const& ip,
 
 // ---------------------------------------------------------------------------
 // Phase D: a disconnected (terminal) connector rejects a fresh async_connect
-// early with ibv_errc::ext_connector_terminal -- it does not touch the stranded
+// early with rdma_errc::connector_terminal -- it does not touch the stranded
 // cm_id, and does not silently leak a raw EINVAL.
 // ---------------------------------------------------------------------------
 bool phase_d(rdma::rdma_device_ptr const& device, std::string const& ip,
@@ -361,13 +361,13 @@ bool phase_d(rdma::rdma_device_ptr const& device, std::string const& ip,
   io.stop();
   worker.join();
 
-  bool const ok = fired && cec == rdma::ibv_errc::ext_connector_terminal;
+  bool const ok = fired && cec == rdma::rdma_errc::connector_terminal;
   if (ok) {
     std::cout << "[PASS] phase D: async_connect on a disconnected connector "
-                 "early-exits with ext_connector_terminal\n";
+                 "early-exits with connector_terminal\n";
   } else {
     std::cerr << "[FAIL] phase D: fired=" << fired << " ec=" << cec.message()
-              << " (expected ext_connector_terminal)\n";
+              << " (expected connector_terminal)\n";
   }
   return ok;
 }

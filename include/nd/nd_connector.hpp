@@ -195,7 +195,7 @@ public:
   }
 
   // Disconnect NOTIFICATION (on_disconnect): one-shot, completes when the
-  // connection is disconnected. handler(error_code) -- ext_disconnected. If
+  // connection is disconnected. handler(error_code) -- rdma_errc::disconnected. If
   // already disconnected, completes immediately (level-triggered). Mirrors ibv.
   template <typename WaitToken>
   auto async_wait_disconnect(WaitToken&& token) {

@@ -165,7 +165,7 @@ and effective/operating config (`derive_effective_config(config, caps)`, stored 
 `device_service`). `connector`/`listener` no longer take a config — their connection params
 (`responder_resources`/`initiator_depth` from `inbound`/`outbound_read_limit_`) are read from
 `device_service::get_effective_config()`. Opening a `connector`/`listener`/`queue_pair` without
-`use_device` on that io_context fails with `ext_device_not_registered`
+`use_device` on that io_context fails with `rdma_errc::device_not_registered`
 (`device_service::is_registered()`).
 
 ### Two Completion Modes (both backends)

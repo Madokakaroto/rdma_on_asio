@@ -68,11 +68,11 @@ public:
   void initialize(ibv_device_ptr const& device, std::uint32_t cqe,
                   asio::error_code& ec) {
     if (cq_) {
-      ec = make_error_code(ibv_errc::ext_already_registered);
+      ec = make_error_code(rdma_errc::already_registered);
       return;
     }
     if (!device || !device->context_) {
-      ec = make_error_code(ibv_errc::ext_invalid_device);
+      ec = make_error_code(rdma_errc::invalid_device);
       return;
     }
 

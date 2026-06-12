@@ -205,8 +205,8 @@ public:
   }
 
   // Disconnect NOTIFICATION (on_disconnect): one-shot, completes when the
-  // connection is disconnected. handler(error_code) -- ext_disconnected on a peer
-  // disconnect, ext_device_removed if the local device was removed,
+  // connection is disconnected. handler(error_code) -- rdma_errc::disconnected
+  // on a peer disconnect, rdma_errc::device_removed if the local device was removed,
   // operation_aborted if you disconnect()ed yourself while waiting. If already
   // disconnected, completes immediately (level-triggered). Detects only GRACEFUL
   // (cm DISCONNECTED) teardown; ungraceful peer loss surfaces via data-plane op

@@ -21,11 +21,11 @@ inline void use_device(asio::io_context& io_ctx, ibv_device_ptr const& device,
                        ibv_config_t const& config, asio::error_code& ec) {
   auto& dev_svc = asio::use_service<detail::ibv_device_service>(io_ctx);
   if (dev_svc.is_registered()) {
-    ec = make_error_code(ibv_errc::ext_already_registered);
+    ec = make_error_code(rdma_errc::already_registered);
     return;
   }
   if (!device) {
-    ec = make_error_code(ibv_errc::ext_invalid_device);
+    ec = make_error_code(rdma_errc::invalid_device);
     return;
   }
   auto const effective = detail::derive_effective_config(config, device->attr_);

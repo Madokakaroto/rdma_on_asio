@@ -14,7 +14,7 @@
 //
 //   Phase 2 -- too-many-sge rejection (Q-C):
 //     use_device() with max_send_sge_ = 2; an async_send of a 3-segment sequence
-//     is rejected up front with rdma_errc::ext_too_many_sge (a clean library
+//     is rejected up front with rdma_errc::too_many_sge (a clean library
 //     error -- no raw HW EINVAL, no hang), and the connection stays usable (a
 //     subsequent single-segment send/echo still round-trips).
 //
@@ -200,9 +200,9 @@ bool phase_too_many_sge(rdma::rdma_device_ptr const& device,
         };
         auto [es, sn] = co_await qp.async_send(too_many, nothrow);
         (void)sn;
-        rejected = (es == rdma::rdma_errc::ext_too_many_sge);
+        rejected = (es == rdma::rdma_errc::too_many_sge);
         if (!rejected) {
-          std::cerr << "[phase2] expected ext_too_many_sge, got: "
+          std::cerr << "[phase2] expected too_many_sge, got: "
                     << es.message() << "\n";
         }
 
@@ -229,7 +229,7 @@ bool phase_too_many_sge(rdma::rdma_device_ptr const& device,
   bool const ok = rejected && alive_after;
   if (ok) {
     std::cout << "[PASS] phase 2: 3-segment send rejected with "
-                 "ext_too_many_sge; connection still usable\n";
+                 "too_many_sge; connection still usable\n";
   } else {
     std::cerr << "[FAIL] phase 2: rejected=" << rejected
               << " alive_after=" << alive_after << "\n";

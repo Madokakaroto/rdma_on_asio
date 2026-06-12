@@ -18,12 +18,12 @@ inline void use_device(asio::io_context& io_ctx, nd_device_ptr const& device,
                        nd_config_t const& config, asio::error_code& ec) {
   auto& dev_svc = asio::use_service<detail::nd_device_service>(io_ctx);
   if (dev_svc.is_registered()) {
-    ec = nd_errc::ext_already_registered;
+    ec = rdma_errc::already_registered;
     ASIO_ERROR_LOCATION(ec);
     return;
   }
   if (!device) {
-    ec = nd_errc::ext_invalid_device;
+    ec = rdma_errc::invalid_device;
     ASIO_ERROR_LOCATION(ec);
     return;
   }

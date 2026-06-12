@@ -42,14 +42,14 @@ class nd_memory_region {
 
   std::uint32_t local_key() const {
     if (!mr_) {
-      asio::detail::throw_error(nd_errc::ext_invalid_mr);
+      asio::detail::throw_error(rdma_errc::invalid_handle);
     }
     return mr_->GetLocalToken();
   }
 
   std::uint32_t remote_key() const {
     if (!mr_) {
-      asio::detail::throw_error(nd_errc::ext_invalid_mr);
+      asio::detail::throw_error(rdma_errc::invalid_handle);
     }
     return mr_->GetRemoteToken();
   }
@@ -102,7 +102,7 @@ class nd_memory_region {
                                                     int extra_flag) {
     
     if (!device) {
-      asio::detail::throw_error(nd_errc::ext_invalid_device);
+      asio::detail::throw_error(rdma_errc::invalid_device);
     }
     asio::error_code ec{};
     detail::nd2_memory_region_ptr result{detail::verbs_ops::reg_mr(

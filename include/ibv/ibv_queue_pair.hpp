@@ -73,7 +73,7 @@ public:
   void bind(asio::io_context& io_ctx, asio::error_code& ec) {
     auto& dev_svc = asio::use_service<detail::ibv_device_service>(io_ctx);
     if (!dev_svc.is_registered()) {
-      ec = make_error_code(ibv_errc::ext_device_not_registered);
+      ec = make_error_code(rdma_errc::device_not_registered);
       return;
     }
     auto& io_svc =

@@ -6,7 +6,7 @@
 //   Phase 1 -- async_connect: a server takes the connect REQUEST but never
 //     accepts, so the client is parked in `connecting`. A cancellation_signal
 //     (emitted from another thread) cancels just that connect -> operation_aborted,
-//     and the connector is left terminal (reconnect -> ext_connector_terminal).
+//     and the connector is left terminal (reconnect -> connector_terminal).
 //
 //   Phase 2 -- listener async_get_connection: with no client, the get is parked;
 //     a cancellation_signal cancels it -> operation_aborted, and the listener is
@@ -126,10 +126,10 @@ bool phase_connect(rdma::rdma_device_ptr const& device, std::string const& ip,
   worker.join();
 
   bool const ok = reqd && fired && conn_ec == asio::error::operation_aborted &&
-                  re_fired && re_ec == rdma::ibv_errc::ext_connector_terminal;
+                  re_fired && re_ec == rdma::rdma_errc::connector_terminal;
   if (ok) {
     std::cout << "[PASS] phase 1: async_connect per-op cancel -> aborted; "
-                 "connector terminal (reconnect -> ext_connector_terminal)\n";
+                 "connector terminal (reconnect -> connector_terminal)\n";
   } else {
     std::cerr << "[FAIL] phase 1: reqd=" << reqd << " fired=" << fired
               << " conn_ec=" << conn_ec.message() << " re_ec=" << re_ec.message()

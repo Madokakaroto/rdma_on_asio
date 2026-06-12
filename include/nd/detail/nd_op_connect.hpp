@@ -59,7 +59,7 @@ protected:
         o->stage_ = stage_t::done;
         return status_t::completed;
       default:
-        ec = nd_errc::ext_already_stopt;
+        ec = rdma_errc::invalid_handle;
         o->stage_ = stage_t::error;
         return status_t::completed;
     }

@@ -249,10 +249,10 @@ bool phase_terminal_reconnect(rdma::rdma_device_ptr const& device,
   worker.join();
 
   bool const ok = fired && !timed_out &&
-                  connect_ec == rdma::nd_errc::ext_connector_terminal;
+                  connect_ec == rdma::rdma_errc::connector_terminal;
   if (ok) {
     std::cout << "[PASS] reconnect on terminal connector returns "
-                 "ext_connector_terminal\n";
+                 "connector_terminal\n";
   } else {
     std::cerr << "[FAIL] terminal reconnect: fired=" << fired
               << " timed_out=" << timed_out << "\n";

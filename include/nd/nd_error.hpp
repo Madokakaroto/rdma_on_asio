@@ -5,64 +5,13 @@
 
 #include "asio.hpp"
 #include "ndstatus.h"
-
-#ifndef NDEXT_NO_AVAILABLE_ADDRESS
-#define NDEXT_NO_AVAILABLE_ADDRESS -1
-#endif
-#ifndef NDEXT_ALREADY_STOPT
-#define NDEXT_ALREADY_STOPT -2
-#endif
-#ifndef NDEXT_INVALID_LISTENER
-#define NDEXT_INVALID_LISTENER -3
-#endif
-#ifndef NDEXT_INVALID_CONNECTOR
-#define NDEXT_INVALID_CONNECTOR -4
-#endif
-#ifndef NDEXT_INVALID_QP
-#define NDEXT_INVALID_QP -5
-#endif
-#ifndef NDEXT_INVALID_CQ
-#define NDEXT_INVALID_CQ -6
-#endif
-#ifndef NDEXT_INVALID_MR
-#define NDEXT_INVALID_MR -7
-#endif
-#ifndef NDEXT_INVALID_DEVICE
-#define NDEXT_INVALID_DEVICE -8
-#endif
-#ifndef NDEXT_ALREADY_REGISTERED
-#define NDEXT_ALREADY_REGISTERED -9
-#endif
-#ifndef NDEXT_NO_EXECUTOR
-#define NDEXT_NO_EXECUTOR -10
-#endif
-#ifndef NDEXT_NO_AVAILABLE_PROVIDER
-#define NDEXT_NO_AVAILABLE_PROVIDER -11
-#endif
-#ifndef NDEXT_DEVICE_NOT_REGISTERED
-#define NDEXT_DEVICE_NOT_REGISTERED -12
-#endif
-#ifndef NDEXT_DISCONNECTED
-#define NDEXT_DISCONNECTED -13
-#endif
-#ifndef NDEXT_CONNECTOR_TERMINAL
-#define NDEXT_CONNECTOR_TERMINAL -14
-#endif
-#ifndef NDEXT_TOO_MANY_SGE
-#define NDEXT_TOO_MANY_SGE -15
-#endif
-#ifndef NDEXT_PRIVATE_DATA_TOO_LARGE
-#define NDEXT_PRIVATE_DATA_TOO_LARGE -16
-#endif
-
-
+#include "rdma/rdma_error.hpp"
 
 namespace asio::rdma {
 
 enum class nd_errc : int {
   success = ND_SUCCESS,
   timeout = ND_TIMEOUT,
-  pending = ND_PENDING,
   buffer_overflow = ND_BUFFER_OVERFLOW,
   device_busy = ND_DEVICE_BUSY,
   no_more_entries = ND_NO_MORE_ENTRIES,
@@ -104,34 +53,6 @@ enum class nd_errc : int {
   host_unreachable = ND_HOST_UNREACHABLE,
   connection_aborted = ND_CONNECTION_ABORTED,
   device_removed = ND_DEVICE_REMOVED,
-
-  ext_no_available_address = NDEXT_NO_AVAILABLE_ADDRESS,
-  ext_already_stopt = NDEXT_ALREADY_STOPT,
-  ext_invalid_listener = NDEXT_INVALID_LISTENER,
-  ext_invalid_connector = NDEXT_INVALID_CONNECTOR,
-  ext_invalid_qp = NDEXT_INVALID_QP,
-  ext_invalid_cq = NDEXT_INVALID_CQ,
-  ext_invalid_mr = NDEXT_INVALID_MR,
-  ext_invalid_device = NDEXT_INVALID_DEVICE,
-  ext_already_registered = NDEXT_ALREADY_REGISTERED,
-  ext_no_executor = NDEXT_NO_EXECUTOR,
-  ext_no_available_provider = NDEXT_NO_AVAILABLE_PROVIDER,
-  ext_device_not_registered = NDEXT_DEVICE_NOT_REGISTERED,
-  // Connection torn down (NotifyDisconnect fired). Mirrors ibv_errc::ext_disconnected;
-  // not mapped onto a socket error code (see disconnect_refactor_plan D-D).
-  ext_disconnected = NDEXT_DISCONNECTED,
-  // Connector is terminal (discarded): a prior disconnect()/NotifyDisconnect left
-  // it torn down. async_connect early-exits with this instead of reusing the
-  // stranded connector; the user must create a fresh one. Mirrors
-  // ibv_errc::ext_connector_terminal.
-  ext_connector_terminal = NDEXT_CONNECTOR_TERMINAL,
-  // A send/recv/read/write buffer sequence produced more SGEs than the device's
-  // max_send_sge / max_recv_sge. Rejected before posting (clean error). Mirrors
-  // ibv_errc::ext_too_many_sge. See sgl_buffer_plan Q-C.
-  ext_too_many_sge = NDEXT_TOO_MANY_SGE,
-  // Outgoing connect/accept private_data exceeds the CM private-data cap
-  // (max_outgoing_private_data = 255). Mirrors ibv_errc::ext_private_data_too_large.
-  ext_private_data_too_large = NDEXT_PRIVATE_DATA_TOO_LARGE,
 };
 
 class nd_error_category : public std::error_category {
@@ -146,8 +67,6 @@ public:
         return "ND_SUCCESS";
       case ND_TIMEOUT:
         return "ND_TIMEOUT";
-      case ND_PENDING:
-        return "ND_PENDING";
       case ND_BUFFER_OVERFLOW:
         return "ND_BUFFER_OVERFLOW";
       case ND_DEVICE_BUSY:
@@ -230,38 +149,6 @@ public:
         return "ND_CONNECTION_ABORTED";
       case ND_DEVICE_REMOVED:
         return "ND_DEVICE_REMOVED";
-      case NDEXT_NO_AVAILABLE_ADDRESS:
-        return "ND_EXT no available address";
-      case NDEXT_ALREADY_STOPT:
-        return "ND_EXT already stopt";
-      case NDEXT_INVALID_LISTENER:
-        return "ND_EXT invalid listener";
-      case NDEXT_INVALID_CONNECTOR:
-        return "ND_EXT invalid connector";
-      case NDEXT_INVALID_QP:
-        return "ND_EXT invalid queue pair";
-      case NDEXT_INVALID_CQ:
-        return "ND_EXT invalid completion queue";
-      case NDEXT_INVALID_MR:
-        return "ND_EXT invalid memory region";
-      case NDEXT_INVALID_DEVICE:
-        return "ND_EXT invalid device";
-      case NDEXT_ALREADY_REGISTERED:
-        return "ND_EXT already registered";
-      case NDEXT_NO_EXECUTOR:
-        return "ND_EXT no executor";
-      case NDEXT_NO_AVAILABLE_PROVIDER:
-        return "ND_EXT no available provider";
-      case NDEXT_DEVICE_NOT_REGISTERED:
-        return "ND_EXT device not registered (call use_device first)";
-      case NDEXT_DISCONNECTED:
-        return "ND_EXT connection disconnected";
-      case NDEXT_CONNECTOR_TERMINAL:
-        return "ND_EXT connector is terminal (disconnected/failed); create a new connector";
-      case NDEXT_TOO_MANY_SGE:
-        return "ND_EXT scatter/gather list exceeds device max_sge";
-      case NDEXT_PRIVATE_DATA_TOO_LARGE:
-        return "ND_EXT outgoing private_data exceeds the CM cap (255 bytes)";
       default:
         return "UNKNOWN_ND_ERROR";
     }

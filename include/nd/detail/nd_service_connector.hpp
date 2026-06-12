@@ -134,7 +134,7 @@ public:
       return;
     }
     if (!handle.connector_) {
-      ec = nd_errc::ext_invalid_connector;
+      ec = rdma_errc::invalid_handle;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
@@ -189,7 +189,7 @@ public:
       return;
     }
     if (request.size() > max_outgoing_private_data) {
-      asio::error_code ec = nd_errc::ext_private_data_too_large;
+      asio::error_code ec = rdma_errc::private_data_too_large;
       this->scheduler_.work_started();
       this->scheduler_.on_completion(p.p, ec);
       p.v = p.p = 0;
@@ -201,14 +201,14 @@ public:
     // Mirrors the ibv `connect_state_ != idle` guard. [Windows verify]
     if (impl.connect_state_.load(std::memory_order_acquire) !=
         connect_state::idle) {
-      asio::error_code ec = nd_errc::ext_connector_terminal;
+      asio::error_code ec = rdma_errc::connector_terminal;
       this->scheduler_.work_started();
       this->scheduler_.on_completion(p.p, ec);
       p.v = p.p = 0;
       return;
     }
     if (!qp) {
-      asio::error_code ec = nd_errc::ext_invalid_qp;
+      asio::error_code ec = rdma_errc::invalid_handle;
       this->scheduler_.work_started();
       this->scheduler_.on_completion(p.p, ec);
       p.v = p.p = 0;
@@ -231,14 +231,14 @@ public:
     p.p = new (p.v) op{impl.connector_.Get(), &impl.connect_state_, handler,
                        io_ex};
     if (!device_registered()) {
-      asio::error_code ec = nd_errc::ext_device_not_registered;
+      asio::error_code ec = rdma_errc::device_not_registered;
       this->scheduler_.work_started();
       this->scheduler_.on_completion(p.p, ec);
       p.v = p.p = 0;
       return;
     }
     if (private_data.size() > max_outgoing_private_data) {
-      asio::error_code ec = nd_errc::ext_private_data_too_large;
+      asio::error_code ec = rdma_errc::private_data_too_large;
       this->scheduler_.work_started();
       this->scheduler_.on_completion(p.p, ec);
       p.v = p.p = 0;
@@ -246,14 +246,14 @@ public:
     }
     if (impl.connect_state_.load(std::memory_order_acquire) !=
         connect_state::idle) {
-      asio::error_code ec = nd_errc::ext_connector_terminal;
+      asio::error_code ec = rdma_errc::connector_terminal;
       this->scheduler_.work_started();
       this->scheduler_.on_completion(p.p, ec);
       p.v = p.p = 0;
       return;
     }
     if (!qp) {
-      asio::error_code ec = nd_errc::ext_invalid_qp;
+      asio::error_code ec = rdma_errc::invalid_handle;
       this->scheduler_.work_started();
       this->scheduler_.on_completion(p.p, ec);
       p.v = p.p = 0;
@@ -308,8 +308,8 @@ public:
       p.p = new (p.v) nd_disconnect_op{impl.connector_.Get()};
       this->scheduler_.work_started();
       asio::error_code dec{};
-      detail::disconnect(impl.connector_.Get(), p.p, dec);
-      if (!dec || dec == nd_errc::pending) {
+      auto const hr = detail::disconnect(impl.connector_.Get(), p.p, dec);
+      if (!dec && hr == ND_PENDING) {
         this->scheduler_.on_pending(p.p);
         ec.clear();
       } else {
@@ -328,7 +328,7 @@ public:
 
   // Disconnect NOTIFICATION (on_disconnect). One-shot; armed on demand via
   // IND2Connector::NotifyDisconnect. Level-triggered: completes immediately if
-  // peer_closed_ OR connect_state_ == closed. Completion code: ext_disconnected.
+  // peer_closed_ OR connect_state_ == closed. Completion code: rdma_errc::disconnected.
   template <typename Handler, typename IoExecutor>
   void async_wait_disconnect(implementation_type& impl, Handler& handler,
                              IoExecutor const& io_ex) {
@@ -343,19 +343,19 @@ public:
         impl.connect_state_.load(std::memory_order_acquire) ==
             connect_state::closed) {
       this->scheduler_.on_completion(p.p,
-                                     make_error_code(nd_errc::ext_disconnected));
+                                     make_error_code(rdma_errc::disconnected));
       p.v = p.p = 0;
       return;
     }
     if (!impl.connector_) {
       this->scheduler_.on_completion(
-          p.p, make_error_code(nd_errc::ext_invalid_connector));
+          p.p, make_error_code(rdma_errc::invalid_handle));
       p.v = p.p = 0;
       return;
     }
     asio::error_code ec{};
-    detail::notify_disconnect(impl.connector_.Get(), p.p, ec);
-    if (!ec || ec == nd_errc::pending) {
+    auto const hr = detail::notify_disconnect(impl.connector_.Get(), p.p, ec);
+    if (!ec && hr == ND_PENDING) {
       arm_nd_cancellation(cancel_slot, impl.connector_handle_.get(), p.p);
       this->scheduler_.on_pending(p.p);
     }
@@ -375,7 +375,7 @@ private:
     }
 
     if (!device_svc_.is_registered()) {
-      ec = nd_errc::ext_device_not_registered;
+      ec = rdma_errc::device_not_registered;
       ASIO_ERROR_LOCATION(ec);
       return;
     }
@@ -440,14 +440,18 @@ private:
     }
 
     auto const eff = effective_config();
-    connect(impl.connector_.Get(), qp,
-            endpoint.data(), endpoint.size(),
-            eff.inbound_read_limit_,
-            eff.outbound_read_limit_,
-            private_data.size() == 0 ? nullptr : private_data.data(),
-            static_cast<ULONG>(private_data.size()),
-            op, ec);
-    if (ec && ec != nd_errc::pending) {
+    auto const hr = connect(impl.connector_.Get(), qp,
+                            endpoint.data(), endpoint.size(),
+                            eff.inbound_read_limit_,
+                            eff.outbound_read_limit_,
+                            private_data.size() == 0 ? nullptr : private_data.data(),
+                            static_cast<ULONG>(private_data.size()),
+                            op, ec);
+    if (ec) {
+      this->scheduler_.on_completion(op, ec);
+      return;
+    }
+    if (hr != ND_PENDING) {
       this->scheduler_.on_completion(op, ec);
       return;
     }
@@ -468,13 +472,17 @@ private:
     }
     asio::error_code ec{};
     auto const eff = effective_config();
-    accept(impl.connector_.Get(), qp,
-           eff.inbound_read_limit_,
-           eff.outbound_read_limit_,
-           private_data.size() == 0 ? nullptr : private_data.data(),
-           static_cast<ULONG>(private_data.size()),
-           op, ec);
-    if (ec && ec != nd_errc::pending) {
+    auto const hr = accept(impl.connector_.Get(), qp,
+                           eff.inbound_read_limit_,
+                           eff.outbound_read_limit_,
+                           private_data.size() == 0 ? nullptr : private_data.data(),
+                           static_cast<ULONG>(private_data.size()),
+                           op, ec);
+    if (ec) {
+      this->scheduler_.on_completion(op, ec);
+      return;
+    }
+    if (hr != ND_PENDING) {
       this->scheduler_.on_completion(op, ec);
       return;
     }

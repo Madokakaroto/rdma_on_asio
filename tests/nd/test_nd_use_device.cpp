@@ -54,7 +54,7 @@ void test_use_device_double_init() {
   rdma::use_device(io_ctx, dev, rdma::nd_config_t{}, ec);
   assert(!ec);
   rdma::use_device(io_ctx, dev, rdma::nd_config_t{}, ec);
-  assert(ec);  // ext_already_registered
+  assert(ec == rdma::rdma_errc::already_registered);
   std::cout << "[PASS] use_device: double init returns error\n";
 }
 
@@ -62,7 +62,7 @@ void test_use_device_null_device() {
   asio::io_context io_ctx;
   asio::error_code ec;
   rdma::use_device(io_ctx, rdma::nd_device_ptr{}, rdma::nd_config_t{}, ec);
-  assert(ec);  // ext_invalid_device
+  assert(ec == rdma::rdma_errc::invalid_device);
   std::cout << "[PASS] use_device(nullptr) returns error\n";
 }
 

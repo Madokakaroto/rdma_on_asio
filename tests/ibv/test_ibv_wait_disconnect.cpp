@@ -2,7 +2,7 @@
 // synchronous connector::disconnect(). Single process: a server and a client
 // coroutine share one io_context and connect over the local RoCE device. The
 // client disconnect()s; we assert the server's async_wait_disconnect fires with
-// ibv_errc::ext_disconnected, and that arming it again afterwards completes
+// rdma_errc::disconnected, and that arming it again afterwards completes
 // immediately (level-triggered).
 //
 // Usage: test_ibv_wait_disconnect <roce-ip> [port]
@@ -68,7 +68,7 @@ asio::awaitable<void> run_server(asio::io_context& io,
 
   // Level-trigger: connection already torn down -> arming again completes now.
   auto [wec2] = co_await conn.async_wait_disconnect(nothrow);
-  out.level_trigger_ok = (wec2 == rdma::ibv_errc::ext_disconnected);
+  out.level_trigger_ok = (wec2 == rdma::rdma_errc::disconnected);
   std::cout << "[server] level-trigger re-arm: " << wec2.message() << "\n";
 
   io.stop();
@@ -121,10 +121,10 @@ int main(int argc, char* argv[]) {
     io.run();
 
     bool ok = r.established && r.watcher_fired &&
-              r.watcher_ec == rdma::ibv_errc::ext_disconnected &&
+              r.watcher_ec == rdma::rdma_errc::disconnected &&
               r.level_trigger_ok;
     if (ok) {
-      std::cout << "[PASS] async_wait_disconnect fired with ext_disconnected; "
+      std::cout << "[PASS] async_wait_disconnect fired with disconnected; "
                    "level-trigger ok\n";
       return 0;
     }
