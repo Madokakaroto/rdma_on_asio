@@ -25,3 +25,20 @@ foreach(rdma_test test_rdma_error test_rdma_echo test_rdma_echo_poll test_rdma_s
 endforeach()
 
 add_test(NAME test_rdma_error COMMAND test_rdma_error)
+set_tests_properties(test_rdma_error PROPERTIES LABELS "unit;rdma;legacy")
+
+if(RDMA_ENABLE_HARDWARE_TESTS AND RDMA_TEST_ADDR)
+  math(EXPR RDMA_TEST_SGL_PORT "${RDMA_TEST_BASE_PORT} + 60")
+  math(EXPR RDMA_TEST_PRIVATE_DATA_PORT "${RDMA_TEST_BASE_PORT} + 80")
+
+  add_test(NAME integration_rdma_sgl
+           COMMAND test_rdma_sgl ${RDMA_TEST_ADDR} ${RDMA_TEST_SGL_PORT})
+  set_tests_properties(integration_rdma_sgl
+      PROPERTIES LABELS "integration;hardware;rdma")
+
+  add_test(NAME integration_rdma_private_data
+           COMMAND test_rdma_private_data
+                   ${RDMA_TEST_ADDR} ${RDMA_TEST_PRIVATE_DATA_PORT})
+  set_tests_properties(integration_rdma_private_data
+      PROPERTIES LABELS "integration;hardware;rdma")
+endif()

@@ -4,10 +4,10 @@
 #include <system_error>
 
 #include "asio.hpp"
-#include "nd/nd_connector.hpp"
-#include "nd/nd_listener.hpp"
-#include "nd/nd_queue_pair.hpp"
-#include "nd/nd_use_device.hpp"
+#include "rdma/nd/nd_connector.hpp"
+#include "rdma/nd/nd_listener.hpp"
+#include "rdma/nd/nd_queue_pair.hpp"
+#include "rdma/nd/nd_use_device.hpp"
 #include "rdma/tcp.hpp"
 
 namespace rdma = asio::rdma;

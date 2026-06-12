@@ -11,17 +11,17 @@
 #include "rdma/rdma_error.hpp"
 
 #if defined(ASIO_RDMA_BACKEND_ND)
-#  include "nd/nd_queue_pair.hpp"
-#  include "nd/nd_completion_queue.hpp"
-#  include "nd/nd_mr.hpp"
-#  include "nd/nd_device.hpp"
-#  include "nd/nd_use_device.hpp"
+#  include "rdma/nd/nd_queue_pair.hpp"
+#  include "rdma/nd/nd_completion_queue.hpp"
+#  include "rdma/nd/nd_mr.hpp"
+#  include "rdma/nd/nd_device.hpp"
+#  include "rdma/nd/nd_use_device.hpp"
 #elif defined(ASIO_RDMA_BACKEND_VERBS)
-#  include "ibv/ibv_queue_pair.hpp"
-#  include "ibv/ibv_completion_queue.hpp"
-#  include "ibv/ibv_mr.hpp"
-#  include "ibv/ibv_device.hpp"
-#  include "ibv/ibv_use_device.hpp"
+#  include "rdma/ibv/ibv_queue_pair.hpp"
+#  include "rdma/ibv/ibv_completion_queue.hpp"
+#  include "rdma/ibv/ibv_mr.hpp"
+#  include "rdma/ibv/ibv_device.hpp"
+#  include "rdma/ibv/ibv_use_device.hpp"
 #endif
 
 namespace asio::rdma {

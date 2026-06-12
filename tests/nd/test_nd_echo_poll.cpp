@@ -21,9 +21,9 @@
 #include "asio/use_future.hpp"
 #include "asio/as_tuple.hpp"
 
-#include "nd/nd_completion_queue.hpp"
-#include "nd/nd_use_device.hpp"
-#include "nd/nd_mr.hpp"
+#include "rdma/nd/nd_completion_queue.hpp"
+#include "rdma/nd/nd_use_device.hpp"
+#include "rdma/nd/nd_mr.hpp"
 #include "rdma/tcp.hpp"
 
 namespace rdma = asio::rdma;

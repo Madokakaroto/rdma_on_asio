@@ -11,8 +11,8 @@
 #include "asio/use_awaitable.hpp"
 #include "asio/as_tuple.hpp"
 
-#include "nd/nd_use_device.hpp"
-#include "nd/nd_mr.hpp"
+#include "rdma/nd/nd_use_device.hpp"
+#include "rdma/nd/nd_mr.hpp"
 #include "rdma/tcp.hpp"
 
 namespace rdma = asio::rdma;

@@ -1,4 +1,4 @@
-// libibverbs echo test in POLL MODE — io_context-free data plane.
+// libibverbs echo test in POLL MODE --io_context-free data plane.
 //
 //   - Control plane (connect / accept / disconnect over rdma_cm) runs on an
 //     io_context.
@@ -21,9 +21,9 @@
 #include "asio/use_future.hpp"
 #include "asio/as_tuple.hpp"
 
-#include "ibv/ibv_completion_queue.hpp"
-#include "ibv/ibv_use_device.hpp"
-#include "ibv/ibv_mr.hpp"
+#include "rdma/ibv/ibv_completion_queue.hpp"
+#include "rdma/ibv/ibv_use_device.hpp"
+#include "rdma/ibv/ibv_mr.hpp"
 #include "rdma/tcp.hpp"
 
 namespace rdma = asio::rdma;

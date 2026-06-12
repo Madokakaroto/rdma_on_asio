@@ -5,10 +5,10 @@
 #include <system_error>
 
 #include "asio.hpp"
-#include "ibv/ibv_connector.hpp"
-#include "ibv/ibv_listener.hpp"
-#include "ibv/ibv_queue_pair.hpp"
-#include "ibv/ibv_use_device.hpp"
+#include "rdma/ibv/ibv_connector.hpp"
+#include "rdma/ibv/ibv_listener.hpp"
+#include "rdma/ibv/ibv_queue_pair.hpp"
+#include "rdma/ibv/ibv_use_device.hpp"
 #include "rdma/tcp.hpp"
 
 using asio::rdma::tcp;

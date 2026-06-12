@@ -865,34 +865,34 @@ Shared:
 
 ND:
 
-- `include/nd/nd_error.hpp`
-- `include/nd/nd_use_device.hpp`
-- `include/nd/nd_mr.hpp`
-- `include/nd/nd_queue_pair.hpp`
-- `include/nd/nd_completion_queue.hpp`
-- `include/nd/detail/nd_device_impl.hpp`
-- `include/nd/detail/nd_ops_cm.hpp`
-- `include/nd/detail/nd_ops_verbs.hpp`
-- `include/nd/detail/nd_op_connect.hpp`
-- `include/nd/detail/nd_op_wait_disconnect.hpp`
-- `include/nd/detail/nd_service_connector.hpp`
-- `include/nd/detail/nd_service_listener.hpp`
-- `include/nd/detail/nd_service_io_completion.hpp`
-- `include/nd/detail/nd_service_verbs.hpp`
+- `include/rdma/nd/nd_error.hpp`
+- `include/rdma/nd/nd_use_device.hpp`
+- `include/rdma/nd/nd_mr.hpp`
+- `include/rdma/nd/nd_queue_pair.hpp`
+- `include/rdma/nd/nd_completion_queue.hpp`
+- `include/rdma/nd/detail/nd_device_impl.hpp`
+- `include/rdma/nd/detail/nd_ops_cm.hpp`
+- `include/rdma/nd/detail/nd_ops_verbs.hpp`
+- `include/rdma/nd/detail/nd_op_connect.hpp`
+- `include/rdma/nd/detail/nd_op_wait_disconnect.hpp`
+- `include/rdma/nd/detail/nd_service_connector.hpp`
+- `include/rdma/nd/detail/nd_service_listener.hpp`
+- `include/rdma/nd/detail/nd_service_io_completion.hpp`
+- `include/rdma/nd/detail/nd_service_verbs.hpp`
 
 IBV:
 
-- `include/ibv/ibv_error.hpp`
-- `include/ibv/ibv_use_device.hpp`
-- `include/ibv/ibv_mr.hpp`
-- `include/ibv/ibv_queue_pair.hpp`
-- `include/ibv/detail/ibv_device_impl.hpp`
-- `include/ibv/detail/ibv_op_connect.hpp`
-- `include/ibv/detail/ibv_op_wait_disconnect.hpp`
-- `include/ibv/detail/ibv_service_connector.hpp`
-- `include/ibv/detail/ibv_service_listener.hpp`
-- `include/ibv/detail/ibv_service_io_completion.hpp`
-- `include/ibv/detail/ibv_service_verbs.hpp`
+- `include/rdma/ibv/ibv_error.hpp`
+- `include/rdma/ibv/ibv_use_device.hpp`
+- `include/rdma/ibv/ibv_mr.hpp`
+- `include/rdma/ibv/ibv_queue_pair.hpp`
+- `include/rdma/ibv/detail/ibv_device_impl.hpp`
+- `include/rdma/ibv/detail/ibv_op_connect.hpp`
+- `include/rdma/ibv/detail/ibv_op_wait_disconnect.hpp`
+- `include/rdma/ibv/detail/ibv_service_connector.hpp`
+- `include/rdma/ibv/detail/ibv_service_listener.hpp`
+- `include/rdma/ibv/detail/ibv_service_io_completion.hpp`
+- `include/rdma/ibv/detail/ibv_service_verbs.hpp`
 
 Tests:
 

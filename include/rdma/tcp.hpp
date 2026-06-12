@@ -3,13 +3,13 @@
 #include "asio/ip/tcp.hpp"
 
 #if defined(_WIN32) || defined(_WIN64)
-#  include "nd/nd_connector.hpp"
-#  include "nd/nd_listener.hpp"
+#  include "rdma/nd/nd_connector.hpp"
+#  include "rdma/nd/nd_listener.hpp"
 #  define ASIO_RDMA_BACKEND_ND 1
 #elif defined(__linux__)
 #  include <rdma/rdma_cma.h>
-#  include "ibv/ibv_connector.hpp"
-#  include "ibv/ibv_listener.hpp"
+#  include "rdma/ibv/ibv_connector.hpp"
+#  include "rdma/ibv/ibv_listener.hpp"
 #  define ASIO_RDMA_BACKEND_VERBS 1
 #else
 #  error "Unsupported RDMA platform"

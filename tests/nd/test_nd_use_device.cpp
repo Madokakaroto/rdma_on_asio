@@ -3,8 +3,8 @@
 #include <system_error>
 
 #include "asio/io_context.hpp"
-#include "nd/nd_use_device.hpp"
-#include "nd/detail/nd_service_device.hpp"
+#include "rdma/nd/nd_use_device.hpp"
+#include "rdma/nd/detail/nd_service_device.hpp"
 #include "rdma/tcp.hpp"
 
 namespace rdma = asio::rdma;

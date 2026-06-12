@@ -3,7 +3,7 @@
 
 #include <WinSock2.h>
 #include <ws2tcpip.h>
-#include "nd/detail/nd_config_derive.hpp"
+#include "rdma/nd/detail/nd_config_derive.hpp"
 
 namespace rdma = asio::rdma;
 

@@ -6,8 +6,8 @@ A cross-platform **RDMA abstraction layer** that integrates with
 Write your RDMA application **once** against a single portable API; the same source compiles
 and runs on:
 
-- **Linux** — libibverbs + rdma_cm (`ibv` backend, epoll-based)
-- **Windows** — NetworkDirect (`nd` backend, IOCP-based)
+- **Linux:** libibverbs + rdma_cm (`ibv` backend, epoll-based)
+- **Windows:** NetworkDirect (`nd` backend, IOCP-based)
 
 ## Highlights
 
@@ -19,7 +19,7 @@ and runs on:
   acceptor/socket model; on Linux the `rdma_resolve_addr`/`resolve_route` handshake is hidden
   inside `async_connect`.
 - **Two completion modes.** Event-driven (shared CQ bridged into the Asio reactor/IOCP) or
-  manual poll-mode (`completion_queue::poll()`) with an **io_context-free data plane** — bind the
+  manual poll-mode (`completion_queue::poll()`) with an **io_context-free data plane** -- bind the
   queue pair to a standalone CQ and complete data-plane ops on your own polling thread.
 
 ## Quick start
@@ -28,14 +28,14 @@ The data plane (`async_send` / `async_recv` / `async_read` / `async_write`) can 
 completions two ways. Both examples below share the same setup: discover a device via
 `rdma_device_manager_t`, hand it to `use_device(io, dev)` (which installs the per-`io_context`
 completion service and is where the operating config is set), then run `connector` / `listener`
-on that `io_context`. One device can be shared across several `io_context`s — call
+on that `io_context`. One device can be shared across several `io_context`s -- call
 `use_device` with the same `rdma_device_ptr` on each.
 
 ### Event-driven mode (default)
 
 `use_device()` installs a shared completion queue that is bridged into Asio's reactor (IOCP on
 Windows, comp_channel + epoll on Linux). Verbs-op completions are posted to the `io_context`,
-so they compose with `co_await`, callbacks, futures, `asio::as_tuple`, etc. — you just drive
+so they compose with `co_await`, callbacks, futures, `asio::as_tuple`, etc. -- you just drive
 `io.run()`.
 
 ```cpp
@@ -102,7 +102,7 @@ co_await conn.async_accept(qp, nothrow);                            // QP create
 ### Poll mode (manual completion queue)
 
 Create a standalone `rdma_completion_queue`, bind the queue pair to it with the
-**`(cq)` constructor — no `io_context`** — and reap data-plane completions yourself with
+**`(cq)` constructor -- no `io_context`** -- and reap data-plane completions yourself with
 `cq.poll()` / `cq.poll_one()`. With a non-`io_context`-bound completion token (a callback or
 `use_future`, *not* `use_awaitable`), the handler fires **inline on the thread that calls
 `poll()`**, so the data plane never touches an `io_context`. The control-plane handshake
@@ -128,7 +128,7 @@ int main() {
   rdma_completion_queue cq(dev);       // standalone CQ (no comp_channel), holds the device
   rdma_connector<tcp>   conn(io);
   conn.open(tcp::v4());
-  rdma_queue_pair       qp(cq);        // poll-mode QP — bound to cq, NO io_context
+  rdma_queue_pair       qp(cq);        // poll-mode QP -- bound to cq, NO io_context
 
   // control plane: connect on the io_context (QP is created on the connection)
   std::string hello = "client-hello";
@@ -158,16 +158,16 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 
 | Type / call | Purpose |
 |-------------|---------|
-| `rdma_device_manager_t::instance()` | Process-wide device registry; `get_first_available_device(port_space, config)` → `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints) |
+| `rdma_device_manager_t::instance()` | Process-wide device registry; `get_first_available_device(port_space, config)` -- `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints) |
 | `use_device(io, device, config = {})` | Install the per-`io_context` completion service for `device`; sets the operating config. Returns `void`; share one `device` across multiple `io_context`s by calling it on each |
 | `rdma_device_ptr` | Handle to a device (from `get_first_available_device`) |
-| `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` (or `asio::rdma::buffer(mr[, off, n])`) produce value-semantic `const_buffer` / `mutable_buffer` (`{addr, len, lkey}`); `remote_addr(off, n)` → `{addr, rkey}` to advertise a sub-range to a peer |
-| `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, request, reply)` → `(ec, reply_len)` (or no-reply `async_connect(qp, ep, request)` → `(ec)`) / `async_accept(qp, reply)` → `(ec)` (or no-reply `async_accept(qp)`) / `disconnect()` (sync) |
-| `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(port)` / `listen` / `async_get_connection(request)` → `(ec, connector, request_len)` (recv the client's request pd) / `cancel()` (abort pending get; listener stays reusable) |
-| `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write`. Binds to a completion mechanism: `rdma_queue_pair(io)` = event-driven; `rdma_queue_pair(cq)` = poll-mode (io_context-free data plane). `bind()` (deferred) / `is_bound()` / `bound_type()` → `completion_mode` |
+| `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` (or `asio::rdma::buffer(mr[, off, n])`) produce value-semantic `const_buffer` / `mutable_buffer` (`{addr, len, lkey}`); `remote_addr(off, n)` -- `{addr, rkey}` to advertise a sub-range to a peer |
+| `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, request, reply)` -- `(ec, reply_len)` (or no-reply `async_connect(qp, ep, request)` -- `(ec)`) / `async_accept(qp, reply)` -- `(ec)` (or no-reply `async_accept(qp)`) / `disconnect()` (sync) |
+| `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(port)` / `listen` / `async_get_connection(request)` -- `(ec, connector, request_len)` (recv the client's request pd) / `cancel()` (abort pending get; listener stays reusable) |
+| `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write`. Binds to a completion mechanism: `rdma_queue_pair(io)` = event-driven; `rdma_queue_pair(cq)` = poll-mode (io_context-free data plane). `bind()` (deferred) / `is_bound()` / `bound_type()` -- `completion_mode` |
 | `rdma_completion_queue` | Standalone poll-mode CQ; `poll()` / `poll_one()` |
-| `tcp` | Port space: `tcp::endpoint`, `tcp::resolver`, and `tcp::{connector,listener}` (the data-plane `queue_pair` is port-space-agnostic — use `rdma_queue_pair`) |
-| `rdma_config_t` | Capacities (CQ depth, WR/SGE limits, …); `0` = auto-derive from device caps |
+| `tcp` | Port space: `tcp::endpoint`, `tcp::resolver`, and `tcp::{connector,listener}` (the data-plane `queue_pair` is port-space-agnostic -- use `rdma_queue_pair`) |
+| `rdma_config_t` | Capacities (CQ depth, WR/SGE limits, inline data, read limits); `0` = auto-derive from device caps |
 
 `rdma_connector`/`rdma_listener` are templated on the port space (they carry the endpoint
 type); `rdma_queue_pair` and friends are not (the data plane is port-space-agnostic).
@@ -175,7 +175,7 @@ type); `rdma_queue_pair` and friends are not (the data plane is port-space-agnos
 ### Scatter/gather
 
 A buffer element (`asio::rdma::const_buffer` / `mutable_buffer`) is value-semantic
-(`{addr, length, lkey}`, cross-platform — not per-backend), so any standard buffer sequence is
+(`{addr, length, lkey}`, cross-platform -- not per-backend), so any standard buffer sequence is
 a multi-segment SGL: pass a `std::vector` / `std::array` of them (each segment may come from a
 different MR / lkey).
 
@@ -212,7 +212,7 @@ co_await conn.async_accept(qp, asio::buffer(reply), token);
 Notes:
 - **Don't need the received pd?** Use the convenience overloads: `async_connect(qp, ep, request, token)`
   (completion `void(ec)`, no `reply_len`) and `async_accept(qp, token)` (send no reply).
-- Each direction is independent — one side may send while the other sends nothing (pass `{}`).
+- Each direction is independent -- one side may send while the other sends nothing (pass `{}`).
 - **The received length is rdma_cm's transport-padded length, not the sender's exact length**
   (the receiver gets a fixed zero-filled field). If you need the exact length, frame it yourself
   (e.g. a length prefix).
@@ -223,10 +223,9 @@ Notes:
 ## Requirements
 
 - A C++20 compiler (coroutines, concepts).
-- CMake ≥ 3.20.
-- Submodules: `third_party/asio`, `third_party/networkdirect` — `git submodule update --init`.
-- **Linux:** rdma-core dev packages —
-  `sudo apt install libibverbs-dev librdmacm-dev` (or `dnf install rdma-core-devel`).
+- CMake 3.20+.
+- Submodules: `third_party/asio`, `third_party/networkdirect` -- `git submodule update --init`.
+- **Linux:** rdma-core dev packages -- `sudo apt install libibverbs-dev librdmacm-dev` (or `dnf install rdma-core-devel`).
 - **Windows:** NetworkDirect SDK (vendored under `third_party/networkdirect`).
 
 ## Build
@@ -245,10 +244,11 @@ cmake --build build
 include/
   rdma/         public, backend-agnostic API (rdma.hpp, rdma_types.hpp, rdma_commons.hpp,
                 rdma_buffer.hpp, tcp.hpp, detail/rdma_*op*)
-  ibv/          Linux libibverbs + rdma_cm backend
-  nd/           Windows NetworkDirect backend
+    ibv/        Linux libibverbs + rdma_cm backend
+    nd/         Windows NetworkDirect backend
 tests/
-  rdma/         cross-platform tests (rdma_* API)   — built for either backend
+  unit/         Asio-style deterministic unit tests
+  rdma/         cross-platform tests (rdma_* API), built for either backend
   ibv/  nd/     backend-specific tests
 ```
 
@@ -256,17 +256,17 @@ tests/
 
 - **ibv (Linux):** implemented and verified end-to-end over RoCE (device discovery,
   connect/accept/listen, send/recv/read/write, MR, dual completion modes, echo).
-- **nd (Windows):** implemented against the same public surface; build to be verified on Windows.
+- **nd (Windows):** implemented and verified on Windows against the same public surface.
 
 ## Cancellation
 
-**Control plane — object-level *and* per-operation (ibv: implemented + RoCE-verified; nd: same
-design, pending Windows verification).**
+**Control plane -- object-level *and* per-operation (ibv: implemented + RoCE-verified; nd:
+implemented + Windows-verified).**
 
 - *Object-level teardown.* `connector::disconnect()` is one thread-safe, state-adaptive call: it
   aborts an in-flight `async_connect`/`async_accept`, **or** tears down an established connection
   (pending data-plane ops then flush to `operation_aborted`). Because an rdma_cm `cm_id` is
-  single-use, a connector is **terminal** after disconnect — a reused `async_connect` is rejected
+  single-use, a connector is **terminal** after disconnect -- a reused `async_connect` is rejected
   up front with `rdma_errc::connector_terminal`; create a fresh connector. `listener::cancel()` aborts a
   pending `async_get_connection` and leaves the listener in `LISTEN` (reusable, like
   `acceptor::cancel()`).
@@ -274,30 +274,28 @@ design, pending Windows verification).**
   `async_get_connection`, and `async_wait_disconnect` honor a `cancellation_slot`, so
   `cancel_after`, `co_spawn` cancellation, `awaitable_operators` `||`, and `parallel_group` act on
   one specific control-plane op. Cancelling a connect/accept makes the connector terminal;
-  cancelling `async_wait_disconnect` only stops the watcher — the connection stays usable.
+  cancelling `async_wait_disconnect` only stops the watcher -- the connection stays usable.
 
-**Data plane — no per-operation cancellation, by design.** Once a send/recv/read/write work
+**Data plane -- no per-operation cancellation, by design.** Once a send/recv/read/write work
 request is posted, it belongs to the HCA: its buffers stay pinned until the matching completion,
 and standard verbs offers no `ibv_cancel_wr` to retract a single in-flight WR. The only standard
-lever is a *whole-queue* state change — moving the QP to ERROR (which flushes **all** outstanding
+lever is a *whole-queue* state change -- moving the QP to ERROR (which flushes **all** outstanding
 WRs as `operation_aborted`) or destroying it. There is one vendor-private exception,
 `mlx5dv_qp_cancel_posted_send_wrs()` (mlx5 DirectVerbs), which cancels posted *send* WRs by
-`wr_id` — but it is narrow and heavyweight: the QP must first be drained into the SQD state, it
+`wr_id` -- but it is narrow and heavyweight: the QP must first be drained into the SQD state, it
 must have been created with `MLX5DV_QP_CREATE_SIG_PIPELINING` (the API exists for the
 signature-pipelining offload, not general use), it needs a DEVX context, and it covers sends only.
 Being a Mellanox/NVIDIA-private API with those constraints, it is not a portable, general per-WR
-cancel. **So this layer does not implement data-plane single-op cancellation** — to abort
-in-flight data-plane ops, tear the connection down with `disconnect()`, whose QP→ERROR flush
+cancel. **So this layer does not implement data-plane single-op cancellation** -- to abort
+in-flight data-plane ops, tear the connection down with `disconnect()`, whose QP->ERROR flush
 completes them as `operation_aborted`.
 
 ## TODO
 
-- **nd cancellation (Windows)** — mirror the ibv control-plane cancellation on NetworkDirect
-  (`CancelIoEx` per-op / `IND2Connector::Disconnect`), then verify on Windows.
-- **Unit tests** — broaden coverage badly needed: config derivation, error mapping,
+- **Unit tests** -- broaden coverage badly needed: config derivation, error mapping,
   MR slicing/bounds, completion dispatch, poll-mode CQ, connector/listener edge cases.
-- **Benchmark** — add a throughput/latency benchmark harness (send/recv, RDMA read/write).
-- **Compare against `perftest`** — publish numbers next to `ib_send_bw` / `ib_read_bw` /
+- **Benchmark** -- add a throughput/latency benchmark harness (send/recv, RDMA read/write).
+- **Compare against `perftest`** -- publish numbers next to `ib_send_bw` / `ib_read_bw` /
   `ib_write_lat` (rdma-core `perftest`) to quantify the abstraction's overhead.
 
 See [`CLAUDE.md`](CLAUDE.md) for the detailed architecture and design notes.

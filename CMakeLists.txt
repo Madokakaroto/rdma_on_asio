@@ -8,6 +8,12 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+option(RDMA_BUILD_UNIT_TESTS "Build deterministic unit tests" ON)
+option(RDMA_BUILD_INTEGRATION_TESTS "Build smoke and integration tests" ON)
+option(RDMA_ENABLE_HARDWARE_TESTS "Register tests that need RDMA hardware" OFF)
+set(RDMA_TEST_ADDR "" CACHE STRING "Local RDMA-capable IP address for hardware tests")
+set(RDMA_TEST_BASE_PORT "5000" CACHE STRING "Base TCP/RDMA port for hardware tests")
+
 # RDMA backend detection
 if(WIN32)
   set(RDMA_BACKEND "nd" CACHE STRING "RDMA backend (nd, ibv)")
@@ -66,12 +72,19 @@ elseif(RDMA_BACKEND STREQUAL "ibv")
   target_link_libraries(${PROJECT_NAME} PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
 endif()
 
-# Tests
-if(RDMA_BACKEND STREQUAL "nd")
-  add_subdirectory(tests/nd)
-elseif(RDMA_BACKEND STREQUAL "ibv")
-  add_subdirectory(tests/ibv)
+# Unit tests
+if(RDMA_BUILD_UNIT_TESTS)
+  add_subdirectory(tests/unit)
 endif()
 
-# Cross-platform tests (backend-agnostic rdma_* API), built for either backend.
-add_subdirectory(tests/rdma)
+# Smoke/integration tests
+if(RDMA_BUILD_INTEGRATION_TESTS)
+  if(RDMA_BACKEND STREQUAL "nd")
+    add_subdirectory(tests/nd)
+  elseif(RDMA_BACKEND STREQUAL "ibv")
+    add_subdirectory(tests/ibv)
+  endif()
+
+  # Cross-platform tests (backend-agnostic rdma_* API), built for either backend.
+  add_subdirectory(tests/rdma)
+endif()

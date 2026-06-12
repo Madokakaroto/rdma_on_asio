@@ -2,7 +2,7 @@
 #include <iostream>
 #include <system_error>
 
-#include "ibv/ibv_device.hpp"
+#include "rdma/ibv/ibv_device.hpp"
 #include "rdma/tcp.hpp"
 
 void test_singleton() {

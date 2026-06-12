@@ -5,7 +5,7 @@
 #include <WinSock2.h>
 #include <ndsupport.h>
 
-#include "nd/detail/nd_asio_manual_init.hpp"
+#include "rdma/nd/detail/nd_asio_manual_init.hpp"
 
 void test_wsa_not_initialized_before_global() {
   // manual_winsock_init suppresses asio's auto WSAStartup.
