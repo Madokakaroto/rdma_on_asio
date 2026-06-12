@@ -37,7 +37,10 @@ public:
   ibv_accept_op(asio::error_code const& success_ec, native_cm_id_t* cm_id,
                 std::atomic<connect_state>* state, Handler& handler,
                 IoExecutor const& io_ex)
-      : ibv_op_cm(success_ec, cm_id->channel, &do_perform,
+      // cm_id may be null if the connector was never opened (e.g. async_accept
+      // before use_device); that path posts an immediate completion (do_perform
+      // is never called), so a null channel is fine -- mirrors ibv_connect_op_base.
+      : ibv_op_cm(success_ec, cm_id ? cm_id->channel : nullptr, &do_perform,
                   &ibv_accept_op::do_complete)
       , state_(state)
       , cm_id_(cm_id)
