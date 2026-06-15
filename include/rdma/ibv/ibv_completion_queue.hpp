@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cassert>
+#include <cerrno>
 
 #include "asio/detail/mutex.hpp"
 #include "asio/detail/op_queue.hpp"
@@ -49,26 +50,48 @@ public:
   ibv_completion_queue& operator=(ibv_completion_queue&&) = delete;
 
   std::size_t poll() {
+    asio::error_code ec;
+    return poll(ec);
+  }
+
+  // error_code& overload (parity with nd_completion_queue). ibv_poll_cq returns a
+  // negative value on failure; that is surfaced through ec. On success ec is cleared.
+  std::size_t poll(asio::error_code& ec) {
+    ec.clear();
     std::size_t total = drain_ready();
     int n = 0;
     do {
       std::array<detail::native_wc_t, poll_batch> wcs{};
       n = detail::verbs_ops::poll_cq(cq_.get(), poll_batch, wcs.data());
+      if (n < 0) {
+        ec = make_system_error_code(EIO);
+        break;
+      }
       for (int i = 0; i < n; ++i) {
         dispatch(wcs[i]);
       }
-      total += static_cast<std::size_t>(n > 0 ? n : 0);
+      total += static_cast<std::size_t>(n);
     } while (n > 0);
     return total;
   }
 
   std::size_t poll_one() {
+    asio::error_code ec;
+    return poll_one(ec);
+  }
+
+  std::size_t poll_one(asio::error_code& ec) {
+    ec.clear();
     if (auto* op = pop_ready()) {
       op->complete(this);
       return 1;
     }
     detail::native_wc_t wc{};
     int const n = detail::verbs_ops::poll_cq(cq_.get(), 1, &wc);
+    if (n < 0) {
+      ec = make_system_error_code(EIO);
+      return 0;
+    }
     if (n > 0) {
       dispatch(wc);
       return 1;
