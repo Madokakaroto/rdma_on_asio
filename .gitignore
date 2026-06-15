@@ -54,6 +54,7 @@ conaninfo.txt
 
 # Testing
 Testing/
+tests/benchmark/results/
 
 # OS generated
 .DS_Store

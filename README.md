@@ -220,6 +220,83 @@ Notes:
   larger is rejected with `rdma_errc::private_data_too_large`. The outgoing buffer need not
   outlive the call (it is copied at initiation); the receive buffer must stay valid until completion.
 
+## Performance Snapshot
+
+Current benchmark results are tracked in
+[`docs/rdma_stress_performance_results.md`](docs/rdma_stress_performance_results.md), with the
+read/write optimization follow-up in
+[`docs/rdma_read_write_performance_optimization_plan.md`](docs/rdma_read_write_performance_optimization_plan.md).
+
+The 2026-06-15 measurements were collected on a single Windows host using the NetworkDirect
+backend and same-process loopback. They are useful as local engineering and regression signals,
+not as final cross-machine line-rate claims.
+
+Test environment:
+
+| Item | Value |
+|---|---|
+| CPU | AMD EPYC-Rome Processor, 32 cores / 32 logical processors, 2.895 GHz max clock |
+| RDMA NIC | ConnectX Family mlx5Gen Virtual Function |
+| RDMA enabled | Yes |
+| Reported link speed | 100 Gbit/s |
+| Total tested RDMA link bandwidth | 100 Gbit/s |
+| OS/backend | Windows + NetworkDirect (`nd`) |
+| Topology | Single host, same-process loopback |
+| Build | Release, plus RelWithDebInfo for CPU sampling/flame graphs |
+
+Send/recv bandwidth summary from the stable schedule comparison:
+
+| Path | 64 B | 4 KiB | 64 KiB | 128 KiB | Best in sweep |
+|---|---:|---:|---:|---:|---:|
+| RDMA-on-Asio / event callback | 0.561 Gbit/s | 43.840 Gbit/s | 90.801 Gbit/s | 92.797 Gbit/s | 92.797 Gbit/s |
+| RDMA-on-Asio / poll callback | 0.950 Gbit/s | 50.873 Gbit/s | 93.209 Gbit/s | 91.979 Gbit/s | 93.209 Gbit/s |
+| Native ND / poll | 0.975 Gbit/s | 57.003 Gbit/s | 91.201 Gbit/s | 90.101 Gbit/s | 91.201 Gbit/s |
+
+The dedicated send/recv poll/callback run also reached `93.172 Gbit/s` at `128 KiB`, while the
+native ND direct run reached `92.979 Gbit/s` at the same size. In this single-host setup,
+large-message send/recv is therefore close to the reported 100G link rate on both the portable
+RDMA-on-Asio path and the native ND poll baseline.
+
+RDMA write bandwidth summary:
+
+| Path | 64 B | 4 KiB | 64 KiB | 128 KiB | Best in sweep |
+|---|---:|---:|---:|---:|---:|
+| RDMA-on-Asio / event callback | 0.635 Gbit/s | 44.024 Gbit/s | 91.681 Gbit/s | 91.905 Gbit/s | 91.905 Gbit/s |
+| RDMA-on-Asio / poll `use_future` | 0.209 Gbit/s | 13.720 Gbit/s | 92.170 Gbit/s | 92.946 Gbit/s | 92.946 Gbit/s |
+| Native ND / poll | 1.086 Gbit/s | 71.165 Gbit/s | 89.088 Gbit/s | 89.470 Gbit/s | 89.470 Gbit/s |
+
+The current RDMA-on-Asio poll read/write benchmark uses `as_tuple(use_future)`, so its small and
+medium-message numbers include promise/future allocation, heap traffic, and locking. A fairer
+poll/callback read/write benchmark is planned before drawing final wrapper-overhead conclusions.
+
+RDMA read bandwidth summary:
+
+| Path | 64 B | 4 KiB | 64 KiB | 128 KiB | Best in sweep |
+|---|---:|---:|---:|---:|---:|
+| RDMA-on-Asio / event callback | 0.609 Gbit/s | 7.357 Gbit/s | 8.469 Gbit/s | 8.600 Gbit/s | 8.600 Gbit/s |
+| RDMA-on-Asio / poll `use_future` | 0.184 Gbit/s | 5.938 Gbit/s | 8.440 Gbit/s | 8.650 Gbit/s | 8.650 Gbit/s |
+| Native ND / poll | 0.904 Gbit/s | 8.168 Gbit/s | 8.861 Gbit/s | 8.811 Gbit/s | 8.929 Gbit/s |
+
+RDMA read plateaus around `8-9 Gbit/s` for all three paths on this machine. That makes the
+large-message read result look provider/platform/operation limited in the current single-host
+NetworkDirect setup, while small-message read still needs cleaner callback-token profiling.
+
+Next performance work:
+
+- Add `rdma_read_write_bench --mode poll --token-type callback` so read/write poll mode can be
+  compared against native ND poll without `use_future` overhead.
+- Add `--validate full|sample|none` so benchmark validation cost is visible and configurable.
+- Optimize the SGE fast path for single-buffer read/write/send/recv operations: stack native SGE,
+  no `std::distance()`, no repeated buffer scans, and no avoidable sglist resize.
+- Measure custom associated allocators and operation recycling for small-message hot paths while
+  preserving standard Asio async completion semantics.
+- Keep `async_read` / `async_write` completion semantics intact. If a lower-overhead expert path
+  is still justified, design it separately as `post_read` / `post_write` with explicit CQ polling
+  and user-managed lifetime.
+- Continue event-mode tuning by measuring CQ drain batch sizes and re-arm frequency.
+- Add multi-host Linux/IBV comparisons against `perftest` (`ib_send_bw`, `ib_write_bw`,
+  `ib_read_bw`) when matching hardware is available.
+
 ## Requirements
 
 - A C++20 compiler (coroutines, concepts).
@@ -292,12 +369,10 @@ completes them as `operation_aborted`.
 
 ## TODO
 
-- **Benchmark** -- add a throughput/latency benchmark harness (send/recv, RDMA read/write).
-- **Compare against `perftest`** -- publish numbers next to `ib_send_bw` / `ib_read_bw` /
-  `ib_write_lat` (rdma-core `perftest`) to quantify the abstraction's overhead.
-
-Both are performance work, tracked in
-[`docs/rdma_stress_performance_plan.md`](docs/rdma_stress_performance_plan.md).
+- **Performance follow-up** -- finish the fair read/write poll/callback benchmark, SGE fast path,
+  allocator measurements, event scheduler tuning, and multi-host `perftest` comparison. This work
+  is tracked in [`docs/rdma_stress_performance_plan.md`](docs/rdma_stress_performance_plan.md) and
+  [`docs/rdma_read_write_performance_optimization_plan.md`](docs/rdma_read_write_performance_optimization_plan.md).
 
 **Done:** a deterministic, no-hardware unit-test suite (Asio-style harness,
 `RDMA_BUILD_UNIT_TESTS`, default `ctest`) plus opt-in hardware integration/regression

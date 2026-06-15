@@ -105,7 +105,7 @@ public:
   }
 
 private:
-  static constexpr std::size_t poll_wcs_count = 4;
+  static constexpr std::size_t poll_wcs_count = 16;
 
   // Single-in-flight, self-perpetuating CQ poller. Each cycle uses a fresh IOCP
   // overlapped op (allocated in arm_poller), so only one is ever outstanding --

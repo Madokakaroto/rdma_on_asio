@@ -10,9 +10,17 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(RDMA_BUILD_UNIT_TESTS "Build deterministic unit tests" ON)
 option(RDMA_BUILD_INTEGRATION_TESTS "Build smoke and integration tests" ON)
+option(RDMA_BUILD_STRESS_TESTS "Build opt-in RDMA stress tests" OFF)
+option(RDMA_BUILD_PERFORMANCE_TESTS "Build opt-in RDMA performance and latency tools" OFF)
+option(RDMA_BUILD_NATIVE_BASELINES "Build opt-in native backend baseline tools" OFF)
+option(RDMA_ENABLE_PERFTEST_BASELINE "Enable optional perftest baseline helpers" OFF)
+option(RDMA_BUILD_PERFTEST "Build/import a project-managed perftest checkout for benchmark use" OFF)
 option(RDMA_ENABLE_HARDWARE_TESTS "Register tests that need RDMA hardware" OFF)
 set(RDMA_TEST_ADDR "" CACHE STRING "Local RDMA-capable IP address for hardware tests")
+set(RDMA_TEST_PEER_ADDR "" CACHE STRING "Peer RDMA-capable IP address for two-host hardware tests")
 set(RDMA_TEST_BASE_PORT "5000" CACHE STRING "Base TCP/RDMA port for hardware tests")
+set(RDMA_PERFTEST_MODE "system" CACHE STRING "perftest mode: system, external, or managed")
+set(RDMA_PERFTEST_BIN_DIR "" CACHE STRING "Directory containing prebuilt perftest executables")
 
 # RDMA backend detection
 if(WIN32)
@@ -71,4 +79,8 @@ if(RDMA_BUILD_INTEGRATION_TESTS)
 
   # Cross-platform tests (backend-agnostic rdma_* API), built for either backend.
   add_subdirectory(tests/rdma)
+endif()
+
+if(RDMA_BUILD_STRESS_TESTS OR RDMA_BUILD_PERFORMANCE_TESTS OR RDMA_BUILD_NATIVE_BASELINES)
+  add_subdirectory(tests/benchmark)
 endif()

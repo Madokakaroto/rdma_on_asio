@@ -1,0 +1,23 @@
+{
+  "name": "send_recv_bw_event_single_host_smoke",
+  "backend": "auto",
+  "baseline": ["rdma_on_asio"],
+  "operation": "send_recv",
+  "metric": "bandwidth",
+  "completion_mode": "event",
+  "token_type": "callback",
+  "connection": "RC",
+  "message_size": 64,
+  "queue_depth": 4,
+  "qps": 1,
+  "threads": 1,
+  "iterations": 32,
+  "duration_sec": 0,
+  "margin_sec": 0,
+  "inline_size": 0,
+  "cq_mod": 1,
+  "post_list": 1,
+  "recv_post_list": 1,
+  "signaled_every": 1,
+  "topology": "single_host_same_process"
+}
