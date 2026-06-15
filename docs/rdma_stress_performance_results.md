@@ -479,3 +479,95 @@ Hotspot notes:
   read/write benchmark path, then compare it against native ND poll. That would
   remove `use_future` promise allocation from the measurement and make the
   comparison line up with the send/recv poll/callback benchmark.
+
+## 2026-06-15 Linux IBV (RoCE) Single-Host
+
+First IBV-backend run of the cross-platform benchmark/stress harness. Collected on
+a Linux host (`mlx5_0`, RoCE, `10.234.66.132`), same-process loopback, `Release`.
+These are development signals from a single host, not final claims. Link speed was
+not re-probed on Linux; the fabric is the same ~100 Gbps class as the ND host, so
+treat utilization as approximate.
+
+Prerequisite fix: `ibv_completion_queue` previously lacked the
+`poll(error_code&)` / `poll_one(error_code&)` overloads that `nd_completion_queue`
+exposes, so the `rdma_send_recv_bench` / `rdma_read_write_bench` benches (written
+against the ND shape) did not compile on IBV. Those overloads were added for
+backend parity.
+
+Command shape (same harness as the ND runs):
+
+```text
+rdma_send_recv_bench   --single-process --local-addr 10.234.66.132 --operation send_recv
+rdma_read_write_bench  --single-process --local-addr 10.234.66.132 --operation <write|read>
+  --metric bandwidth --mode <event|poll> --token-type <callback|use_future>
+  --topology single_host_same_process --iterations 20000 --queue-depth 64 --message-size <bytes>
+```
+
+Send/recv bandwidth (Gbit/s), all runs `validation_passed=true`:
+
+| Message Size | Poll/callback | Event/callback |
+|---:|---:|---:|
+| 64 B | 0.526 | 0.275 |
+| 1,024 B | 9.527 | 4.440 |
+| 4,096 B | 38.753 | 18.953 |
+| 16,384 B | 90.551 | 74.014 |
+| 65,536 B | 92.778 | 91.215 |
+
+RDMA write bandwidth (Gbit/s), all `validation_passed=true`:
+
+| Message Size | Event/callback | Poll/use_future |
+|---:|---:|---:|
+| 64 B | 0.489 | 0.224 |
+| 4,096 B | 27.637 | 15.371 |
+| 16,384 B | 93.436 | 37.258 |
+| 65,536 B | 93.808 | 92.214 |
+
+RDMA read bandwidth (Gbit/s), all `validation_passed=true`:
+
+| Message Size | Event/callback | Poll/use_future |
+|---:|---:|---:|
+| 64 B | 0.374 | 0.104 |
+| 4,096 B | 2.180 | 1.781 |
+| 16,384 B | 2.323 | 2.294 |
+| 65,536 B | 2.408 | 2.262 |
+
+Stress (Stage 4/5):
+
+| Test | Result |
+|---|---|
+| `rdma_connect_disconnect_soak` (1000 iters x 2 threads) | PASS (2000/2000 completed, `validation_passed=true`) |
+| `rdma_shared_cq_stress` (event, up to 16 QPs x 4 threads, 160k msgs) | PASS after the receive-window fix (see below) |
+
+Notes:
+
+- Send/recv and write track the ~100G class for large payloads on the
+  pre-posted-window benches (poll send/recv `92.8 Gbit/s` and write `93.8 Gbit/s`
+  at 64 KiB). Event mode trails poll for small/medium payloads, as on ND.
+- **RDMA read plateaus much lower on this IBV/RoCE single-host setup
+  (~2.3-2.4 Gbit/s) than on the ND host (~8-9 Gbit/s).** Both look platform/
+  operation limited rather than wrapper limited, but the IBV read ceiling is a
+  distinct data point worth a dedicated investigation.
+- **`rdma_shared_cq_stress` / multi-message RNR stall: root-caused and FIXED.**
+  Both originally used a strict 1-deep ping-pong per QP (client `async_send` then
+  server `async_recv`); the client send preceded the server's posted receive, hit
+  RNR, and did not heal on this single-host RoCE loopback (a busy-poll experiment
+  confirmed the completions never arrived, so it was a data-plane/RNR stall, not a
+  CQ-poller wakeup bug). Fix: both tests now use a **pre-posted receive window** --
+  the server keeps `window` receives posted (re-posting one as each echo
+  completes) and the client posts the echo receive before sending -- so a receive
+  is always waiting before any send arrives. After the fix, `rdma_shared_cq_stress`
+  passes up to 16 QPs x 4 `run()` threads x 160,000 messages with
+  `completed_count == posted_count`, and `test_rdma_regression`'s multi-message
+  ordering passes (3x stable). This also exercises the documented shared-CQ poller
+  contract (single lazy poller, consistent completion count, clean `io.stop()`),
+  confirming the poller itself is correct under multi-QP / multi-thread load.
+
+Pending on IBV after this run:
+
+- IBV-vs-perftest comparison (`ib_send_bw` / `ib_read_bw` / `ib_write_lat`) is still
+  not executed; the tooling builds but no perftest baseline numbers exist.
+- Library parity knobs for a fair perftest comparison (selective signaling /
+  `cq_mod`, inline data, WR batching) are still unimplemented (see plan
+  "Library Capability Prerequisites").
+- CPU-efficiency fields and a Linux `perf` flame graph for the read hotspot.
+- Two-host / multi-host topology.

@@ -380,9 +380,4 @@ tests (`RDMA_ENABLE_HARDWARE_TESTS` + `RDMA_TEST_ADDR`) now cover the public API
 buffer/op/config/error logic, and service-state guards -- see
 [`docs/unit_test_plan.md`](docs/unit_test_plan.md).
 
-**Known issue:** the single-process multi-message echo regression
-(`tests/rdma/test_rdma_regression.cpp`, hardware-gated) stalls at the 3rd back-to-back
-exchange -- a data-plane RNR/flow stall under shared-CQ single-thread ping-pong (the
-event-mode poller is ruled out); under investigation.
-
 See [`CLAUDE.md`](CLAUDE.md) for the detailed architecture and design notes.

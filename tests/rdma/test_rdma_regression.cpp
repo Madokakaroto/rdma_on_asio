@@ -7,16 +7,20 @@
 //   - Negative connect to a port with no listener.
 //
 // Usage: test_rdma_regression <roce-ip> [port]   (skips if no arg).
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <functional>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 #include "asio/as_tuple.hpp"
 #include "asio/awaitable.hpp"
@@ -451,6 +455,208 @@ bool phase_zero_length(rdma::rdma_device_ptr const& device,
                       server_zero_ok && client_zero_ok && alive_after);
 }
 
+namespace {
+
+constexpr std::size_t mm_slot_bytes = 64;
+
+// Windowed echo server: keeps `window` receives posted (re-posting as each echo
+// completes) so a receive is always waiting before the client's next send -- no
+// RNR. The client here is strict 1-in-flight, so receive completions arrive in
+// send order and `recv_seq_` validates ordering. Single io_context thread, so
+// plain (non-atomic) counters are fine.
+class mm_echo_server : public std::enable_shared_from_this<mm_echo_server> {
+public:
+  mm_echo_server(asio::io_context& io, rdma::rdma_device_ptr device,
+                 rdma::rdma_listener<tcp>& listener, int count, bool& ok,
+                 std::function<void()> done)
+      : device_(std::move(device))
+      , listener_(listener)
+      , conn_(io)
+      , qp_(io)
+      , count_(count)
+      , window_(std::min(8, count))
+      , ok_(ok)
+      , done_(std::move(done)) {}
+
+  void start() {
+    auto self = shared_from_this();
+    listener_.async_get_connection(
+        asio::mutable_buffer{},
+        [self](asio::error_code ec, rdma::rdma_connector<tcp> conn,
+               std::size_t) {
+          if (ec) { self->finish(); return; }
+          self->conn_ = std::move(conn);
+          self->conn_.async_accept(self->qp_, asio::const_buffer{},
+                                   [self](asio::error_code ec) {
+                                     if (ec) { self->finish(); return; }
+                                     self->begin();
+                                   });
+        });
+  }
+
+private:
+  void finish() {
+    if (!done_called_) { done_called_ = true; done_(); }
+  }
+
+  void begin() {
+    storage_.assign(mm_slot_bytes * static_cast<std::size_t>(window_), 0);
+    mr_ = std::make_unique<rdma::rdma_memory_region>(device_, storage_.data(),
+                                                     storage_.size());
+    recvs_posted_ = window_;
+    for (int slot = 0; slot < window_; ++slot) post_recv(slot);
+  }
+
+  void post_recv(int slot) {
+    auto self = shared_from_this();
+    qp_.async_recv(
+        mr_->slice(static_cast<std::size_t>(slot) * mm_slot_bytes, mm_slot_bytes),
+        [self, slot](asio::error_code ec, std::size_t n) {
+          self->on_recv(slot, ec, n);
+        });
+  }
+
+  void on_recv(int slot, asio::error_code ec, std::size_t n) {
+    if (done_called_) return;
+    auto const off = static_cast<std::size_t>(slot) * mm_slot_bytes;
+    std::string expected = "msg-" + std::to_string(recv_seq_);
+    if (ec || std::string_view(storage_.data() + off, n) != expected) {
+      std::cerr << "[ordering server] expected " << expected
+                << " got ec=" << ec.message() << " n=" << n << "\n";
+      ok_ = false;
+      finish();
+      return;
+    }
+    ++recv_seq_;
+    auto self = shared_from_this();
+    qp_.async_send(mr_->cslice(off, n),
+                   [self, slot](asio::error_code ec, std::size_t sn) {
+                     self->on_send(slot, ec, sn);
+                   });
+  }
+
+  void on_send(int slot, asio::error_code ec, std::size_t /*sn*/) {
+    if (done_called_) return;
+    if (ec) { ok_ = false; finish(); return; }
+    if (++echoed_ >= count_) { finish(); return; }
+    if (recvs_posted_ < count_) {
+      ++recvs_posted_;
+      post_recv(slot);
+    }
+  }
+
+  rdma::rdma_device_ptr device_;
+  rdma::rdma_listener<tcp>& listener_;
+  rdma::rdma_connector<tcp> conn_;
+  rdma::rdma_queue_pair qp_;
+  int count_;
+  int window_;
+  bool& ok_;
+  std::function<void()> done_;
+  std::vector<char> storage_;
+  std::unique_ptr<rdma::rdma_memory_region> mr_;
+  int recv_seq_ = 0;
+  int echoed_ = 0;
+  int recvs_posted_ = 0;
+  bool done_called_ = false;
+};
+
+// Strict request/echo client: posts the echo receive BEFORE each send, so the
+// server's reply always finds a posted receive (no RNR on the echo direction).
+class mm_client : public std::enable_shared_from_this<mm_client> {
+public:
+  mm_client(asio::io_context& io, rdma::rdma_device_ptr device,
+            std::string ip, std::uint16_t port, int count, bool& ok,
+            std::function<void()> done)
+      : device_(std::move(device))
+      , conn_(io)
+      , qp_(io)
+      , ip_(std::move(ip))
+      , port_(port)
+      , count_(count)
+      , ok_(ok)
+      , done_(std::move(done)) {}
+
+  void start() {
+    conn_.open(tcp::v4());
+    auto self = shared_from_this();
+    tcp::endpoint ep(asio::ip::make_address(ip_), port_);
+    conn_.async_connect(qp_, ep, asio::const_buffer{},
+                        [self](asio::error_code ec) {
+                          if (ec) { self->finish(); return; }
+                          self->begin();
+                        });
+  }
+
+private:
+  void finish() {
+    if (!done_called_) { done_called_ = true; done_(); }
+  }
+
+  void begin() {
+    storage_.assign(mm_slot_bytes * 2, 0);  // [0,64)=recv echo, [64,128)=send
+    mr_ = std::make_unique<rdma::rdma_memory_region>(device_, storage_.data(),
+                                                     storage_.size());
+    round();
+  }
+
+  void round() {
+    if (done_called_) return;
+    std::string msg = "msg-" + std::to_string(sent_);
+    std::memset(storage_.data() + mm_slot_bytes, 0, mm_slot_bytes);
+    std::memcpy(storage_.data() + mm_slot_bytes, msg.data(), msg.size());
+    cur_len_ = msg.size();
+    auto self = shared_from_this();
+    qp_.async_recv(mr_->slice(std::size_t{0}, mm_slot_bytes),
+                   [self](asio::error_code ec, std::size_t n) {
+                     self->on_recv(ec, n);
+                   });
+    qp_.async_send(mr_->cslice(mm_slot_bytes, cur_len_),
+                   [self](asio::error_code ec, std::size_t sn) {
+                     self->on_send(ec, sn);
+                   });
+    ++sent_;
+  }
+
+  void on_send(asio::error_code ec, std::size_t sn) {
+    if (done_called_) return;
+    if (ec || sn != cur_len_) { ok_ = false; finish(); }
+  }
+
+  void on_recv(asio::error_code ec, std::size_t n) {
+    if (done_called_) return;
+    std::string expected = "msg-" + std::to_string(received_);
+    if (ec || std::string_view(storage_.data(), n) != expected) {
+      ok_ = false;
+      finish();
+      return;
+    }
+    if (++received_ >= count_) {
+      conn_.disconnect();
+      finish();
+      return;
+    }
+    round();
+  }
+
+  rdma::rdma_device_ptr device_;
+  rdma::rdma_connector<tcp> conn_;
+  rdma::rdma_queue_pair qp_;
+  std::string ip_;
+  std::uint16_t port_;
+  int count_;
+  bool& ok_;
+  std::function<void()> done_;
+  std::vector<char> storage_;
+  std::unique_ptr<rdma::rdma_memory_region> mr_;
+  int sent_ = 0;
+  int received_ = 0;
+  std::size_t cur_len_ = 0;
+  bool done_called_ = false;
+};
+
+}  // namespace
+
 bool phase_multi_message_order(rdma::rdma_device_ptr const& device,
                                std::string const& ip, std::uint16_t port) {
   char const* const name = "multi-message ordering";
@@ -466,87 +672,16 @@ bool phase_multi_message_order(rdma::rdma_device_ptr const& device,
   bool server_order_ok = true;
   bool client_echo_ok = true;
   phase_guard guard(io, 2, 10s);
-  auto done = guard.on_done(io);
+  auto gd = guard.on_done(io);
+  auto role_done = [gd]() mutable { gd(std::exception_ptr{}); };
 
-  asio::co_spawn(
-      io,
-      [&]() -> asio::awaitable<void> {
-        auto [ec_get, conn, req_len] =
-            co_await listener.async_get_connection(asio::mutable_buffer{},
-                                                   nothrow);
-        (void)req_len;
-        if (ec_get) co_return;
-
-        rdma::rdma_queue_pair qp(io);
-        auto [ec_accept] =
-            co_await conn.async_accept(qp, asio::const_buffer{}, nothrow);
-        if (ec_accept) co_return;
-
-        std::array<char, 64> storage{};
-        rdma::rdma_memory_region mr(device, storage.data(), storage.size());
-        for (int i = 0; i < message_count; ++i) {
-          auto [ec_recv, n] =
-              co_await qp.async_recv(
-                  mr.slice(std::size_t{0}, storage.size()), nothrow);
-          std::string expected = "msg-" + std::to_string(i);
-          if (ec_recv || std::string_view(storage.data(), n) != expected) {
-            server_order_ok = false;
-            std::cerr << "[ordering server] expected " << expected
-                      << ", got ec=" << ec_recv.message() << " n=" << n
-                      << " payload=\""
-                      << std::string_view(storage.data(), n) << "\"\n";
-            break;
-          }
-          auto [ec_send, send_n] =
-              co_await qp.async_send(mr.cslice(std::size_t{0}, n), nothrow);
-          if (ec_send || send_n != n) {
-            server_order_ok = false;
-            break;
-          }
-        }
-        co_await conn.async_wait_disconnect(nothrow);
-      },
-      done);
-
-  asio::co_spawn(
-      io,
-      [&]() -> asio::awaitable<void> {
-        rdma::rdma_connector<tcp> conn(io);
-        conn.open(tcp::v4());
-        rdma::rdma_queue_pair qp(io);
-        tcp::endpoint endpoint(asio::ip::make_address(ip), port);
-        auto [ec_connect, reply_len] = co_await conn.async_connect(
-            qp, endpoint, asio::const_buffer{}, asio::mutable_buffer{},
-            nothrow);
-        (void)reply_len;
-        if (ec_connect) co_return;
-
-        std::array<char, 64> storage{};
-        rdma::rdma_memory_region mr(device, storage.data(), storage.size());
-        for (int i = 0; i < message_count; ++i) {
-          std::string msg = "msg-" + std::to_string(i);
-          std::memset(storage.data(), 0, storage.size());
-          std::memcpy(storage.data(), msg.data(), msg.size());
-          auto [ec_send, send_n] =
-              co_await qp.async_send(
-                  mr.cslice(std::size_t{0}, msg.size()), nothrow);
-          if (ec_send || send_n != msg.size()) {
-            client_echo_ok = false;
-            break;
-          }
-          std::memset(storage.data(), 0, storage.size());
-          auto [ec_recv, recv_n] =
-              co_await qp.async_recv(
-                  mr.slice(std::size_t{0}, storage.size()), nothrow);
-          if (ec_recv || recv_n != msg.size() ||
-              std::string_view(storage.data(), recv_n) != msg) {
-            client_echo_ok = false;
-            break;
-          }
-        }
-        conn.disconnect();
-      },
-      done);
+  auto server = std::make_shared<mm_echo_server>(
+      io, device, listener, message_count, server_order_ok, role_done);
+  auto client = std::make_shared<mm_client>(io, device, ip, port,
+                                            message_count, client_echo_ok,
+                                            role_done);
+  server->start();
+  client->start();
 
   io.run();
   return finish_phase(name, guard, server_order_ok && client_echo_ok);

@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -7,106 +9,231 @@
 #include <thread>
 #include <vector>
 
-#include "asio/as_tuple.hpp"
-#include "asio/awaitable.hpp"
 #include "asio/buffer.hpp"
-#include "asio/co_spawn.hpp"
-#include "asio/detached.hpp"
 #include "asio/io_context.hpp"
+#include "asio/ip/address.hpp"
 #include "asio/steady_timer.hpp"
-#include "asio/use_awaitable.hpp"
 
 #include "rdma/rdma.hpp"
 #include "rdma_bench_common.hpp"
 
 namespace rdma = asio::rdma;
 using tcp = rdma::tcp;
-constexpr auto nothrow = asio::as_tuple(asio::use_awaitable);
 
-asio::awaitable<void> server_pair(rdma::rdma_device_ptr device,
-                                  rdma::rdma_listener<tcp>& listener,
-                                  rdma_bench::options opt,
-                                  std::atomic<std::uint64_t>& completed,
-                                  std::atomic<std::uint64_t>& errors) {
-  auto [ecg, conn, req_len] =
-      co_await listener.async_get_connection(asio::mutable_buffer{}, nothrow);
-  (void)req_len;
-  if (ecg) {
-    ++errors;
-    co_return;
-  }
-  auto ex = co_await asio::this_coro::executor;
-  auto& io = static_cast<asio::io_context&>(ex.context());
-  rdma::rdma_queue_pair qp(io);
-  auto [eca] = co_await conn.async_accept(qp, asio::const_buffer{}, nothrow);
-  if (eca) {
-    ++errors;
-    co_return;
-  }
+// Shared-CQ multi-QP stress. Each QP runs a request/echo ping-pong, but with a
+// PRE-POSTED RECEIVE WINDOW instead of a strict 1-deep co_await loop: the server
+// keeps `window` receives posted at all times (re-posting one as each echo
+// completes), and the client posts the echo receive before sending. A receive is
+// therefore always waiting before any send arrives, so the data path never hits
+// the RNR stall that the strict ping-pong did on single-host loopback. All
+// callbacks run on the shared io_context CQ (multi-thread run()), so the shared
+// counters are atomic.
 
-  std::vector<char> storage(opt.message_size, 0);
-  rdma::rdma_memory_region mr(device, storage.data(), storage.size());
-  for (std::uint64_t i = 0; i < opt.iterations; ++i) {
-    auto [er, n] =
-        co_await qp.async_recv(mr.slice(std::size_t{0}, storage.size()),
-                               nothrow);
-    if (er || n != storage.size()) {
-      ++errors;
-      co_return;
-    }
-    auto [es, sn] =
-        co_await qp.async_send(mr.cslice(std::size_t{0}, n), nothrow);
-    if (es || sn != n) {
-      ++errors;
-      co_return;
-    }
-    ++completed;
-  }
-  co_await conn.async_wait_disconnect(nothrow);
+namespace {
+
+std::size_t pick_window(rdma_bench::options const& opt) {
+  // window >= 2 keeps at least one receive posted while one is being echoed;
+  // never post more than the per-QP message budget.
+  std::uint64_t w = std::max<std::uint32_t>(2, opt.queue_depth);
+  return static_cast<std::size_t>(std::min<std::uint64_t>(w, opt.iterations));
 }
 
-asio::awaitable<void> client_pair(rdma::rdma_device_ptr device,
-                                  rdma_bench::options opt, std::uint16_t port,
-                                  std::atomic<std::uint64_t>& completed,
-                                  std::atomic<std::uint64_t>& errors) {
-  auto ex = co_await asio::this_coro::executor;
-  auto& io = static_cast<asio::io_context&>(ex.context());
-  rdma::rdma_connector<tcp> conn(io);
-  conn.open(tcp::v4());
-  rdma::rdma_queue_pair qp(io);
-  tcp::endpoint ep(asio::ip::make_address(opt.local_addr), port);
-  auto [ecc, reply_len] = co_await conn.async_connect(
-      qp, ep, asio::const_buffer{}, asio::mutable_buffer{}, nothrow);
-  (void)reply_len;
-  if (ecc) {
-    ++errors;
-    co_return;
+}  // namespace
+
+// Server side: windowed echo. Keeps `window_` receives posted; echoes each.
+class echo_server : public std::enable_shared_from_this<echo_server> {
+public:
+  echo_server(asio::io_context& io, rdma::rdma_device_ptr device,
+              rdma::rdma_listener<tcp>& listener, rdma_bench::options const& opt,
+              std::atomic<std::uint64_t>& completed,
+              std::atomic<std::uint64_t>& errors, std::function<void()> done)
+      : device_(std::move(device))
+      , listener_(listener)
+      , conn_(io)
+      , qp_(io)
+      , msg_(opt.message_size)
+      , window_(pick_window(opt))
+      , target_(opt.iterations)
+      , completed_(completed)
+      , errors_(errors)
+      , done_(std::move(done)) {}
+
+  void start() {
+    auto self = shared_from_this();
+    listener_.async_get_connection(
+        asio::mutable_buffer{},
+        [self](asio::error_code ec, rdma::rdma_connector<tcp> conn,
+               std::size_t) {
+          if (ec) { self->fail(); return; }
+          self->conn_ = std::move(conn);
+          self->conn_.async_accept(self->qp_, asio::const_buffer{},
+                                   [self](asio::error_code ec) {
+                                     if (ec) { self->fail(); return; }
+                                     self->begin();
+                                   });
+        });
   }
 
-  std::vector<char> storage(opt.message_size, 0);
-  for (std::size_t i = 0; i < storage.size(); ++i) {
-    storage[i] = static_cast<char>((i * 13) & 0x7f);
-  }
-  rdma::rdma_memory_region mr(device, storage.data(), storage.size());
-  for (std::uint64_t i = 0; i < opt.iterations; ++i) {
-    auto [es, sn] =
-        co_await qp.async_send(mr.cslice(std::size_t{0}, storage.size()),
-                               nothrow);
-    if (es || sn != storage.size()) {
-      ++errors;
-      co_return;
+private:
+  void fail() {
+    if (!finished_.exchange(true)) {
+      ++errors_;
+      done_();
     }
-    auto [er, rn] =
-        co_await qp.async_recv(mr.slice(std::size_t{0}, storage.size()),
-                               nothrow);
-    if (er || rn != storage.size()) {
-      ++errors;
-      co_return;
-    }
-    ++completed;
   }
-  conn.disconnect();
-}
+  void finish_ok() {
+    if (!finished_.exchange(true)) done_();
+  }
+
+  void begin() {
+    storage_.assign(msg_ * window_, 0);
+    mr_ = std::make_unique<rdma::rdma_memory_region>(device_, storage_.data(),
+                                                     storage_.size());
+    recvs_posted_.store(window_);
+    for (std::size_t slot = 0; slot < window_; ++slot) post_recv(slot);
+  }
+
+  void post_recv(std::size_t slot) {
+    auto self = shared_from_this();
+    qp_.async_recv(mr_->slice(slot * msg_, msg_),
+                   [self, slot](asio::error_code ec, std::size_t n) {
+                     self->on_recv(slot, ec, n);
+                   });
+  }
+
+  void on_recv(std::size_t slot, asio::error_code ec, std::size_t n) {
+    if (finished_.load(std::memory_order_acquire)) return;
+    if (ec || n != msg_) { fail(); return; }
+    auto self = shared_from_this();
+    qp_.async_send(mr_->cslice(slot * msg_, n),
+                   [self, slot](asio::error_code ec, std::size_t sn) {
+                     self->on_send(slot, ec, sn);
+                   });
+  }
+
+  void on_send(std::size_t slot, asio::error_code ec, std::size_t sn) {
+    if (finished_.load(std::memory_order_acquire)) return;
+    if (ec || sn != msg_) { fail(); return; }
+    std::uint64_t const e = echoed_.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (e > target_) return;  // budget already met by another slot
+    ++completed_;
+    if (e == target_) { finish_ok(); return; }
+    // Maintain the window: re-post this slot's receive, capped at the budget.
+    if (recvs_posted_.fetch_add(1, std::memory_order_acq_rel) + 1 <= target_) {
+      post_recv(slot);
+    }
+  }
+
+  rdma::rdma_device_ptr device_;
+  rdma::rdma_listener<tcp>& listener_;
+  rdma::rdma_connector<tcp> conn_;
+  rdma::rdma_queue_pair qp_;
+  std::size_t msg_;
+  std::size_t window_;
+  std::uint64_t target_;
+  std::atomic<std::uint64_t>& completed_;
+  std::atomic<std::uint64_t>& errors_;
+  std::function<void()> done_;
+  std::vector<char> storage_;
+  std::unique_ptr<rdma::rdma_memory_region> mr_;
+  std::atomic<std::uint64_t> echoed_{0};
+  std::atomic<std::uint64_t> recvs_posted_{0};
+  std::atomic<bool> finished_{false};
+};
+
+// Client side: strict request/echo, but posts the echo receive before each send.
+class pingpong_client : public std::enable_shared_from_this<pingpong_client> {
+public:
+  pingpong_client(asio::io_context& io, rdma::rdma_device_ptr device,
+                  rdma_bench::options const& opt, std::uint16_t port,
+                  std::atomic<std::uint64_t>& completed,
+                  std::atomic<std::uint64_t>& errors, std::function<void()> done)
+      : device_(std::move(device))
+      , conn_(io)
+      , qp_(io)
+      , addr_(opt.local_addr)
+      , port_(port)
+      , msg_(opt.message_size)
+      , target_(opt.iterations)
+      , completed_(completed)
+      , errors_(errors)
+      , done_(std::move(done)) {}
+
+  void start() {
+    conn_.open(tcp::v4());
+    auto self = shared_from_this();
+    tcp::endpoint ep(asio::ip::make_address(addr_), port_);
+    conn_.async_connect(qp_, ep, asio::const_buffer{},
+                        [self](asio::error_code ec) {
+                          if (ec) { self->fail(); return; }
+                          self->begin();
+                        });
+  }
+
+private:
+  void fail() {
+    if (!finished_.exchange(true)) {
+      ++errors_;
+      done_();
+    }
+  }
+  void finish_ok() {
+    if (!finished_.exchange(true)) done_();
+  }
+
+  void begin() {
+    storage_.assign(msg_ * 2, 0);  // [0,msg)=recv echo, [msg,2msg)=send source
+    for (std::size_t i = msg_; i < storage_.size(); ++i) {
+      storage_[i] = static_cast<char>((i * 13) & 0x7f);
+    }
+    mr_ = std::make_unique<rdma::rdma_memory_region>(device_, storage_.data(),
+                                                     storage_.size());
+    round();
+  }
+
+  void round() {
+    if (finished_.load(std::memory_order_acquire)) return;
+    auto self = shared_from_this();
+    // Post the echo receive BEFORE the send so the server's reply always finds a
+    // posted receive (no RNR on the echo direction).
+    qp_.async_recv(mr_->slice(std::size_t{0}, msg_),
+                   [self](asio::error_code ec, std::size_t n) {
+                     self->on_recv(ec, n);
+                   });
+    qp_.async_send(mr_->cslice(msg_, msg_),
+                   [self](asio::error_code ec, std::size_t sn) {
+                     self->on_send(ec, sn);
+                   });
+  }
+
+  void on_send(asio::error_code ec, std::size_t sn) {
+    if (finished_.load(std::memory_order_acquire)) return;
+    if (ec || sn != msg_) fail();
+  }
+
+  void on_recv(asio::error_code ec, std::size_t n) {
+    if (finished_.load(std::memory_order_acquire)) return;
+    if (ec || n != msg_) { fail(); return; }
+    ++completed_;
+    if (++received_ >= target_) { finish_ok(); return; }
+    round();
+  }
+
+  rdma::rdma_device_ptr device_;
+  rdma::rdma_connector<tcp> conn_;
+  rdma::rdma_queue_pair qp_;
+  std::string addr_;
+  std::uint16_t port_;
+  std::size_t msg_;
+  std::uint64_t target_;
+  std::atomic<std::uint64_t>& completed_;
+  std::atomic<std::uint64_t>& errors_;
+  std::function<void()> done_;
+  std::vector<char> storage_;
+  std::unique_ptr<rdma::rdma_memory_region> mr_;
+  std::uint64_t received_{0};
+  std::atomic<bool> finished_{false};
+};
 
 int main(int argc, char* argv[]) {
   try {
@@ -142,21 +269,26 @@ int main(int argc, char* argv[]) {
     std::atomic<std::uint64_t> client_completed{0};
     std::atomic<std::uint64_t> errors{0};
     std::atomic<int> remaining{static_cast<int>(opt.qps * 2)};
-    auto on_done = [&](std::exception_ptr e) {
-      if (e) ++errors;
+    auto on_done = [&] {
       if (--remaining == 0) io.stop();
     };
 
+    // Keep the role objects alive for the whole run.
+    std::vector<std::shared_ptr<echo_server>> servers;
+    std::vector<std::shared_ptr<pingpong_client>> clients;
+    servers.reserve(opt.qps);
+    clients.reserve(opt.qps);
     for (std::uint32_t i = 0; i < opt.qps; ++i) {
-      asio::co_spawn(io,
-                     server_pair(device, *listeners[i], opt, server_completed,
-                                 errors),
-                     on_done);
-      asio::co_spawn(io,
-                     client_pair(device, opt,
-                                 static_cast<std::uint16_t>(opt.port + i),
-                                 client_completed, errors),
-                     on_done);
+      auto srv = std::make_shared<echo_server>(io, device, *listeners[i], opt,
+                                               server_completed, errors,
+                                               on_done);
+      auto cli = std::make_shared<pingpong_client>(
+          io, device, opt, static_cast<std::uint16_t>(opt.port + i),
+          client_completed, errors, on_done);
+      servers.push_back(srv);
+      clients.push_back(cli);
+      srv->start();
+      cli->start();
     }
 
     asio::steady_timer watchdog(io);
