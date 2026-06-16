@@ -57,8 +57,8 @@ if(RDMA_BUILD_PERFORMANCE_TESTS)
   # (asio_{send,read,write}_{bw,lat}) link it. Replaces the legacy
   # rdma_send_recv_bench / rdma_read_write_bench.
   add_library(asio_perftest_obj OBJECT
-      ${CMAKE_SOURCE_DIR}/tests/performance/rdma/send_recv.cpp
-      ${CMAKE_SOURCE_DIR}/tests/performance/rdma/read_write.cpp
+      ${CMAKE_SOURCE_DIR}/tests/benchmark/send_recv.cpp
+      ${CMAKE_SOURCE_DIR}/tests/benchmark/read_write.cpp
       ${CMAKE_SOURCE_DIR}/tests/benchmark/asio_perftest.cpp)
   rdma_configure_benchmark_target(asio_perftest_obj)
 

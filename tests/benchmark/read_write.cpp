@@ -290,11 +290,9 @@ private:
     if (done_) return;
     if (ec) return fail(ec.message());
     if (n != opt_.message_size) return fail("short RDMA operation");
-    if (opt_.operation == rdma_bench::operation_kind::read &&
-        !verify_pattern(storage_, offset_for_slot(slot), slot,
-                        opt_.message_size)) {
-      return fail("read validation failed");
-    }
+    // Bandwidth: NO per-op data validation in the measured window -- verify_pattern
+    // over the whole message every op would be the bottleneck (it throttled read
+    // bw to ~1/5 of perftest). Read data is validated once at the end instead.
     tcompleted_.push_back(rdma_bench::get_cycles());
     ++result_.completed_count;
     if (posted_ < opt_.iterations) {
@@ -364,7 +362,24 @@ private:
     }
     rdma_bench::fill_cpu_metrics(result_, cpu_begin_,
                                  rdma_bench::take_cpu_snapshot());
-    result_.validation_passed = true;
+    // Read bandwidth: validate the fetched buffers once here, outside the
+    // measured window (latency mode still validates per-op -- it is 1-deep).
+    if (opt_.operation == rdma_bench::operation_kind::read &&
+        opt_.metric == rdma_bench::metric_kind::bandwidth) {
+      bool ok = true;
+      for (std::size_t slot = 0; slot < slot_count(); ++slot) {
+        ok = ok && verify_pattern(storage_, offset_for_slot(slot), slot,
+                                  opt_.message_size);
+      }
+      result_.validation_passed = ok;
+      if (!ok) {
+        result_.errors = 1;
+        result_.first_error = "read validation failed";
+        result_.exit_code = 1;
+      }
+    } else {
+      result_.validation_passed = true;
+    }
     asio::error_code ignored;
     conn_.disconnect(ignored);
     on_done_(result_);
@@ -690,17 +705,22 @@ rdma_bench::result run_poll_client_role(rdma_bench::options opt,
         if (n != opt.message_size) {
           return make_error(opt, command_line, "short RDMA operation");
         }
-        if (opt.operation == rdma_bench::operation_kind::read &&
-            !verify_pattern(storage, poll_offset_for_slot(opt, slot), slot,
-                            opt.message_size)) {
-          return make_error(opt, command_line, "read validation failed");
-        }
+        // Bandwidth: no per-op validation in the measured window (validated once
+        // below, outside it).
         tcompleted.push_back(rdma_bench::get_cycles());
         ++result.completed_count;
         if (posted < opt.iterations) post_one(slot);
       }
       rdma_bench::finish_bw_cycles(result, tposted, tcompleted, opt.post_list,
                                    opt.cq_mod, opt.no_peak);
+      if (opt.operation == rdma_bench::operation_kind::read) {
+        for (std::size_t slot = 0; slot < slots; ++slot) {
+          if (!verify_pattern(storage, poll_offset_for_slot(opt, slot), slot,
+                              opt.message_size)) {
+            return make_error(opt, command_line, "read validation failed");
+          }
+        }
+      }
     }
 
     auto cpu_end = rdma_bench::take_cpu_snapshot();

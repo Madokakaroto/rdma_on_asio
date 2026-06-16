@@ -65,16 +65,20 @@ Current layout (create a directory only when its first real program lands):
 
 ```text
 tests/
-  stress/rdma/        shared_cq.cpp, connect_disconnect_soak.cpp
-  performance/rdma/   send_recv.cpp, read_write.cpp   (-> unified into asio_perftest, Stage 9a)
+  stress/rdma/        shared_cq.cpp, connect_disconnect_soak.cpp   (stability/race, not perf)
   native/nd/          native_nd_baseline.cpp
-  benchmark/
-    rdma_bench_common.hpp
-    asio_perftest_core.hpp   (shared asio-binding helpers; grows into the unified core)
+  benchmark/          -- the asio_perftest project (all of it):
+    rdma_bench_common.hpp, asio_perftest_core.hpp, asio_perftest_clock.hpp
+    asio_perftest.cpp                  (dispatch + cli_main)
+    send_recv.cpp, read_write.cpp      (verb modules: no main, export run_send_recv/run_read_write)
+    entries/          asio_perftest_main.cpp + asio_{send,read,write}_{bw,lat}.cpp
     scenarios/        smoke.json, baseline.json, sweep.json, read_write_smoke.json
     tools/            run_scenario.cpp, compare_results.cpp,
                       perftest_commands.cpp, parse_perftest.cpp, capability_probe.cpp
 ```
+(Stage 9a folded the old `performance/rdma/{send_recv,read_write}.cpp` into the
+asio_perftest project under `benchmark/`; `tests/performance/` no longer exists.
+`stress/` stays separate -- it is stability/race coverage, not a perf baseline.)
 
 **Benchmark target naming:** the perftest-aligned benchmark is the `asio_perftest`
 target family -- an umbrella `asio_perftest` (multiplexed by `--operation`/
@@ -382,6 +386,46 @@ Rules:
 This yields three comparable tracks: IBV RDMA-on-Asio vs perftest; ND
 RDMA-on-Asio vs native ND; and IBV vs ND RDMA-on-Asio as a portability/abstraction
 signal (not a hardware-equivalent comparison unless HW/link/host match).
+
+## ND backend parity (TODO for the NetworkDirect agent)
+
+The ibv backend just gained three changes; nd (Windows NetworkDirect) must follow
+to stay aligned. `rdma_config_t` is shared across backends, so the new fields
+already exist for nd -- the nd agent acts on, or explicitly documents, each.
+
+1. **CQ poll batch (`cq_poll_batch_`).** nd's `nd_config_derive.hpp` fills
+   cqe/wr/sge/inline/read_limit but not this -- add
+   `if (cq_poll_batch_ == 0) cq_poll_batch_ = 16;` (mirror ibv's
+   `default_cq_poll_batch`). Size the `IND2CompletionQueue::GetResults` result
+   array from the effective `cq_poll_batch_` in `nd_completion_queue.hpp` /
+   `nd_service_io_completion.hpp` (replace the hard-coded reap count), and pass it
+   through `nd_use_device` into the io-completion service (mirror ibv's
+   `initialize(..., poll_batch, ...)`).
+
+2. **RNR knobs (`rnr_retry_` / `min_rnr_timer_`) -- treat as ibv-only.** ibv added
+   these because rdma_cm leaves `min_rnr_timer` at its ~655 ms default, which stalls
+   send/recv on a receive-window underrun. ND2's `IND2Connector::Connect` exposes
+   inbound/outbound read limits (the `read_limit` analogue) but does **not** expose
+   an RNR NAK timer or retry count -- those are IB-verbs concepts the ND provider
+   owns internally. So nd **ignores** `rnr_retry_` / `min_rnr_timer_` (note this in
+   the `rdma_commons.hpp` field comments); do not invent an ND equivalent.
+   **Must verify**: run nd send/recv bandwidth 2-process (streaming, full receive
+   window) and confirm it does NOT stall the way ibv did before the fix -- prove
+   ND's provider defaults are sane rather than assume it (ibv hid a 655 ms pothole
+   exactly here).
+
+3. **Read-bw validation out of the measured window.** The asio_perftest verb
+   modules (`send_recv.cpp` / `read_write.cpp`) are cross-platform, so nd builds
+   inherit this fix automatically. But `tests/native/nd/native_nd_baseline.cpp` has
+   the same bug the ibv bench had: its read-bandwidth loop calls `verify_read(slot)`
+   per op inside the timed window (between `begin` and `finish_throughput`), pinning
+   read bw to the per-message memcmp rate. Move it out (validate once after the
+   timed window, as `read_write.cpp`'s `finish_success` now does).
+
+4. **Config-field consistency.** Resolve each shared field explicitly:
+   `cq_poll_batch_` -> applied to the ND CQ reap; `rnr_retry_` / `min_rnr_timer_`
+   -> documented ibv-only. Update nd's `is_config_compatible` if it range-checks
+   config fields.
 
 ## asio_perftest: Feature Parity With perftest
 
