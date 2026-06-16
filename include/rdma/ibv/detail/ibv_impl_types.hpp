@@ -29,6 +29,7 @@ using native_sge_t          = ::ibv_sge;
 using native_wc_t           = ::ibv_wc;
 using native_device_attr_t  = ::ibv_device_attr;
 using native_qp_init_attr_t = ::ibv_qp_init_attr;
+using native_qp_attr_t      = ::ibv_qp_attr;
 using native_comp_channel_t = ::ibv_comp_channel;
 
 // rdma_cm native aliases

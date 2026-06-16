@@ -210,6 +210,7 @@ public:
                        reply.data(),              reply.size(),
                        to_u8(eff.inbound_read_limit_),
                        to_u8(eff.outbound_read_limit_),
+                       eff.rnr_retry_,            eff.min_rnr_timer_,
                        std::move(create_qp),      handler, io_ex};
     if (open_ec) {
       p.p->ec_ = open_ec;
@@ -249,7 +250,7 @@ public:
     typename op::ptr p = {asio::detail::addressof(handler),
                           op::ptr::allocate(handler), 0};
     p.p = new (p.v) op{this->success_ec_, impl.cm_id_.get(), &impl.connect_state_,
-                       handler, io_ex};
+                       effective_config().min_rnr_timer_, handler, io_ex};
     if (!device_registered()) {
       p.p->ec_ = make_error_code(rdma_errc::device_not_registered);
       this->reactor_.post_immediate_completion(p.p, false);
@@ -450,7 +451,7 @@ private:
     param.private_data_len = static_cast<std::uint8_t>(private_data.size());
     param.responder_resources = to_u8(eff.inbound_read_limit_);
     param.initiator_depth = to_u8(eff.outbound_read_limit_);
-    param.rnr_retry_count = 7;
+    param.rnr_retry_count = eff.rnr_retry_;
     if (accept(impl.cm_id_.get(), &param, op->ec_) == 0) {
       op->ec_ = asio::error_code{};
       this->reactor_.start_op(asio::detail::reactor::read_op,

@@ -30,6 +30,7 @@ enum class completion_mode {
 struct rdma_config_t {
   // CQ configuration
   std::uint32_t cqe_ = 0;                // 0 = min(device_max, 4096)
+  std::uint32_t cq_poll_batch_ = 0;      // wc reaped per poll_cq call; 0 = default (16)
 
   // QP configuration
   std::uint32_t max_send_wr_ = 0;        // 0 = min(device_max, 128)
@@ -41,6 +42,14 @@ struct rdma_config_t {
   // Connection configuration
   std::uint32_t inbound_read_limit_ = 0;  // 0 = device default
   std::uint32_t outbound_read_limit_ = 0; // 0 = device default
+  // RNR (receiver-not-ready) handling. These are not 0=auto-derive: they are the
+  // operating defaults directly. rnr_retry_ -> rdma_conn_param.rnr_retry_count
+  // (7 = infinite). min_rnr_timer_ is the 5-bit RNR NAK timer code (12 = 0.64 ms);
+  // rdma_cm does not expose it, so it is applied via ibv_modify_qp once the QP is
+  // RTS. (rdma_cm's own default is code 0 == ~655 ms, which stalls senders on a
+  // receive-window underrun.)
+  std::uint8_t rnr_retry_ = 7;
+  std::uint8_t min_rnr_timer_ = 12;
   // CM address/route resolution timeout (ms). 0 = default_cm_resolve_timeout_ms.
   // ibv only: feeds rdma_resolve_addr / rdma_resolve_route. nd ignores it --
   // ND's IND2Connector::Connect resolves internally with no exposed timeout.

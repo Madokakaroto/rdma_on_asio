@@ -32,7 +32,7 @@ inline void use_device(asio::io_context& io_ctx, ibv_device_ptr const& device,
   // Initialize the CQ/notify service first; register the device only on success
   // so a CQ-creation failure leaves the io_context cleanly unregistered.
   auto& io_svc = asio::use_service<detail::ibv_io_completion_service>(io_ctx);
-  io_svc.initialize(device, effective.cqe_, ec);
+  io_svc.initialize(device, effective.cqe_, effective.cq_poll_batch_, ec);
   if (ec) {
     return;
   }

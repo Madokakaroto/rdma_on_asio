@@ -125,6 +125,16 @@ inline int dereg_mr(native_mr_t* mr, asio::error_code& ec) {
   return rc;
 }
 
+// ibv_modify_qp wrapper. Returns the error_code (empty on success). Used for
+// setup-time / control-plane QP attribute changes that rdma_cm does not expose
+// through rdma_conn_param (e.g. min_rnr_timer applied once the QP is RTS). Never
+// call on the data path.
+inline asio::error_code modify_qp(native_qp_t* qp, native_qp_attr_t* attr,
+                                  int attr_mask) {
+  int const rc = ::ibv_modify_qp(qp, attr, attr_mask);
+  return rc ? make_system_error_code(rc) : asio::error_code{};
+}
+
 // --- post wrappers: wr_id carries the op pointer (request_context) ---
 
 inline int post_recv(native_qp_t* qp, void* request_context,

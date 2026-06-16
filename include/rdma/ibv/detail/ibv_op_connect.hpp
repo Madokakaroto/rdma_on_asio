@@ -14,6 +14,7 @@
 #include "asio/detail/memory.hpp"
 #include "rdma/ibv/detail/ibv_op_cm.hpp"
 #include "rdma/ibv/detail/ibv_ops_cm.hpp"
+#include "rdma/ibv/detail/ibv_ops_verbs.hpp"
 #include "rdma/ibv/ibv_error.hpp"
 #include "asio/detail/push_options.hpp"
 
@@ -57,9 +58,13 @@ protected:
   void* reply_buf_;
   std::size_t reply_cap_;
   std::size_t reply_len_ = 0;
-  // RDMA read/atomic negotiation, sourced from the effective config.
+  // RDMA read/atomic negotiation + RNR params, sourced from the effective config.
+  // rnr_retry_ -> rdma_conn_param.rnr_retry_count; min_rnr_timer_ is applied via
+  // ibv_modify_qp on ESTABLISHED (rdma_cm does not expose it through conn_param).
   std::uint8_t responder_resources_;
   std::uint8_t initiator_depth_;
+  std::uint8_t rnr_retry_;
+  std::uint8_t min_rnr_timer_;
   // Creates the QP on cm_id once it has a context (after ADDR_RESOLVED).
   ibv_create_qp_fn create_qp_;
 
@@ -68,7 +73,8 @@ protected:
                       void const* request, std::size_t request_len,
                       void* reply_buf, std::size_t reply_cap,
                       std::uint8_t responder_resources,
-                      std::uint8_t initiator_depth,
+                      std::uint8_t initiator_depth, std::uint8_t rnr_retry,
+                      std::uint8_t min_rnr_timer,
                       ibv_create_qp_fn create_qp, func_type complete_func)
       // cm_id may be null if auto-open failed; that path posts an immediate
       // completion (do_perform is never called), so a null channel is fine.
@@ -84,6 +90,8 @@ protected:
       , reply_cap_(reply_cap)
       , responder_resources_(responder_resources)
       , initiator_depth_(initiator_depth)
+      , rnr_retry_(rnr_retry)
+      , min_rnr_timer_(min_rnr_timer)
       , create_qp_(std::move(create_qp)) {
     if (request_len_) {
       std::memcpy(request_buf_.data(), request, request_len_);
@@ -203,7 +211,7 @@ private:
         param.responder_resources = responder_resources_;
         param.initiator_depth = initiator_depth_;
         param.retry_count = 7;
-        param.rnr_retry_count = 7;
+        param.rnr_retry_count = rnr_retry_;
         if (connect(cm_id_, &param, this->ec_) == 0) {
           stage_ = stage_t::connect;
           return status::not_done;
@@ -240,7 +248,14 @@ private:
                            reply_cap_);
             std::memcpy(reply_buf_, cp.private_data, reply_len_);
           }
-          this->ec_ = asio::error_code{};
+          // QP is now RTS; apply min_rnr_timer here -- rdma_cm leaves it at its
+          // ~655 ms default, which stalls senders on a recv-window underrun. A
+          // failure is reported as the connect error (success returns an empty
+          // ec, which clears the success we set above).
+          native_qp_attr_t qp_attr{};
+          qp_attr.min_rnr_timer = min_rnr_timer_;
+          this->ec_ =
+              verbs_ops::modify_qp(cm_id_->qp, &qp_attr, IBV_QP_MIN_RNR_TIMER);
         }
         else {
           // e == closed: disconnect() won while we awaited ESTABLISHED. It saw
@@ -286,12 +301,14 @@ public:
                  std::atomic<connect_state>* state, int timeout,
                  void const* request, std::size_t request_len, void* reply_buf,
                  std::size_t reply_cap, std::uint8_t responder_resources,
-                 std::uint8_t initiator_depth, ibv_create_qp_fn create_qp,
+                 std::uint8_t initiator_depth, std::uint8_t rnr_retry,
+                 std::uint8_t min_rnr_timer, ibv_create_qp_fn create_qp,
                  Handler& handler, IoExecutor const& io_ex)
       : ibv_connect_op_base(success_ec, cm_id, state, timeout, request,
                             request_len, reply_buf, reply_cap,
-                            responder_resources, initiator_depth,
-                            std::move(create_qp), &ibv_connect_op::do_complete)
+                            responder_resources, initiator_depth, rnr_retry,
+                            min_rnr_timer, std::move(create_qp),
+                            &ibv_connect_op::do_complete)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {
   }

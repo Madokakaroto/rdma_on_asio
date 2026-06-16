@@ -9,6 +9,7 @@
 #include "asio/detail/memory.hpp"
 #include "rdma/ibv/detail/ibv_op_cm.hpp"
 #include "rdma/ibv/detail/ibv_ops_cm.hpp"
+#include "rdma/ibv/detail/ibv_ops_verbs.hpp"
 #include "rdma/ibv/ibv_error.hpp"
 #include "asio/detail/push_options.hpp"
 
@@ -30,13 +31,14 @@ public:
 private:
   std::atomic<connect_state>* state_;  // points at the connector's connect_state_
   native_cm_id_t* cm_id_;
+  std::uint8_t min_rnr_timer_;  // from effective config; applied at RTS (ESTABLISHED)
   Handler handler_;
   asio::detail::handler_work<Handler, IoExecutor> work_;
 
 public:
   ibv_accept_op(asio::error_code const& success_ec, native_cm_id_t* cm_id,
-                std::atomic<connect_state>* state, Handler& handler,
-                IoExecutor const& io_ex)
+                std::atomic<connect_state>* state, std::uint8_t min_rnr_timer,
+                Handler& handler, IoExecutor const& io_ex)
       // cm_id may be null if the connector was never opened (e.g. async_accept
       // before use_device); that path posts an immediate completion (do_perform
       // is never called), so a null channel is fine -- mirrors ibv_connect_op_base.
@@ -44,6 +46,7 @@ public:
                   &ibv_accept_op::do_complete)
       , state_(state)
       , cm_id_(cm_id)
+      , min_rnr_timer_(min_rnr_timer)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {
   }
@@ -85,6 +88,14 @@ private:
           asio::error_code ignored;
           detail::disconnect(op->cm_id_, ignored);
           op->ec_ = asio::error::operation_aborted;
+        } else {
+          // QP is now RTS; apply min_rnr_timer. For send/recv the server is the
+          // responder, so this is the side whose RNR NAK timer the sender obeys.
+          // A failure is reported as the accept error.
+          native_qp_attr_t qp_attr{};
+          qp_attr.min_rnr_timer = op->min_rnr_timer_;
+          op->ec_ =
+              verbs_ops::modify_qp(op->cm_id_->qp, &qp_attr, IBV_QP_MIN_RNR_TIMER);
         }
         break;
       }

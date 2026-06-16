@@ -3,6 +3,7 @@
 #include <array>
 #include <cassert>
 #include <cerrno>
+#include <vector>
 
 #include "asio/detail/mutex.hpp"
 #include "asio/detail/op_queue.hpp"
@@ -27,14 +28,15 @@ namespace asio::rdma {
 // by poll()/poll_one(), preserving "handlers only fire during poll()".
 class ibv_completion_queue {
 public:
-  static constexpr int poll_batch = 16;
-
   explicit ibv_completion_queue(ibv_device_ptr const& device,
                                 ibv_config_t const& config = {})
       : device_(device) {
     assert(device && device->context_);
     asio::error_code ec;
     effective_config_ = detail::derive_effective_config(config, device->attr_);
+    wc_buf_.resize(effective_config_.cq_poll_batch_
+                       ? effective_config_.cq_poll_batch_
+                       : 16);
     // Poll mode: no comp_channel (no event-driven notification).
     cq_.reset(detail::verbs_ops::create_cq(
         device->context_, static_cast<int>(effective_config_.cqe_), nullptr,
@@ -61,14 +63,15 @@ public:
     std::size_t total = drain_ready();
     int n = 0;
     do {
-      std::array<detail::native_wc_t, poll_batch> wcs{};
-      n = detail::verbs_ops::poll_cq(cq_.get(), poll_batch, wcs.data());
+      n = detail::verbs_ops::poll_cq(cq_.get(),
+                                     static_cast<int>(wc_buf_.size()),
+                                     wc_buf_.data());
       if (n < 0) {
         ec = make_system_error_code(EIO);
         break;
       }
       for (int i = 0; i < n; ++i) {
-        dispatch(wcs[i]);
+        dispatch(wc_buf_[i]);
       }
       total += static_cast<std::size_t>(n);
     } while (n > 0);
@@ -148,6 +151,7 @@ private:
 
   ibv_device_ptr device_;
   ibv_config_t effective_config_;
+  std::vector<detail::native_wc_t> wc_buf_;
   detail::unique_ibv_cq_ptr cq_;
   mutable asio::detail::mutex mutex_;
   asio::detail::op_queue<detail::rdma_verbs_op_base> ready_;

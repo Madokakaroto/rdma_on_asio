@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <vector>
 
 #include "asio/detail/op_queue.hpp"
 #include "asio/detail/operation.hpp"
@@ -66,7 +67,7 @@ public:
   // transiently for its context (not stored --that's ibv_device_service's job);
   // cqe is the already-derived CQ depth. Idempotency self-guards on cq_.
   void initialize(ibv_device_ptr const& device, std::uint32_t cqe,
-                  asio::error_code& ec) {
+                  std::uint32_t poll_batch, asio::error_code& ec) {
     if (cq_) {
       ec = make_error_code(rdma_errc::already_registered);
       return;
@@ -93,6 +94,8 @@ public:
       comp_channel_.reset();
       return;
     }
+    poll_batch_ = poll_batch ? static_cast<int>(poll_batch) : 16;
+    wc_buf_.resize(static_cast<std::size_t>(poll_batch_));
     ec.clear();
   }
 
@@ -112,7 +115,6 @@ public:
   }
 
 private:
-  static constexpr int poll_batch = 16;
 
   // Single reused member reactor_op: drains the shared CQ on comp_channel
   // readiness. Returns not_done (spurious wake) to stay armed, or done to
@@ -161,10 +163,10 @@ private:
   void poll_into(asio::detail::op_queue<rdma_verbs_op_base>& out) {
     int n = 0;
     do {
-      std::array<native_wc_t, poll_batch> wcs{};
-      n = verbs_ops::poll_cq(cq_.get(), poll_batch, wcs.data());
+      n = verbs_ops::poll_cq(cq_.get(), static_cast<int>(wc_buf_.size()),
+                             wc_buf_.data());
       for (int i = 0; i < n; ++i) {
-        if (auto* op = resolve_verbs_op(wcs[i])) {
+        if (auto* op = resolve_verbs_op(wc_buf_[i])) {
           out.push(op);
         }
       }
@@ -211,6 +213,8 @@ private:
 
   asio::detail::reactor& reactor_;
   asio::detail::scheduler& scheduler_;
+  int poll_batch_ = 16;
+  std::vector<native_wc_t> wc_buf_;
   unique_ibv_cq_ptr cq_;
   unique_ibv_comp_channel_ptr comp_channel_;
   asio::detail::reactor::per_descriptor_data cq_reactor_data_{};
