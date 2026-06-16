@@ -55,6 +55,9 @@ conaninfo.txt
 # Testing
 Testing/
 tests/benchmark/results/
+# Benchmark run artifacts (host-specific result JSON; not source)
+benchmark-baselines/
+benchmark-run/
 
 # OS generated
 .DS_Store

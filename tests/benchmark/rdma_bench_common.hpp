@@ -30,6 +30,8 @@
 #  include <sys/time.h>
 #endif
 
+#include "asio_perftest_clock.hpp"
+
 namespace rdma_bench {
 
 enum class metric_kind {
@@ -75,6 +77,12 @@ struct options {
   std::uint32_t recv_post_list = 1;
   std::uint32_t signaled_every = 1;
   std::uint32_t timeout_sec = 30;
+  // perftest-parity flags accepted by the CLI. margin/no_peak/report_gbits are
+  // recorded here so the same command line drives both tools (Stage 9a aliases);
+  // they are acted on in Stage 9b/10, not yet.
+  double margin_sec = 0.0;
+  bool no_peak = false;
+  bool report_gbits = false;
   std::string perftest_bin_dir;
   std::string perftest_source_dir;
   std::string output_dir;
@@ -254,6 +262,38 @@ inline options parse_options(int argc, char* argv[], bool require_role = true) {
       opt.strict = true;
     } else if (name == "--help" || name == "-h") {
       throw std::runtime_error("help");
+    }
+    // --- perftest flag aliases (Stage 9a): same command line drives both tools.
+    else if (name == "--size" || name == "-s") {
+      opt.message_size = static_cast<std::size_t>(parse_u64(need_value(), name));
+    } else if (name == "--iters" || name == "-n") {
+      opt.iterations = parse_u64(need_value(), name);
+    } else if (name == "--tx-depth" || name == "-t" || name == "--rx-depth") {
+      opt.queue_depth =
+          static_cast<std::uint32_t>(parse_u64(need_value(), name));
+    } else if (name == "--duration" || name == "-D") {
+      opt.duration_sec = std::stod(need_value());
+    } else if (name == "--margin") {
+      opt.margin_sec = std::stod(need_value());
+    } else if (name == "--qp") {
+      opt.qps = static_cast<std::uint32_t>(parse_u64(need_value(), name));
+    } else if (name == "--inline_size") {  // perftest underscore spelling
+      opt.inline_size =
+          static_cast<std::uint32_t>(parse_u64(need_value(), name));
+    } else if (name == "--connection" || name == "-c") {
+      auto conn = need_value();
+      if (conn != "RC") {
+        throw std::invalid_argument(
+            "asio_perftest supports --connection RC only (got " + conn + ")");
+      }
+    } else if (name == "--rdma_cm" || name == "-R") {
+      // The library control plane is always rdma_cm; accept for CLI parity.
+    } else if (name == "--events") {
+      opt.mode = "event";  // perftest event/completion-channel mode
+    } else if (name == "--no-peak" || name == "-N" || name == "--noPeak") {
+      opt.no_peak = true;  // accepted now; peak handling lands in Stage 10
+    } else if (name == "--report-gbits" || name == "--report_gbits") {
+      opt.report_gbits = true;
     } else {
       throw std::invalid_argument("unknown option: " + std::string(name));
     }
@@ -275,6 +315,10 @@ inline options parse_options(int argc, char* argv[], bool require_role = true) {
     throw std::invalid_argument("--iterations must be greater than zero");
   }
   if (opt.queue_depth == 0) opt.queue_depth = 1;
+  // Latency is a one-outstanding ping-pong (perftest does the same). Forcing
+  // queue_depth=1 here also keeps the write-latency server (which validates
+  // queue_depth buffer slots) consistent with the single slot the client writes.
+  if (opt.metric == metric_kind::latency) opt.queue_depth = 1;
   if (opt.mode != "event" && opt.mode != "poll") {
     throw std::invalid_argument("unsupported --mode: " + opt.mode);
   }
@@ -308,11 +352,14 @@ struct result {
   double throughput_mib_s = 0.0;
   double throughput_gbit_s = 0.0;
   double message_rate_s = 0.0;
+  double bw_peak_gbit_s = 0.0;
   std::optional<double> latency_avg_us;
   std::optional<double> latency_min_us;
-  std::optional<double> latency_p50_us;
+  std::optional<double> latency_p50_us;       // t_typical (median), perftest naming
   std::optional<double> latency_p90_us;
   std::optional<double> latency_p99_us;
+  std::optional<double> latency_p999_us;      // 99.9 percentile (perftest)
+  std::optional<double> latency_stdev_us;     // perftest t_stdev
   std::optional<double> latency_max_us;
   std::string latency_sample_method = "null";
   std::uint64_t clock_overhead_ns = 0;
@@ -520,6 +567,88 @@ inline void fill_latency(result& r, std::vector<double> const& samples) {
   r.latency_sample_method = "full_array";
 }
 
+// perftest-faithful latency stats (mirrors print_report_lat) from per-iteration
+// cycle deltas: sort, drop the top LAT_MEASURE_TAIL=2 samples, then
+// t_min/t_max/t_typical(median)/t_avg/t_stdev/99%/99.9%, all divided by
+// cpu_mhz * rtt_factor. rtt_factor = 2 for send/recv & write (report half the
+// round trip), 1 for read/atomic (the one-sided completion is already a full
+// round trip). NOTE: perftest computes stdev with an int-truncated deviation
+// (get_clock: `int temp_var`); we keep full double precision instead.
+inline void fill_latency_cycles(result& r, std::vector<cycles_t> deltas,
+                                int rtt_factor) {
+  constexpr std::size_t kTail = 2;  // perftest LAT_MEASURE_TAIL
+  if (deltas.size() <= kTail) return;
+  std::sort(deltas.begin(), deltas.end());
+  std::size_t const n = deltas.size();
+  std::size_t const m = n - kTail;  // measure_cnt after dropping the top 2
+  double const q = cpu_mhz() * static_cast<double>(rtt_factor);  // cycles->usec
+  auto us = [&](std::size_t i) { return static_cast<double>(deltas[i]) / q; };
+  double median = ((m - 1) % 2) ? (us(m / 2) + us(m / 2 - 1)) / 2.0 : us(m / 2);
+  double sum = 0.0;
+  for (std::size_t i = 0; i < m; ++i) sum += us(i);
+  double avg = sum / static_cast<double>(m);
+  double var = 0.0;
+  for (std::size_t i = 0; i < m; ++i) {
+    double d = avg - us(i);
+    var += d * d;
+  }
+  auto idx = [&](double frac) {
+    auto k = static_cast<std::size_t>(std::ceil(static_cast<double>(m) * frac));
+    return std::min(k, n - 1);
+  };
+  r.latency_min_us = us(0);
+  r.latency_max_us = us(m);  // perftest delta[measure_cnt]
+  r.latency_p50_us = median;
+  r.latency_avg_us = avg;
+  r.latency_stdev_us = std::sqrt(var / static_cast<double>(m));
+  r.latency_p90_us = us(idx(0.90));
+  r.latency_p99_us = us(idx(0.99));
+  r.latency_p999_us = us(idx(0.999));
+  r.latency_sample_method = "cycle_counter";
+}
+
+// perftest-faithful bandwidth (mirrors print_report_bw): average from total
+// elapsed cycles; peak from the minimum per-message window over the per-op
+// timestamp arrays. tposted[i]/tcompleted[i] are cycle stamps at post/completion
+// (in post and completion order). post_list/cq_mod are 1 in the library today.
+inline void finish_bw_cycles(result& r, std::vector<cycles_t> const& tposted,
+                             std::vector<cycles_t> const& tcompleted,
+                             std::uint32_t post_list, std::uint32_t cq_mod,
+                             bool no_peak) {
+  std::size_t const n = std::min(tposted.size(), tcompleted.size());
+  if (n == 0) return;
+  double const cyc_per_sec = cpu_mhz() * 1e6;
+  double const total_cycles =
+      static_cast<double>(tcompleted[n - 1] - tposted[0]);
+  double const seconds = total_cycles > 0 ? total_cycles / cyc_per_sec : 1e-9;
+  double const total_bytes =
+      static_cast<double>(n) * static_cast<double>(r.message_size_bytes);
+  r.duration_sec = seconds;
+  r.payload_bytes = static_cast<std::uint64_t>(total_bytes);
+  r.throughput_gbit_s = total_bytes / (seconds * 125000000.0);
+  r.throughput_mib_s = total_bytes / (seconds * 1048576.0);
+  r.message_rate_s = static_cast<double>(n) / seconds;
+
+  if (no_peak) {
+    r.bw_peak_gbit_s = r.throughput_gbit_s;
+    return;
+  }
+  if (post_list == 0) post_list = 1;
+  if (cq_mod == 0) cq_mod = 1;
+  double opt_delta = static_cast<double>(tcompleted[0] - tposted[0]);
+  for (std::size_t i = 0; i < n; i += post_list) {
+    std::size_t jstart = ((i + 1 + cq_mod - 1) / cq_mod) * cq_mod - 1;
+    for (std::size_t j = jstart; j < n; j += cq_mod) {
+      double t = static_cast<double>(tcompleted[j] - tposted[i]) /
+                 static_cast<double>(j - i + 1);
+      if (t < opt_delta) opt_delta = t;
+    }
+  }
+  double const min_sec_per_msg = opt_delta / cyc_per_sec;
+  r.bw_peak_gbit_s = static_cast<double>(r.message_size_bytes) /
+                     (min_sec_per_msg * 125000000.0);
+}
+
 inline std::string nullable_bool(std::optional<bool> value) {
   if (!value) return "null";
   return *value ? "true" : "false";
@@ -569,11 +698,15 @@ inline std::string to_json(result const& r) {
      << r.throughput_gbit_s << ",\n";
   os << "  \"message_rate_s\": " << std::fixed << std::setprecision(3)
      << r.message_rate_s << ",\n";
+  os << "  \"bw_peak_gbit_s\": " << std::fixed << std::setprecision(3)
+     << r.bw_peak_gbit_s << ",\n";
   os << "  \"latency_avg_us\": " << opt_double(r.latency_avg_us) << ",\n";
   os << "  \"latency_min_us\": " << opt_double(r.latency_min_us) << ",\n";
   os << "  \"latency_p50_us\": " << opt_double(r.latency_p50_us) << ",\n";
   os << "  \"latency_p90_us\": " << opt_double(r.latency_p90_us) << ",\n";
   os << "  \"latency_p99_us\": " << opt_double(r.latency_p99_us) << ",\n";
+  os << "  \"latency_p999_us\": " << opt_double(r.latency_p999_us) << ",\n";
+  os << "  \"latency_stdev_us\": " << opt_double(r.latency_stdev_us) << ",\n";
   os << "  \"latency_max_us\": " << opt_double(r.latency_max_us) << ",\n";
   os << "  \"latency_sample_method\": "
      << text_or_null(r.latency_sample_method == "null" ? "" :
@@ -598,6 +731,47 @@ inline std::string to_json(result const& r) {
   return os.str();
 }
 
+// Compact, perftest-flavored one-line summary for stdout. Partial until Stage 10
+// adds BW peak and the full latency stats (t_typical/stdev/99.9); generic enough
+// for skip/error/stress results too.
+inline std::string human_summary(result const& r) {
+  std::ostringstream os;
+  if (!r.skip_reason.empty()) {
+    os << "SKIP  " << r.scenario_name << "  (" << r.skip_reason << ")\n";
+    return os.str();
+  }
+  if (r.errors) {
+    os << "ERROR " << r.scenario_name << "  " << r.first_error << "\n";
+    return os.str();
+  }
+  os << std::fixed;
+  auto v = [](std::optional<double> o) { return o ? *o : 0.0; };
+  if (r.metric == "latency" && r.latency_p50_us) {
+    // perftest RESULT_FMT_LAT columns: t_min t_max t_typical t_avg t_stdev 99% 99.9%
+    os << " " << r.operation << " lat  " << r.backend << "/" << r.completion_mode
+       << "  #bytes " << r.message_size_bytes << "  #iters " << r.completed_count
+       << std::setprecision(2)
+       << "  t_min " << v(r.latency_min_us) << "  t_max " << v(r.latency_max_us)
+       << "  t_typical " << *r.latency_p50_us << "  t_avg " << v(r.latency_avg_us)
+       << "  t_stdev " << v(r.latency_stdev_us) << "  99% " << v(r.latency_p99_us)
+       << "  99.9% " << v(r.latency_p999_us) << " usec\n";
+  } else if (r.metric == "bandwidth") {
+    // perftest RESULT_FMT_G columns: BW peak / BW average / MsgRate
+    os << " " << r.operation << " bw   " << r.backend << "/" << r.completion_mode
+       << "  #bytes " << r.message_size_bytes << "  #iters " << r.completed_count
+       << std::setprecision(2)
+       << "  BW_peak " << r.bw_peak_gbit_s << "  BW_avg " << r.throughput_gbit_s
+       << " Gb/sec  MsgRate " << (r.message_rate_s / 1e6) << " Mpps\n";
+  } else {
+    os << " " << r.scenario_name << "  posted=" << r.posted_count
+       << " completed=" << r.completed_count << " errors=" << r.errors << "\n";
+  }
+  return os.str();
+}
+
+// JSON goes to --json-out when given (so compare_results / scenario runners read
+// a clean file), and a perftest-style summary goes to stdout. With no --json-out,
+// JSON is written to stdout (back-compat for ad-hoc / stress runs).
 inline void write_result(result const& r, std::string const& path) {
   auto json = to_json(r);
   if (!path.empty()) {
@@ -608,8 +782,10 @@ inline void write_result(result const& r, std::string const& path) {
       throw std::runtime_error("failed to open json output: " + path);
     }
     out << json;
+    std::cout << human_summary(r);
+  } else {
+    std::cout << json;
   }
-  std::cout << json;
 }
 
 inline std::string command_line(int argc, char* argv[]) {

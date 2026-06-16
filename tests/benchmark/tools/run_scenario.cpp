@@ -20,10 +20,13 @@ std::string executable_suffix() {
 }
 
 std::string rdma_tool_name(rdma_bench::operation_kind operation) {
-  if (operation == rdma_bench::operation_kind::send_recv) {
-    return "rdma_send_recv_bench";
-  }
-  return "rdma_read_write_bench";
+  // Stage 9a: the unified asio_perftest binary multiplexes all operations via
+  // --operation (already emitted in common_args), so one target serves every
+  // scenario. The legacy rdma_send_recv_bench / rdma_read_write_bench split is
+  // gone; the per-operation entrypoints asio_{send,read,write}_{bw,lat} exist for
+  // perftest-identical command lines but are not needed by the scenario runner.
+  (void)operation;
+  return "asio_perftest";
 }
 
 std::string resolve_tool(char const* argv0, std::string const& tool) {

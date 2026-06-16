@@ -11,44 +11,18 @@
 #include <tuple>
 #include <vector>
 
-#include "asio/as_tuple.hpp"
 #include "asio/io_context.hpp"
 #include "asio/steady_timer.hpp"
-#include "asio/use_future.hpp"
 
 #include "rdma/rdma.hpp"
 #include "rdma_bench_common.hpp"
+#include "asio_perftest_core.hpp"
 
-namespace rdma = asio::rdma;
-using tcp = rdma::tcp;
-using clock_type = std::chrono::steady_clock;
-constexpr auto use_fut = asio::as_tuple(asio::use_future);
-using future_result = std::future<std::tuple<asio::error_code, std::size_t>>;
-
-class cq_spinner {
-public:
-  explicit cq_spinner(rdma::rdma_completion_queue& cq)
-      : cq_(cq),
-        thread_([this] {
-          while (!stop_.load(std::memory_order_relaxed)) {
-            asio::error_code ec;
-            cq_.poll(ec);
-          }
-        }) {}
-
-  ~cq_spinner() {
-    stop_.store(true, std::memory_order_relaxed);
-    if (thread_.joinable()) thread_.join();
-  }
-
-  cq_spinner(cq_spinner const&) = delete;
-  cq_spinner& operator=(cq_spinner const&) = delete;
-
-private:
-  rdma::rdma_completion_queue& cq_;
-  std::atomic<bool> stop_{false};
-  std::thread thread_;
-};
+// Stage 9a: this translation unit is now a module of the unified asio_perftest
+// binary (it no longer owns main). Everything except the exported run_send_recv
+// entry point has internal linkage so send_recv.cpp and read_write.cpp can link
+// into one executable without symbol collisions.
+namespace {
 
 class event_bw_server : public std::enable_shared_from_this<event_bw_server> {
 public:
@@ -247,6 +221,8 @@ private:
     if (n != 1 || storage_[0] != 'R') return fail("missing server ready byte");
     cpu_begin_ = rdma_bench::take_cpu_snapshot();
     begin_ = clock_type::now();
+    tposted_.reserve(static_cast<std::size_t>(opt_.iterations));
+    tcompleted_.reserve(static_cast<std::size_t>(opt_.iterations));
     auto initial = std::min<std::uint64_t>(opt_.queue_depth, opt_.iterations);
     for (std::uint64_t i = 0; i < initial; ++i) {
       post_send(static_cast<std::size_t>(i));
@@ -256,6 +232,7 @@ private:
   void post_send(std::size_t slot) {
     ++posted_;
     result_.posted_count = posted_;
+    tposted_.push_back(rdma_bench::get_cycles());
     qp_.async_send(
         mr_->cslice(offset_for_slot(slot), opt_.message_size),
         [self = shared_from_this(), slot](asio::error_code ec, std::size_t n) {
@@ -267,6 +244,7 @@ private:
     if (done_) return;
     if (ec) return fail(ec.message());
     if (n != opt_.message_size) return fail("short send");
+    tcompleted_.push_back(rdma_bench::get_cycles());
     ++completed_;
     result_.completed_count = completed_;
 
@@ -282,7 +260,8 @@ private:
   void finish_success() {
     if (done_) return;
     done_ = true;
-    finish_throughput(result_, begin_, clock_type::now());
+    rdma_bench::finish_bw_cycles(result_, tposted_, tcompleted_, opt_.post_list,
+                                 opt_.cq_mod, opt_.no_peak);
     rdma_bench::fill_cpu_metrics(result_, cpu_begin_,
                                  rdma_bench::take_cpu_snapshot());
     result_.validation_passed = true;
@@ -312,6 +291,8 @@ private:
   std::unique_ptr<rdma::rdma_memory_region> mr_;
   std::uint64_t posted_ = 0;
   std::uint64_t completed_ = 0;
+  std::vector<rdma_bench::cycles_t> tposted_;
+  std::vector<rdma_bench::cycles_t> tcompleted_;
   clock_type::time_point begin_ = clock_type::now();
   rdma_bench::cpu_snapshot cpu_begin_{};
   bool done_ = false;
@@ -492,7 +473,7 @@ private:
     }
     mr_ = std::make_unique<rdma::rdma_memory_region>(
         device_, storage_.data(), storage_.size());
-    samples_.reserve(static_cast<std::size_t>(opt_.iterations));
+    deltas_.reserve(static_cast<std::size_t>(opt_.iterations));
     qp_.async_recv(mr_->slice(std::size_t{0}, std::size_t{1}),
                    [self = shared_from_this()](asio::error_code ec,
                                                 std::size_t n) {
@@ -509,7 +490,7 @@ private:
   }
 
   void start_iteration() {
-    sample_begin_ = clock_type::now();
+    sample_begin_cyc_ = rdma_bench::get_cycles();
     ++result_.posted_count;
     qp_.async_recv(mr_->slice(recv_offset(), opt_.message_size),
                    [self = shared_from_this()](asio::error_code ec,
@@ -531,13 +512,10 @@ private:
 
   void on_echo(asio::error_code ec, std::size_t n) {
     if (done_) return;
-    auto sample_end = clock_type::now();
+    auto sample_end_cyc = rdma_bench::get_cycles();
     if (ec) return fail(ec.message());
     if (n != opt_.message_size) return fail("short receive");
-    auto round_trip_us =
-        std::chrono::duration<double, std::micro>(sample_end - sample_begin_)
-            .count();
-    samples_.push_back(round_trip_us / 2.0);
+    deltas_.push_back(sample_end_cyc - sample_begin_cyc_);
     ++result_.completed_count;
     if (result_.completed_count == opt_.iterations) {
       finish_success();
@@ -552,7 +530,7 @@ private:
     finish_throughput(result_, begin_, clock_type::now());
     rdma_bench::fill_cpu_metrics(result_, cpu_begin_,
                                  rdma_bench::take_cpu_snapshot());
-    rdma_bench::fill_latency(result_, samples_);
+    rdma_bench::fill_latency_cycles(result_, std::move(deltas_), 2);
     result_.validation_passed = true;
     asio::error_code ignored;
     conn_.disconnect(ignored);
@@ -578,9 +556,9 @@ private:
   rdma::rdma_queue_pair qp_;
   std::vector<char> storage_;
   std::unique_ptr<rdma::rdma_memory_region> mr_;
-  std::vector<double> samples_;
+  std::vector<rdma_bench::cycles_t> deltas_;
   clock_type::time_point begin_ = clock_type::now();
-  clock_type::time_point sample_begin_ = clock_type::now();
+  rdma_bench::cycles_t sample_begin_cyc_ = 0;
   rdma_bench::cpu_snapshot cpu_begin_{};
   bool done_ = false;
   done_handler on_done_;
@@ -747,14 +725,6 @@ int run_event_latency(rdma_bench::options opt, std::string command_line) {
   }
   rdma_bench::write_result(*selected, opt.json_out);
   return selected->exit_code;
-}
-
-void signal_ready(std::promise<void>* ready) {
-  if (!ready) return;
-  try {
-    ready->set_value();
-  } catch (std::future_error const&) {
-  }
 }
 
 rdma_bench::result failed_poll_result(rdma_bench::options const& opt,
@@ -989,17 +959,22 @@ rdma_bench::result run_poll_callback_bandwidth_client_role(
     }
     if (failed) return failed_poll_result(opt, command_line, error_message);
 
+    std::vector<rdma_bench::cycles_t> tposted, tcompleted;
+    tposted.reserve(static_cast<std::size_t>(opt.iterations));
+    tcompleted.reserve(static_cast<std::size_t>(opt.iterations));
     std::uint64_t posted = 0;
     std::function<void(std::size_t)> post_send;
     post_send = [&](std::size_t slot) {
       ++posted;
       result.posted_count = posted;
+      tposted.push_back(rdma_bench::get_cycles());
       qp.async_send(
           mr.cslice(offset_for_slot(slot), opt.message_size),
           [&, slot](asio::error_code ec, std::size_t n) {
             if (failed) return;
             if (ec) return fail(ec.message());
             if (n != opt.message_size) return fail("short send");
+            tcompleted.push_back(rdma_bench::get_cycles());
             ++result.completed_count;
             if (posted < opt.iterations) {
               post_send(slot);
@@ -1021,7 +996,9 @@ rdma_bench::result run_poll_callback_bandwidth_client_role(
     }
     if (failed) return failed_poll_result(opt, command_line, error_message);
 
-    finish_throughput(result, begin, clock_type::now());
+    rdma_bench::finish_bw_cycles(result, tposted, tcompleted, opt.post_list,
+                                 opt.cq_mod, opt.no_peak);
+    (void)begin;
     rdma_bench::fill_cpu_metrics(result, cpu_begin,
                                  rdma_bench::take_cpu_snapshot());
     result.validation_passed = true;
@@ -1195,11 +1172,15 @@ rdma_bench::result run_poll_bandwidth_client_role(rdma_bench::options opt,
     }
 
     std::vector<future_result> sends(opt.queue_depth);
+    std::vector<rdma_bench::cycles_t> tposted, tcompleted;
+    tposted.reserve(static_cast<std::size_t>(opt.iterations));
+    tcompleted.reserve(static_cast<std::size_t>(opt.iterations));
     std::uint64_t posted = 0;
     auto initial = std::min<std::uint64_t>(opt.queue_depth, opt.iterations);
     auto cpu_begin = rdma_bench::take_cpu_snapshot();
     auto begin = clock_type::now();
     for (std::uint64_t i = 0; i < initial; ++i) {
+      tposted.push_back(rdma_bench::get_cycles());
       sends[static_cast<std::size_t>(i)] =
           qp.async_send(mr.cslice(offset_for_slot(static_cast<std::size_t>(i)),
                                   opt.message_size),
@@ -1216,8 +1197,10 @@ rdma_bench::result run_poll_bandwidth_client_role(rdma_bench::options opt,
       if (n != opt.message_size) {
         return failed_poll_result(opt, command_line, "short send");
       }
+      tcompleted.push_back(rdma_bench::get_cycles());
       ++result.completed_count;
       if (posted < opt.iterations) {
+        tposted.push_back(rdma_bench::get_cycles());
         sends[slot] =
             qp.async_send(mr.cslice(offset_for_slot(slot), opt.message_size),
                           use_fut);
@@ -1226,7 +1209,9 @@ rdma_bench::result run_poll_bandwidth_client_role(rdma_bench::options opt,
       }
     }
 
-    finish_throughput(result, begin, clock_type::now());
+    rdma_bench::finish_bw_cycles(result, tposted, tcompleted, opt.post_list,
+                                 opt.cq_mod, opt.no_peak);
+    (void)begin;
     rdma_bench::fill_cpu_metrics(result, cpu_begin,
                                  rdma_bench::take_cpu_snapshot());
     result.validation_passed = true;
@@ -1388,12 +1373,12 @@ rdma_bench::result run_poll_latency_client_role(rdma_bench::options opt,
                                          : "missing server ready byte");
     }
 
-    std::vector<double> samples;
-    samples.reserve(static_cast<std::size_t>(opt.iterations));
+    std::vector<rdma_bench::cycles_t> deltas;
+    deltas.reserve(static_cast<std::size_t>(opt.iterations));
     auto cpu_begin = rdma_bench::take_cpu_snapshot();
     auto begin = clock_type::now();
     for (std::uint64_t i = 0; i < opt.iterations; ++i) {
-      auto sample_begin = clock_type::now();
+      auto sample_begin_cyc = rdma_bench::get_cycles();
       auto recv =
           qp.async_recv(mr.slice(recv_offset, opt.message_size), use_fut);
       auto [send_ec, send_n] =
@@ -1405,17 +1390,14 @@ rdma_bench::result run_poll_latency_client_role(rdma_bench::options opt,
         return failed_poll_result(opt, command_line, "short send");
       }
       auto [recv_ec, recv_n] = recv.get();
-      auto sample_end = clock_type::now();
+      auto sample_end_cyc = rdma_bench::get_cycles();
       if (recv_ec) {
         return failed_poll_result(opt, command_line, recv_ec.message());
       }
       if (recv_n != opt.message_size) {
         return failed_poll_result(opt, command_line, "short receive");
       }
-      auto round_trip_us =
-          std::chrono::duration<double, std::micro>(sample_end - sample_begin)
-              .count();
-      samples.push_back(round_trip_us / 2.0);
+      deltas.push_back(sample_end_cyc - sample_begin_cyc);
       ++result.posted_count;
       ++result.completed_count;
     }
@@ -1423,7 +1405,7 @@ rdma_bench::result run_poll_latency_client_role(rdma_bench::options opt,
     finish_throughput(result, begin, clock_type::now());
     rdma_bench::fill_cpu_metrics(result, cpu_begin,
                                  rdma_bench::take_cpu_snapshot());
-    rdma_bench::fill_latency(result, samples);
+    rdma_bench::fill_latency_cycles(result, std::move(deltas), 2);
     result.validation_passed = true;
     asio::error_code ignored;
     conn.disconnect(ignored);
@@ -1532,38 +1514,23 @@ int run_poll_latency(rdma_bench::options opt, std::string command_line) {
   return selected.exit_code;
 }
 
-int main(int argc, char* argv[]) {
-  try {
-    auto opt = rdma_bench::parse_options_with_scenario(argc, argv);
-    auto cmd = rdma_bench::command_line(argc, argv);
-    if (opt.operation != rdma_bench::operation_kind::send_recv) {
-      auto r = rdma_bench::make_skip_result(
-          opt, cmd, "rdma_send_recv_bench only implements send_recv",
-          "operation_" + std::string(rdma_bench::operation_name(opt.operation)));
-      rdma_bench::write_result(r, opt.json_out);
-      return 0;
-    }
-    if (opt.mode == "poll") {
-      if (opt.metric == rdma_bench::metric_kind::latency) {
-        return run_poll_latency(std::move(opt), std::move(cmd));
-      }
-      return run_poll_bandwidth(std::move(opt), std::move(cmd));
-    }
+}  // anonymous namespace
+
+namespace asio_perftest {
+
+// send/recv dispatch (mode x metric). Operation routing + option parsing live in
+// the unified asio_perftest main; this entry assumes operation == send_recv.
+int run_send_recv(rdma_bench::options opt, std::string cmd) {
+  if (opt.mode == "poll") {
     if (opt.metric == rdma_bench::metric_kind::latency) {
-      return run_event_latency(std::move(opt), std::move(cmd));
+      return run_poll_latency(std::move(opt), std::move(cmd));
     }
-    return run_event_bandwidth(std::move(opt), std::move(cmd));
-  } catch (std::runtime_error const& e) {
-    if (std::string_view(e.what()) == "help") {
-      rdma_bench::print_usage(argv[0]);
-      return 0;
-    }
-    std::cerr << "fatal: " << e.what() << "\n";
-    rdma_bench::print_usage(argv[0]);
-    return 1;
-  } catch (std::exception const& e) {
-    std::cerr << "fatal: " << e.what() << "\n";
-    rdma_bench::print_usage(argv[0]);
-    return 1;
+    return run_poll_bandwidth(std::move(opt), std::move(cmd));
   }
+  if (opt.metric == rdma_bench::metric_kind::latency) {
+    return run_event_latency(std::move(opt), std::move(cmd));
+  }
+  return run_event_bandwidth(std::move(opt), std::move(cmd));
 }
+
+}  // namespace asio_perftest
