@@ -201,7 +201,7 @@ and effective/operating config (`derive_effective_config(config, caps)`, stored 
   constructed with `(0, 0, io_ctx)`. **`queue_pair` does NOT** — it owns the verbs-service
   `implementation_type` directly (so poll mode needs no io_context) and dispatches to the static
   (poll) or member (event) service entry points based on whether it holds an `io_context*`.
-- **Config semantics**: `rdma_config_t` fields default to 0; 0 means "auto-derive from device capabilities". Non-zero values are user constraints validated against device caps.
+- **Config semantics**: most `rdma_config_t` fields default to 0, where 0 means "auto-derive from device capabilities" (e.g. `cqe_`, `inbound`/`outbound_read_limit_`, and `cq_poll_batch_` -> 16); non-zero values are user constraints validated against device caps. The connection-protocol knobs `rnr_retry_` (default 7 = infinite retry) and `min_rnr_timer_` (default 12 = 0.64 ms, matching perftest) instead carry direct non-zero defaults -- they are protocol values, not capability-derived. `rnr_retry_` feeds `rdma_conn_param.rnr_retry_count`; `min_rnr_timer_` is applied via `ibv_modify_qp` (see ibv notes). On nd these two are ignored (ND2 exposes no RNR knob).
 - **Async initiation**: All async methods use `asio::async_initiate<Token, Signature>(initiation, token, ...)`.
 - **Error handling**: `asio::error_code&` out-param overloads + throw overloads via `asio::detail::throw_error(ec)`.
 - **Connector handle**: Move-only struct (`nd_connector_handle_t` / `ibv_connector_handle_t`) produced by the listener and adopted by the server-side connector via `assign`. `listener.async_get_connection` wraps this: it constructs a connector, calls `assign` with the handle + the peer's private data, and yields the ready-to-`async_accept` connector to the handler.
@@ -219,6 +219,7 @@ and effective/operating config (`derive_effective_config(config, caps)`, stored 
 - `rdma_resolve_addr` + `rdma_resolve_route` are hidden inside `async_connect` (multi-stage CM op). The user sees one completion.
 - Device manager is flat (no v4/v6 split); address family is consumed at rdma_cm connect time via the sockaddr passed in the endpoint.
 - QP creation is deferred: `ibv_queue_pair` provides a `make_create_qp_fn()` callback that the connector invokes once the cm_id has a resolved context.
+- `min_rnr_timer_` (from the effective config) is applied with `ibv_modify_qp(IBV_QP_MIN_RNR_TIMER)` right after the QP reaches RTS -- the `RDMA_CM_EVENT_ESTABLISHED` win-branch in `ibv_op_connect` / `ibv_op_accept`. rdma_cm does not expose it through `rdma_conn_param`, and its ~655 ms default otherwise stalls send/recv on a receive-window underrun. `verbs_ops::modify_qp` returns an `asio::error_code` that is reported as the connect/accept error.
 
 ### Build
 
@@ -232,9 +233,12 @@ Select the backend with `-DRDMA_BACKEND=ibv` (Linux, default) or `nd` (Windows).
 ### Tests
 
 ```
-tests/nd/    — NetworkDirect-specific tests (use nd_* types)
-tests/ibv/   — libibverbs-specific tests (use ibv_* types)
-tests/rdma/  — cross-platform tests (use only rdma_* aliases + rdma/rdma.hpp); built for either backend
+tests/nd/        — NetworkDirect-specific tests (use nd_* types)
+tests/ibv/       — libibverbs-specific tests (use ibv_* types)
+tests/rdma/      — cross-platform tests (use only rdma_* aliases + rdma/rdma.hpp); built for either backend
+tests/benchmark/ — asio_perftest: the perftest-aligned benchmark (verb modules + entrypoints + tools)
+tests/stress/    — stability/race tests (shared_cq, connect/disconnect soak); own main(), not a perf baseline
+tests/native/    — native backend baselines (e.g. native ND) for comparison
 ```
 
 `tests/rdma/test_rdma_echo.cpp` is the canonical portable example: one source, backend chosen

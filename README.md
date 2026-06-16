@@ -222,10 +222,83 @@ Notes:
 
 ## Performance Snapshot
 
-Current benchmark results are tracked in
+Benchmark history is tracked in
 [`docs/rdma_stress_performance_results.md`](docs/rdma_stress_performance_results.md), with the
 read/write optimization follow-up in
 [`docs/rdma_read_write_performance_optimization_plan.md`](docs/rdma_read_write_performance_optimization_plan.md).
+
+RDMA-on-Asio is benchmarked with `asio_perftest` (`tests/benchmark/`), whose CLI and
+verb-driving loop deliberately mirror [linux-rdma/perftest](https://github.com/linux-rdma/perftest)
+so the two can be compared directly. The two backends run on different hardware and are reported
+separately: **Linux** (`ibv`, compared against perftest) and **Windows** (`nd`, compared against a
+native NetworkDirect baseline). All numbers are local engineering / regression signals on
+single-host loopback, not cross-machine line-rate claims.
+
+### Linux (`ibv` backend) -- RDMA-on-Asio vs perftest
+
+Collected 2026-06-16, single host, two-process loopback over RoCE.
+
+| Item | Value |
+|---|---|
+| CPU | AMD EPYC 7542 (16 vCPU exposed) |
+| RDMA NIC | Mellanox ConnectX `mlx5_0`, fw 22.37.1014 |
+| Link | 100 Gbit/s (4X EDR), RoCE / Ethernet link layer |
+| OS/backend | Linux 6.8 + libibverbs + rdma_cm (`ibv`) |
+| Topology | Single host, two-process loopback (`--server` / `--client`) |
+| Baseline | linux-rdma/perftest (`ib_send_bw` / `ib_write_bw` / `ib_read_bw`) |
+| Build | Release |
+
+Method: `-n 20000`, queue/tx depth 128, `--report_gbits`, sizes 64 B / 4 KiB / 64 KiB / 128 KiB.
+Mode mapping: asio `--mode poll` (busy-poll, inline completion) corresponds to perftest's default
+busy-poll; asio `--mode event` (CQ completion channel on epoll) corresponds to perftest `--events`.
+Token note: asio send/recv poll uses an inline `callback` (no io_context on the data path), while
+asio read/write poll currently uses `as_tuple(use_future)` (promise/future + heap + locking) -- a
+poll+callback read/write path is still TODO, so the read/write poll rows carry that overhead at
+small/medium sizes. All event-mode rows use `callback`.
+
+Send/recv bandwidth (Gbit/s):
+
+| Path | 64 B | 4 KiB | 64 KiB | 128 KiB |
+|---|---:|---:|---:|---:|
+| RDMA-on-Asio / poll (callback) | 1.13 | 71.78 | 91.41 | 91.59 |
+| RDMA-on-Asio / event (callback) | 1.15 | 68.27 | 93.75 | 92.17 |
+| perftest / busy-poll | 1.29 | 91.81 | 96.41 | 96.32 |
+| perftest / events | 1.29 | 65.26 | 96.12 | 96.27 |
+
+RDMA write bandwidth (Gbit/s):
+
+| Path | 64 B | 4 KiB | 64 KiB | 128 KiB |
+|---|---:|---:|---:|---:|
+| RDMA-on-Asio / poll (use_future) | 0.16 | 55.03 | 91.18 | 91.99 |
+| RDMA-on-Asio / event (callback) | 1.09 | 81.55 | 90.87 | 89.64 |
+| perftest / busy-poll | 1.42 | 92.04 | 94.34 | 96.02 |
+| perftest / events | n/a | n/a | n/a | n/a |
+
+perftest does not implement an events mode for the WRITE verb ("Events feature not available on
+WRITE verb"), so those cells are n/a.
+
+RDMA read bandwidth (Gbit/s):
+
+| Path | 64 B | 4 KiB | 64 KiB | 128 KiB |
+|---|---:|---:|---:|---:|
+| RDMA-on-Asio / poll (use_future) | 0.24 | 53.20 | 62.11 | 61.13 |
+| RDMA-on-Asio / event (callback) | 1.08 | 65.24 | 62.25 | 61.04 |
+| perftest / busy-poll | 1.40 | 75.13 | 73.26 | 73.56 |
+| perftest / events | 1.35 | 72.24 | 73.15 | 73.48 |
+
+Observations:
+
+- Large messages (64-128 KiB): send/recv and write reach near line rate on both paths
+  (RDMA-on-Asio 90-94 Gbit/s vs perftest 94-96 Gbit/s).
+- RDMA read plateaus well below write/send on both paths (perftest ~73, RDMA-on-Asio ~62 Gbit/s) --
+  read throughput is bounded by `initiator_depth` / round-trip latency here, not the wire.
+- At 4 KiB the perftest busy-poll path leads (send/recv 92 vs 72 Gbit/s); the gap is wrapper cost
+  plus, for read/write poll, the `use_future` overhead. asio event-mode write at 4 KiB reaches
+  81 Gbit/s.
+- 64 B is message-rate bound (sub-1.5 Gbit/s) rather than bandwidth bound on every path; the two
+  stay in the same order of magnitude.
+
+### Windows (`nd` backend)
 
 The 2026-06-15 measurements were collected on a single Windows host using the NetworkDirect
 backend and same-process loopback. They are useful as local engineering and regression signals,
@@ -294,8 +367,9 @@ Next performance work:
   is still justified, design it separately as `post_read` / `post_write` with explicit CQ polling
   and user-managed lifetime.
 - Continue event-mode tuning by measuring CQ drain batch sizes and re-arm frequency.
-- Add multi-host Linux/IBV comparisons against `perftest` (`ib_send_bw`, `ib_write_bw`,
-  `ib_read_bw`) when matching hardware is available.
+- Done (2026-06-16): single-host Linux/`ibv` comparison against `perftest` (`ib_send_bw`,
+  `ib_write_bw`, `ib_read_bw`) -- see the Linux table above. Extend to a multi-host (two-box)
+  comparison when matching hardware on both ends is available.
 
 ## Requirements
 
