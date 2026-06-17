@@ -236,7 +236,8 @@ single-host loopback, not cross-machine line-rate claims.
 
 ### Linux (`ibv` backend) -- RDMA-on-Asio vs perftest
 
-Collected 2026-06-16, single host, two-process loopback over RoCE.
+Collected 2026-06-17 via `tools/run_comparison.sh` (the Stage 8 driver: per case it runs the lib
+bench and perftest two-process, parses both, and diffs them), single host, loopback over RoCE.
 
 | Item | Value |
 |---|---|
@@ -245,58 +246,56 @@ Collected 2026-06-16, single host, two-process loopback over RoCE.
 | Link | 100 Gbit/s (4X EDR), RoCE / Ethernet link layer |
 | OS/backend | Linux 6.8 + libibverbs + rdma_cm (`ibv`) |
 | Topology | Single host, two-process loopback (`--server` / `--client`) |
-| Baseline | linux-rdma/perftest (`ib_send_bw` / `ib_write_bw` / `ib_read_bw`) |
+| Baseline | linux-rdma/perftest 6.20 (`ib_{send,write,read}_{bw,lat}`) |
 | Build | Release |
 
-Method: `-n 20000`, queue/tx depth 128, `--report_gbits`, sizes 64 B / 4 KiB / 64 KiB / 128 KiB.
-Mode mapping: asio `--mode poll` (busy-poll, inline completion) corresponds to perftest's default
-busy-poll; asio `--mode event` (CQ completion channel on epoll) corresponds to perftest `--events`.
-Token note: asio send/recv poll uses an inline `callback` (no io_context on the data path), while
-asio read/write poll currently uses `as_tuple(use_future)` (promise/future + heap + locking) -- a
-poll+callback read/write path is still TODO, so the read/write poll rows carry that overhead at
-small/medium sizes. All event-mode rows use `callback`.
+Method: `scenarios/comparison/*.json` -- 4 KiB messages, queue/tx depth 64, 20000 iters (bw) /
+2000 (lat). The measured window is Stage 9b's warmup-capable, cycle-counter window; latency uses
+Stage 10's perftest-faithful percentiles. **Parity clamp (`constraints` column in the driver
+output): `cq-mod=1, inline=0, post-list=1, qp=1`** -- the asio side has no selective signaling /
+inline / WR batching / multi-QP this iteration (Stage 11/12 deferred), so perftest is constrained
+to match (one signaled, non-inline WR per message, single QP). Mode mapping: asio `--mode poll`
+(busy-poll) <-> perftest default busy-poll; asio `--mode event` (CQ comp-channel on epoll) <->
+perftest `--events`. Token note: poll send/recv uses an inline `callback`; poll **read/write** uses
+`as_tuple(use_future)` (promise/future + heap + locking) -- the poll+callback read/write path is a
+Stage 11 TODO, so those rows carry that overhead. All event rows use `callback`.
 
-Send/recv bandwidth (Gbit/s):
+Bandwidth (Gbit/s, 4 KiB):
 
-| Path | 64 B | 4 KiB | 64 KiB | 128 KiB |
-|---|---:|---:|---:|---:|
-| RDMA-on-Asio / poll (callback) | 1.13 | 71.78 | 91.41 | 91.59 |
-| RDMA-on-Asio / event (callback) | 1.15 | 68.27 | 93.75 | 92.17 |
-| perftest / busy-poll | 1.29 | 91.81 | 96.41 | 96.32 |
-| perftest / events | 1.29 | 65.26 | 96.12 | 96.27 |
+| op | mode | RDMA-on-Asio | perftest |
+|---|---|---:|---:|
+| send/recv | event | 29.6 | 6.1 |
+| send/recv | poll | 72.0 | 66.2 |
+| write | event | 79.8 | n/a |
+| write | poll | 9.3 (use_future) | 86.1 |
+| read | event | 59.5 | 72.3 |
+| read | poll | 38.8 (use_future) | 62.3 |
 
-RDMA write bandwidth (Gbit/s):
+Latency (us, 4 KiB, event mode; send/write report half-RTT, read the full round trip):
 
-| Path | 64 B | 4 KiB | 64 KiB | 128 KiB |
-|---|---:|---:|---:|---:|
-| RDMA-on-Asio / poll (use_future) | 0.16 | 55.03 | 91.18 | 91.99 |
-| RDMA-on-Asio / event (callback) | 1.09 | 81.55 | 90.87 | 89.64 |
-| perftest / busy-poll | 1.42 | 92.04 | 94.34 | 96.02 |
-| perftest / events | n/a | n/a | n/a | n/a |
+| op | RDMA-on-Asio p50 / p99 | perftest p50 |
+|---|---:|---:|
+| send/recv | 20.1 / 34.0 | 21.5 |
+| read | 21.5 / 29.8 | 30.1 |
+| write | 16.0 / 21.1 | n/a |
 
-perftest does not implement an events mode for the WRITE verb ("Events feature not available on
-WRITE verb"), so those cells are n/a.
-
-RDMA read bandwidth (Gbit/s):
-
-| Path | 64 B | 4 KiB | 64 KiB | 128 KiB |
-|---|---:|---:|---:|---:|
-| RDMA-on-Asio / poll (use_future) | 0.24 | 53.20 | 62.11 | 61.13 |
-| RDMA-on-Asio / event (callback) | 1.08 | 65.24 | 62.25 | 61.04 |
-| perftest / busy-poll | 1.40 | 75.13 | 73.26 | 73.56 |
-| perftest / events | 1.35 | 72.24 | 73.15 | 73.48 |
+perftest has no events mode for the WRITE verb ("Events feature not available on WRITE verb"), so
+write event-mode cells are n/a.
 
 Observations:
 
-- Large messages (64-128 KiB): send/recv and write reach near line rate on both paths
-  (RDMA-on-Asio 90-94 Gbit/s vs perftest 94-96 Gbit/s).
-- RDMA read plateaus well below write/send on both paths (perftest ~73, RDMA-on-Asio ~62 Gbit/s) --
-  read throughput is bounded by `initiator_depth` / round-trip latency here, not the wire.
-- At 4 KiB the perftest busy-poll path leads (send/recv 92 vs 72 Gbit/s); the gap is wrapper cost
-  plus, for read/write poll, the `use_future` overhead. asio event-mode write at 4 KiB reaches
-  81 Gbit/s.
-- 64 B is message-rate bound (sub-1.5 Gbit/s) rather than bandwidth bound on every path; the two
-  stay in the same order of magnitude.
+- **Latency is competitive**: RDMA-on-Asio event-mode p50 (16-21 us) is at or below perftest's on
+  send/recv and read -- the abstraction adds little on the one-deep path.
+- **send/recv poll** (callback) reaches 72 Gbit/s, slightly ahead of perftest's cq-mod-1 busy-poll
+  (66). **send/recv event** at cq-mod-1 is the pathological case for perftest (6.1 Gbit/s -- one
+  comp-channel event per signaled WR), where the asio shared-CQ poller (one self-perpetuating op)
+  does far better (29.6).
+- **write/read poll** trail (9.3 / 38.8 vs perftest 86 / 62) because they use `use_future`, not an
+  inline callback -- the Stage 11 poll+callback gap, not a fabric limit. read/write **event**
+  (callback) land at 79.8 / 59.5.
+- These numbers reset the pre-Stage-9b baseline (the window now excludes warmup and times with
+  cycle counters). The earlier 64 B - 128 KiB sweep showed both paths reaching ~90-96 Gbit/s at
+  large messages.
 
 ### Windows (`nd` backend)
 

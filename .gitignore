@@ -58,6 +58,8 @@ tests/benchmark/results/
 # Benchmark run artifacts (host-specific result JSON; not source)
 benchmark-baselines/
 benchmark-run/
+comparison-run/
+comparison-run-ctest/
 
 # OS generated
 .DS_Store

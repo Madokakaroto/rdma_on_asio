@@ -28,22 +28,26 @@ the abstraction's cost against an industry-standard baseline (see
 Some knobs perftest relies on for its tuned defaults are **not implemented in the
 current RDMA-on-Asio API**. A benchmark that silently falls back to the library
 default while perftest uses its tuned default produces an unfair comparison that
-looks like abstraction cost but is a feature-parity gap. Before a knob appears in
-a scenario, either add the capability, gate the scenario as a capability skip, or
-constrain perftest to match -- and record which. **This table is the single
+looks like abstraction cost but is a feature-parity gap. **This iteration does not
+add any of these capabilities** (no interface/impl change for parity -- see "This
+iteration's scope"). Each unsupported knob is handled by `asio_perftest` returning a
+`not_implemented` skip for a non-default value (`rdma_bench::not_implemented_reason`),
+and the comparison runs perftest at the matching default. **This table is the single
 source of truth for the parity constraints referenced throughout this plan.**
 
-| Knob | perftest default | Current library state | Action |
-|------|------------------|-----------------------|--------|
-| `cq_mod` / selective signaling | unsignaled, CQE every `--cq-mod` | all sends `IBV_SEND_SIGNALED` (`ibv_ops_verbs.hpp`), one CQE per WR | add selective signaling, or run perftest `--cq-mod 1` |
-| `inline_size` / `IBV_SEND_INLINE` | inline for small msgs | inline forced off: `max_inline_data = 0` (`ibv_service_verbs.hpp`); WR never sets `IBV_SEND_INLINE` | wire inline, or run perftest `--inline_size 0` |
-| `post_list` / `recv_post_list` | batches N WRs per post | `async_send` posts one WR (with an SGL); no multi-WR batching | map `post_list=1` only; skip `>1` as missing capability |
-| `retry_count` / `rnr_retry` | configurable | hard-coded to 7 (`ibv_op_connect.hpp`, `ibv_service_connector.hpp`) | record as fixed at 7; not a scenario knob yet |
+| Knob | perftest default | Current library state | This iteration |
+|------|------------------|-----------------------|----------------|
+| `cq_mod` / selective signaling | unsignaled, CQE every `--cq-mod` | all sends `IBV_SEND_SIGNALED` (`ibv_ops_verbs.hpp`), one CQE per WR | not implemented (skip `--cq-mod>1`); run perftest `--cq-mod 1`. Future: Stage 11.3 |
+| `inline_size` / `IBV_SEND_INLINE` | inline for small msgs | inline forced off: `max_inline_data = 0` (`ibv_service_verbs.hpp`); WR never sets `IBV_SEND_INLINE` | not implemented (skip `--inline_size>0`); run perftest `--inline_size 0`. Future: Stage 11.1 |
+| `post_list` / `recv_post_list` | batches N WRs per post | `async_send` posts one WR (with an SGL); no multi-WR batching | not implemented (skip `>1`); map `post_list=1` only. Future: Stage 11.2 |
+| `--qp` / multi-QP | N QPs over one connection | one cm_id == one QP (`async_connect(qp, ...)`) | not implemented (skip `qps>1`); run perftest `--qp 1`. Future: needs a connector interface change |
+| `retry_count` / `rnr_retry` / `min_rnr_timer` | configurable | **configurable** since the RNR fix: `rnr_retry_` (7) / `min_rnr_timer_` (12) in `rdma_config_t`, applied via `ibv_modify_qp` at RTS | done (internal optimization, no public-API change) |
 
 The first honest IBV-vs-perftest bandwidth comparison runs perftest with
-`--cq-mod 1 --inline_size 0` and no `--post_list` (one signaled, non-inline WR per
-message on both sides), recorded as a parity-constrained run. When a capability is
-added later, re-baseline rather than comparing across the API change.
+`--cq-mod 1 --inline_size 0`, no `--post_list`, and `--qp 1` (one signaled,
+non-inline WR per message, a single QP on both sides) -- this iteration's default
+parity-constrained run. When a capability is added in a future iteration,
+re-baseline rather than comparing across the API change.
 
 ## Build, CTest, And Layout
 
@@ -429,6 +433,42 @@ already exist for nd -- the nd agent acts on, or explicitly documents, each.
 
 ## asio_perftest: Feature Parity With perftest
 
+### This iteration's scope (measure + internal-optimize only)
+
+This iteration deliberately does **not** change the rdma-on-asio public interface or its
+implementation in order to reach perftest parity. The work is limited to:
+
+- **Performance measurement** -- the lib-vs-perftest comparison (Stage 8), the bench-layer
+  parts of run-structure parity (Stage 9b: warmup loop, phase barrier, `--margin-sec`,
+  constraints column), and measurement-fidelity (Stage 10). Stage 9b's `--qp` multi-QP knob
+  is **deferred** -- it needs a connector interface change (one cm_id == one QP today), so
+  `qps > 1` returns a not-implemented skip; see Stage 9b and the matrix.
+- **Internal-implementation optimizations** that touch no public API -- the min_rnr_timer
+  fix already landed; candidates: the single-buffer SGE fast path, event-mode poller
+  drain/re-arm tuning.
+
+Perftest features that would require interface/impl changes are **out of scope this
+iteration**. `asio_perftest` still accepts the matching flags for command-line parity, but a
+non-default value it cannot honor through the current public API returns a **`not_implemented`
+skip** (`rdma_bench::not_implemented_reason` -> `make_skip_result`, gated in
+`asio_perftest.cpp::cli_main`) instead of a misleading number. Stage 11 and Stage 12 below
+keep their designs as the future-iteration reference.
+
+| perftest feature | rdma-on-asio | this iteration |
+|---|---|---|
+| send/recv, write, read | supported | benchmarked |
+| bandwidth / latency | supported | benchmarked |
+| event (`--events`) / poll (busy-poll) | supported | benchmarked (perftest WRITE has no `--events`) |
+| RC connection, `--rdma_cm` | supported | benchmarked |
+| `--inline_size > 0` | needs QP `max_inline_data` + `IBV_SEND_INLINE` | not implemented (CLI skip) |
+| `--cq-mod > 1` / `--signaled-every > 1` | needs selective signaling (breaks 1:1 CQE<->op) | not implemented (CLI skip) |
+| `--post-list > 1` / `--recv-post-list > 1` | needs a WR-batching API | not implemented (CLI skip) |
+| `--qp` / `--qps > 1` (multi-QP) | needs N QPs over one connection (connector is one cm_id == one QP) | not implemented (CLI skip) |
+| `-b` bidirectional | needs bidirectional orchestration | not implemented |
+| `*_with_imm` | needs an immediate-data API | not implemented |
+| UC / UD connection | RC only (hard-coded `IBV_QPT_RC`) | not implemented (`--connection` rejects non-RC) |
+| atomics (`ib_atomic_*`) | no atomic operations | not implemented (no operation/entrypoint) |
+
 ### Design principle: a perftest mirror, differing on one axis only
 
 `asio_perftest` (the benchmark CMake project) is built as a deliberate **mirror of
@@ -539,15 +579,28 @@ right after connection setup; document each start/stop point and preserve it).
   all named scenarios run green via the new targets, the diff stays in-envelope, and
   `compare_results` yields an identical table from the new binaries.
 
-### Stage 9b -- Run-structure parity (changes the measured window; resets the baseline)
+### Stage 9b -- Run-structure parity (changes the measured window; resets the baseline) -- DONE
 
-These deliberately alter what is measured, so they get their own stage and a fresh
-baseline (do **not** regression-check against 9a numbers). This is where the
-measurement structure is brought into line with perftest (the Design-principle
-axis 2): model the measure loop on `run_iter_bw`/`run_iter_lat` (inline poll on the
-measuring thread), the phase barriers on `catch_alarm`, and the setup sync on
-`ctx_hand_shake`. Make the inline same-thread (callback) path the canonical poll
-mode here; keep `use_future` + `cq_spinner` as a separate labeled variant.
+**Implemented (bench-layer only, no rdma-on-asio API change).** A single
+`rdma_bench::window_controller` (rdma_bench_common.hpp) drives the warmup ->
+timed-window lifecycle for all roles, by op-count (iters mode) or wall deadline
+(duration mode), with margin trimming the duration window from both ends. It is
+wired into every measure loop -- all six send/recv roles (poll callback-bw,
+poll use_future-bw, poll lat, event bw, event lat) and the read_write event/poll
+client roles -- with the warmup ramp excluded from the sample arrays by op
+SEQUENCE (so a BW pipeline's straddling in-flight ops still pair tposted[i] with
+tcompleted[i]). Phase barrier: setup stays the in-band `'R'` ready byte; the
+post-window barrier is a 1-byte end-of-stream sentinel for send/recv (the
+duration-mode server cannot know the op count) and client disconnect ->
+`async_wait_disconnect` for the (passive) read_write server. `--margin-sec` trims
+post-hoc in duration mode; `2*margin >= duration` is rejected; the duration-mode
+server watchdog is bumped past the window. All verified two-process across
+iters / warmup / duration. (`--qp` multi-QP stays DEFERRED -- it needs a connector
+interface change; `qps>1` returns not-implemented. See the matrix.)
+
+The original design, for reference: model the measure loop on
+`run_iter_bw`/`run_iter_lat` (inline poll on the measuring thread), the phase
+barriers on `catch_alarm`, and the setup sync on `ctx_hand_shake`.
 
 - **Warmup loop (new code -- `warmup_iterations` is currently dead):** post-and-
   complete warmup ops excluded from the sample array and byte counters; assert
@@ -559,17 +612,28 @@ mode here; keep `use_future` + `cq_spinner` as a separate labeled variant.
   (`START_STATE/SAMPLE_STATE/STOP_SAMPLE_STATE/END_STATE`).
 - **`--margin-sec` (symmetric):** trims the ramp from both ends in duration mode
   (window = duration - 2*margin), mirroring perftest `--margin`.
-- **Redefine `--qps` to perftest `--qp` semantics:** one process, N QPs over one
-  connection setup; each QP runs the **full** iteration count (no split -- total work
-  is `iters * N`); the client measures the aggregate. This differs from
-  `rdma_shared_cq_stress`'s N-independent-listeners model (which stays a stress test).
+- **`--qps` -> perftest `--qp` semantics -- DEFERRED (needs a connector interface change):**
+  perftest `--qp` is one process, N QPs over **one** connection setup; each QP runs the
+  **full** iteration count (no split -- total work is `iters * N`); the client measures the
+  aggregate. RDMA-on-Asio's connector is **one cm_id == one QP** (`async_connect(qp, ...)`
+  creates the single QP on the cm_id), so N-QP-over-one-connection requires a connector
+  interface change -- out of scope this iteration. `asio_perftest` returns a `not_implemented`
+  skip for `qps > 1`. (N *independent* connections is a different model --
+  `rdma_shared_cq_stress`'s N-independent-listeners -- and stays a stress test, not this
+  parity knob.)
 - **`compare_results` surfaces the active parity clamps:** add a `constraints` column
   (e.g. `cq-mod=1,inline=0,no-postlist,unidir`) from run metadata so a clamped
   comparison is self-evident in the table, not buried in JSON.
 
-### Stage 10 -- Measurement-fidelity parity (Class D)
+### Stage 10 -- Measurement-fidelity parity (Class D) -- DONE
 
-Make the numbers methodologically identical to perftest's:
+Implemented: cycle-counter latency stats (`t_min/t_max/t_typical(median)/t_avg/
+t_stdev/99%/99.9%` via `fill_latency_cycles`), cycle-counter BW average + peak
+(`finish_bw_cycles`; the O(n^2) peak scan is capped so duration-mode's unbounded n
+stays bounded -- above the cap peak == average), a latency **histogram**
+(fixed log-ish us buckets in the result JSON), and both CPU metrics
+(`cpu_util_percent` + `cpu_cycles_per_op`, the latter from process CPU time x the
+measured `cpu_mhz`). The original goal, for reference:
 
 - **Latency:** full stats (`t_min/t_max/t_typical(median)/t_avg/t_stdev/p99/
   p99.9`) from a per-iteration delta array, using cycle-counter timestamps
@@ -593,11 +657,16 @@ Make the numbers methodologically identical to perftest's:
 
 Keep the client-measures-BW and half-RTT conventions.
 
-### Stage 11 -- Library capability features (Class B)
+### Stage 11 -- Library capability features (Class B) -- DEFERRED (out of scope this iteration)
 
-Implement each prerequisite, add its `asio_perftest` flag, then drop the matching
-perftest clamp and re-diff the affected cases. **Sequence by implementation risk,
-not comparison value** (the data-plane code makes the risk gradient clear):
+**Not built this iteration.** Each item below needs an rdma-on-asio interface/impl change,
+which this iteration excludes (see "This iteration's scope"). `asio_perftest` accepts the
+flags for command-line parity but returns a `not_implemented` skip for any non-default
+`inline_size` / `cq-mod` / `signaled-every` / `post-list` / `recv-post-list`
+(`rdma_bench::not_implemented_reason`, gated in `cli_main`). The designs below are kept as the
+reference for a future capability iteration: implement each prerequisite, add its flag, drop
+the matching perftest clamp, and re-diff the affected cases. **Sequence by implementation
+risk, not comparison value** (the data-plane code makes the risk gradient clear):
 
 1. **`--inline_size` (lowest risk).** Config plumbing already exists
    (`rdma_config_t::max_inline_data_`) but is hard-coded to 0 at QP creation
@@ -620,10 +689,13 @@ not comparison value** (the data-plane code makes the risk gradient clear):
 
 Then `-b` bidirectional and `*_with_imm` (independent of the above ordering).
 
-### Stage 12 -- Breadth and explicit non-goals (Class C)
+### Stage 12 -- Breadth and explicit non-goals (Class C) -- non-goals this iteration
 
-Pursue UC/UD and atomics (`ib_atomic_*`) only if the public API grows them;
-otherwise record the Class C list as non-goals so scope stays honest.
+UC/UD and atomics (`ib_atomic_*`) need new QP types / opcodes / public API and stay
+**non-goals this iteration** -- the public API is RC send/recv/read/write only (no UD address
+handle, no atomic ops, hard-coded `IBV_QPT_RC`). The CLI surfaces them as not-implemented:
+`--connection` rejects non-RC at parse, and UD/atomics have no operation or entrypoint to
+invoke. Pursue them only if a future iteration grows the public API.
 
 ### Stage 13 -- Align native ND baseline to perftest
 
@@ -683,13 +755,20 @@ missing to run it:
    (`perftest_<case>.json`), then collects all through `compare_results`.
 4. **No executed IBV-vs-perftest numbers exist yet.**
 
-Phases: **0** (zero new code) `apt install perftest`, manually drive cases 1/3/5
-through `perftest_commands -> perftest -> parse_perftest -> compare_results`,
-record first numbers; **1** `perftest_resolve` + skip + version; **2** driver for
-all 6 cases (incl. latency, event); **3** managed submodule + `ExternalProject`;
-**4** publish an "IBV vs perftest (RoCE)" results section, using case 5 to localize
-the read ceiling (baseline at line rate -> library/config; baseline also capped ->
-loopback limit); **5 (later)** two-host topology + CI matrix.
+Phases: **0** (zero new code, done for bandwidth) `apt install perftest`, manually
+drive cases through `perftest_commands -> perftest -> parse_perftest ->
+compare_results`; **1 (done)** `perftest_resolve` + skip + version, implemented as
+logic inside the shell driver (`tools/run_comparison.sh`), not a new binary;
+**2 (done)** the driver runs all cases single-host two-process (incl. latency,
+event) over the `scenarios/comparison/*.json` matrix, with the known gaps handled
+inline (perftest write has no `--events` -> skip that side; poll read/write lib
+bench forced to `use_future`); **3 (skipped)** managed submodule + `ExternalProject`
+-- intentionally not done, use system perftest in PATH or `--perftest-bin-dir`;
+**4 (done)** publish an "IBV vs perftest (RoCE)" results section -- README's Linux
+table now carries the full bw+lat matrix (send/recv, write, read x event/poll) from
+`run_comparison.sh` over `scenarios/comparison/*.json`, on the Stage 9b/10 measure
+window with the cq-mod-1/inline-0/qp-1 parity clamp surfaced; **5** moved to
+**Stage 14** (two-host topology + CI matrix), deferred to last.
 
 **Remaining gaps across the suite:** full two-process orchestration with
 server-ready log parsing; deeper perftest parser coverage across versions; CPU
@@ -702,9 +781,10 @@ NIC driver/firmware/MTU/link-speed capture.
   default CTest; benchmark tools run as explicit client/server programs.
 - Scenario files drive RDMA-on-Asio, perftest, and native-ND runs without source
   changes; measurement semantics are defined per operation before comparing.
-- Scenario knobs are validated against real library capability (selective
-  signaling, inline, WR batching are implemented, skipped, or matched by
-  constraining perftest -- never compared with mismatched per-message work).
+- Scenario knobs are validated against real library capability: this iteration,
+  inline / selective-signaling / WR-batching are **skipped via a `not_implemented`
+  gate** (not matched by constraining perftest), so a comparison never reports a
+  number for per-message work the library does not actually perform.
 - Token type is recorded; poll mode uses a non-io_context token; CPU-efficiency
   metrics are captured so abstraction cost is assessable at line rate.
 - The Stage 4 stress test asserts the shared-CQ poller contract (single lazy
@@ -716,5 +796,28 @@ NIC driver/firmware/MTU/link-speed capture.
   external, unlinked, non-vendored baseline.
 - ND has a clear native direct-ND comparison path; the plan keeps RDMA-on-Asio ND
   results distinct from native ND baseline results.
-- Single-host results are labeled development/regression signals; multi-host
-  results carry topology/host/NIC/command-line metadata.
+- Single-host results (same-process and two-process) are labeled
+  development/regression signals and are the validated comparison path; real
+  two-box (multi-host) results carry topology/host/NIC/command-line metadata and
+  are deferred to Stage 14.
+
+## Stage 14 -- Two-host (multi-box) validation (deferred to last)
+
+Principle: every case (send/recv, read, write x {bw, lat} x {event, poll}) is
+validated single-host two-process now via `tools/run_comparison.sh` over the
+`scenarios/comparison/*.json` matrix (Stage 8 Phases 1-2). Real two-box runs are
+the final stage and gate nothing before them.
+
+Collected here from earlier stages:
+- Stage 8 Phase 5: `two_host_direct` / `two_host_switch` topology runs and the CI
+  matrix that exercises them.
+- The scenario files that declare `topology: two_host_direct` (`baseline.json`,
+  `sweep.json`) are Stage 14 inputs; their single-host two-process counterparts
+  under `scenarios/comparison/` are the Stage 8 inputs.
+- The multi-host acceptance line (topology/host/NIC/command-line metadata on real
+  two-box results).
+
+Scope when undertaken: parameterize `run_comparison.sh` with distinct
+`--local-addr` (server box) and `--peer-addr` (client box) across two hosts, add a
+host-pairing/launch mechanism (ssh or CI runners), and wire a CI matrix. No
+library changes -- driver and scenario reuse only.
