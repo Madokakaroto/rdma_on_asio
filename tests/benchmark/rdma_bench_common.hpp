@@ -343,6 +343,13 @@ struct result {
   std::uint64_t queue_depth = 0;
   std::uint64_t qps = 1;
   std::uint64_t threads = 1;
+  // perftest parity knobs in effect for this run. This iteration they are clamped
+  // to the supported defaults (non-default values are rejected by the
+  // not_implemented gate); recorded so a comparison row is self-describing.
+  std::uint32_t cq_mod = 1;
+  std::uint32_t inline_size = 0;
+  std::uint32_t post_list = 1;
+  std::uint32_t recv_post_list = 1;
   std::uint64_t iterations = 0;
   double duration_sec = 0.0;
   std::uint64_t warmup_iterations = 0;
@@ -361,6 +368,9 @@ struct result {
   std::optional<double> latency_p999_us;      // 99.9 percentile (perftest)
   std::optional<double> latency_stdev_us;     // perftest t_stdev
   std::optional<double> latency_max_us;
+  // Latency distribution: fixed log-ish us buckets (le = inclusive upper edge,
+  // last bucket = overflow with le = +inf). Filled by fill_latency_cycles.
+  std::vector<std::pair<double, std::uint64_t>> latency_histogram;
   std::string latency_sample_method = "null";
   std::uint64_t clock_overhead_ns = 0;
   std::optional<double> cpu_cycles_per_op;
@@ -401,6 +411,7 @@ inline std::string platform_name() {
 
 struct cpu_snapshot {
   double process_cpu_sec = 0.0;
+  std::uint64_t ctx_switches = 0;  // voluntary + involuntary (Linux); 0 on Windows
 };
 
 #if defined(_WIN32)
@@ -429,6 +440,8 @@ inline cpu_snapshot take_cpu_snapshot() {
         static_cast<double>(usage.ru_utime.tv_usec) / 1000000.0 +
         static_cast<double>(usage.ru_stime.tv_sec) +
         static_cast<double>(usage.ru_stime.tv_usec) / 1000000.0;
+    out.ctx_switches = static_cast<std::uint64_t>(usage.ru_nvcsw) +
+                       static_cast<std::uint64_t>(usage.ru_nivcsw);
   }
 #endif
   return out;
@@ -452,11 +465,171 @@ inline void fill_cpu_metrics(result& r, cpu_snapshot begin,
   if (cpu_delta < 0.0) return;
   r.cpu_util_percent = (cpu_delta / r.duration_sec) * 100.0 /
                        static_cast<double>(cpu_count());
-  if (r.completed_count != 0) {
-    // This is seconds/op, not cycles/op. Keep cycles null until an RDTSC or
-    // platform counter calibration is added.
-    r.cpu_cycles_per_op = std::nullopt;
+#if !defined(_WIN32)
+  // Context switches over the measured window (getrusage voluntary +
+  // involuntary) -- a scheduling-pressure signal alongside cpu_util.
+  if (end.ctx_switches >= begin.ctx_switches) {
+    r.context_switches = end.ctx_switches - begin.ctx_switches;
   }
+#endif
+  if (r.completed_count != 0) {
+    // Abstraction-cost metric (no perftest counterpart): process CPU time
+    // (user+sys) converted to cycles via the measured cpu_mhz, per completed op.
+    // cpu_mhz() is the same calibrated value the cycle-counter BW/latency paths
+    // use, so cycles/op is consistent with those numbers.
+    r.cpu_cycles_per_op =
+        cpu_delta * cpu_mhz() * 1.0e6 / static_cast<double>(r.completed_count);
+  }
+}
+
+// ---- Stage 9b: warmup / duration / margin window engine --------------------
+// One instance per measured stream (per client/server role). Drives the
+// warmup -> timed-window lifecycle by op SEQUENCE (the first `warmup_iterations`
+// ops, in post/completion order, are excluded) and stops by op-count (iters
+// mode, duration_sec==0) or wall deadline (duration mode). Sample recording is
+// keyed on sequence > warmup so a BW pipeline's in-flight ops that straddle the
+// warmup->window boundary still pair tposted[i] with tcompleted[i] (RC is FIFO,
+// so the k-th post and the k-th completion are the same op). Margin trimming is
+// post-hoc over the recorded arrays and applies only in duration mode.
+class window_controller {
+ public:
+  using clock_type = std::chrono::steady_clock;
+  window_controller(options const& opt, std::size_t reserve_hint)
+      : warmup_(opt.warmup_iterations),
+        iters_(opt.iterations),
+        duration_sec_(opt.duration_sec),
+        margin_sec_(opt.margin_sec) {
+    if (reserve_hint) {
+      tposted_.reserve(reserve_hint);
+      tcompleted_.reserve(reserve_hint);
+      deltas_.reserve(reserve_hint);
+    }
+  }
+
+  bool duration_mode() const { return duration_sec_ > 0.0; }
+
+  // Record an issued op (post order). Warmup posts (seq <= warmup) excluded.
+  void note_post() {
+    ++posted_seq_;
+    maybe_open();
+    if (posted_seq_ > warmup_) tposted_.push_back(get_cycles());
+  }
+  // Record a BW completion (completion order). Warmup completions excluded.
+  void note_complete_bw() {
+    ++completed_seq_;
+    maybe_open();
+    if (completed_seq_ > warmup_) {
+      tcompleted_.push_back(get_cycles());
+      ++in_window_;
+    }
+  }
+  // Record a latency sample (one-outstanding ping-pong). Warmup excluded.
+  void note_complete_lat(cycles_t delta) {
+    ++completed_seq_;
+    maybe_open();
+    if (completed_seq_ > warmup_) {
+      deltas_.push_back(delta);
+      ++in_window_;
+    }
+  }
+
+  // True exactly once, at the warmup->window transition: the caller snapshots
+  // CPU and sends the 'W' barrier byte here.
+  bool take_opened() {
+    if (!opened_pending_) return false;
+    opened_pending_ = false;
+    return true;
+  }
+  bool opened() const { return opened_; }
+
+  // Stop the timed window? iters: in-window completions reached the target.
+  // duration: wall clock past the deadline.
+  bool window_done() const {
+    if (!opened_) return false;
+    if (duration_mode()) return clock_type::now() >= win_deadline_;
+    return in_window_ >= iters_;
+  }
+  // Keep posting (for in-loop reposts; priming up to queue depth is the caller's
+  // job)? iters: up to warmup+iters total posts. duration: until the deadline.
+  bool should_post() const {
+    if (duration_mode()) return !opened_ || clock_type::now() < win_deadline_;
+    return posted_seq_ < warmup_ + iters_;
+  }
+
+  std::uint64_t in_window_count() const { return in_window_; }
+  std::uint64_t warmup_done_count() const {
+    return completed_seq_ < warmup_ ? completed_seq_ : warmup_;
+  }
+  clock_type::time_point window_begin_wall() const { return win_begin_wall_; }
+
+  // Margin-trimmed views for finish_*. Margin applied ONLY in duration mode.
+  void bw_arrays(std::vector<cycles_t>& tp, std::vector<cycles_t>& tc) const;
+  std::vector<cycles_t> lat_deltas() const;
+
+ private:
+  void maybe_open() {
+    if (opened_ || completed_seq_ < warmup_) return;
+    opened_ = true;
+    opened_pending_ = true;
+    win_begin_cyc_ = get_cycles();
+    win_begin_wall_ = clock_type::now();
+    win_deadline_ = win_begin_wall_ +
+        std::chrono::duration_cast<clock_type::duration>(
+            std::chrono::duration<double>(duration_sec_));
+  }
+
+  std::uint32_t warmup_;
+  std::uint64_t iters_;
+  double duration_sec_;
+  double margin_sec_;
+  std::uint64_t posted_seq_ = 0;
+  std::uint64_t completed_seq_ = 0;
+  std::uint64_t in_window_ = 0;
+  bool opened_ = false;
+  bool opened_pending_ = false;
+  cycles_t win_begin_cyc_ = 0;
+  clock_type::time_point win_begin_wall_{};
+  clock_type::time_point win_deadline_{};
+  std::vector<cycles_t> tposted_;
+  std::vector<cycles_t> tcompleted_;
+  std::vector<cycles_t> deltas_;
+};
+
+inline void window_controller::bw_arrays(std::vector<cycles_t>& tp,
+                                         std::vector<cycles_t>& tc) const {
+  std::size_t const n = std::min(tposted_.size(), tcompleted_.size());
+  if (n == 0 || margin_sec_ <= 0.0 || !duration_mode()) {
+    tp.assign(tposted_.begin(), tposted_.begin() + n);
+    tc.assign(tcompleted_.begin(), tcompleted_.begin() + n);
+    return;
+  }
+  cycles_t const margin_cyc = static_cast<cycles_t>(margin_sec_ * cpu_mhz() * 1e6);
+  cycles_t const lo = win_begin_cyc_ + margin_cyc;
+  cycles_t const hi = tcompleted_[n - 1] - margin_cyc;
+  std::size_t a = 0, b = n;
+  while (a < n && tposted_[a] < lo) ++a;
+  while (b > a && tcompleted_[b - 1] > hi) --b;
+  tp.assign(tposted_.begin() + a, tposted_.begin() + b);
+  tc.assign(tcompleted_.begin() + a, tcompleted_.begin() + b);
+}
+
+inline std::vector<cycles_t> window_controller::lat_deltas() const {
+  if (deltas_.empty() || margin_sec_ <= 0.0 || !duration_mode()) return deltas_;
+  cycles_t const margin_cyc = static_cast<cycles_t>(margin_sec_ * cpu_mhz() * 1e6);
+  std::size_t a = 0, b = deltas_.size();
+  cycles_t acc = 0;
+  while (a < b && acc < margin_cyc) { acc += deltas_[a]; ++a; }
+  acc = 0;
+  while (b > a && acc < margin_cyc) { acc += deltas_[b - 1]; --b; }
+  return std::vector<cycles_t>(deltas_.begin() + a, deltas_.begin() + b);
+}
+
+// Single place that writes the in-window completion count + actual warmup count
+// from a controller, so all roles report consistently. completed_count excludes
+// warmup; the plan's invariant (measured == completed_count) holds by construction.
+inline void finalize_counts(result& r, window_controller const& win) {
+  r.completed_count = win.in_window_count();
+  r.warmup_iterations = win.warmup_done_count();
 }
 
 inline std::string collect_environment_json() {
@@ -511,6 +684,10 @@ inline result make_base_result(options const& opt, std::string command_line) {
   r.queue_depth = opt.queue_depth;
   r.qps = opt.qps;
   r.threads = opt.threads;
+  r.cq_mod = opt.cq_mod;
+  r.inline_size = opt.inline_size;
+  r.post_list = opt.post_list;
+  r.recv_post_list = opt.recv_post_list;
   r.iterations = opt.iterations;
   r.duration_sec = opt.duration_sec;
   r.warmup_iterations = opt.warmup_iterations;
@@ -542,6 +719,36 @@ inline result make_skip_result(options const& opt, std::string command_line,
   r.skip_reason = std::move(reason);
   r.missing_capability = std::move(missing_capability);
   return r;
+}
+
+// Perftest knobs that need rdma-on-asio interface/impl work that is deliberately
+// out of scope this iteration (see plan Stage 11/12). asio_perftest accepts the
+// flags for command-line parity with perftest, but cannot honor a non-default
+// value through the current public API, so it returns a not-implemented skip
+// rather than silently producing a number that does not reflect the requested
+// per-message work. Returns the first offending reason, or empty if all knobs are
+// at their supported defaults. (--connection non-RC is rejected earlier at parse.)
+inline std::string not_implemented_reason(options const& opt) {
+  if (opt.inline_size > 0) {
+    return "inline_size requires QP max_inline_data + IBV_SEND_INLINE, not "
+           "implemented this iteration";
+  }
+  if (opt.cq_mod > 1 || opt.signaled_every > 1) {
+    return "cq-mod / signaled-every selective signaling not implemented "
+           "(RDMA-on-Asio signals every WR)";
+  }
+  if (opt.post_list > 1) {
+    return "post_list WR batching not implemented (one WR per post)";
+  }
+  if (opt.recv_post_list > 1) {
+    return "recv_post_list WR batching not implemented (one WR per post)";
+  }
+  if (opt.qps > 1) {
+    return "multi-QP (--qp / --qps > 1) needs N QPs over one connection, which "
+           "the connector API does not support (one cm_id == one QP); not "
+           "implemented this iteration";
+  }
+  return {};
 }
 
 inline double percentile(std::vector<double> samples, double p) {
@@ -604,6 +811,23 @@ inline void fill_latency_cycles(result& r, std::vector<cycles_t> deltas,
   r.latency_p90_us = us(idx(0.90));
   r.latency_p99_us = us(idx(0.99));
   r.latency_p999_us = us(idx(0.999));
+  // Latency distribution over the measured samples [0, m): fixed log-ish us
+  // buckets. Each entry is (le_us, count) with le the inclusive upper edge; the
+  // final entry uses le = -1 to denote the overflow bucket (> last edge).
+  static constexpr double kEdges[] = {0.5, 1,   2,   4,    8,    16,  32,
+                                      64,  128, 256, 512,  1024, 4096};
+  constexpr std::size_t kN = sizeof(kEdges) / sizeof(kEdges[0]);
+  std::vector<std::uint64_t> counts(kN + 1, 0);
+  for (std::size_t i = 0; i < m; ++i) {
+    double const v = us(i);
+    std::size_t b = 0;
+    while (b < kN && v > kEdges[b]) ++b;
+    ++counts[b];
+  }
+  r.latency_histogram.clear();
+  for (std::size_t b = 0; b < kN; ++b)
+    r.latency_histogram.emplace_back(kEdges[b], counts[b]);
+  r.latency_histogram.emplace_back(-1.0, counts[kN]);  // overflow (> last edge)
   r.latency_sample_method = "cycle_counter";
 }
 
@@ -629,7 +853,12 @@ inline void finish_bw_cycles(result& r, std::vector<cycles_t> const& tposted,
   r.throughput_mib_s = total_bytes / (seconds * 1048576.0);
   r.message_rate_s = static_cast<double>(n) / seconds;
 
-  if (no_peak) {
+  // The peak scan below is O(n^2). iters-mode n is bounded by --iters, but
+  // duration mode has no a-priori bound (it runs for the whole window), so cap
+  // the scan: above the cap report peak == average (the duration-mode
+  // convention -- a long window has no meaningful instantaneous peak anyway).
+  constexpr std::size_t kPeakScanMax = 20000;
+  if (no_peak || n > kPeakScanMax) {
     r.bw_peak_gbit_s = r.throughput_gbit_s;
     return;
   }
@@ -685,6 +914,10 @@ inline std::string to_json(result const& r) {
   os << "  \"queue_depth\": " << r.queue_depth << ",\n";
   os << "  \"qps\": " << r.qps << ",\n";
   os << "  \"threads\": " << r.threads << ",\n";
+  os << "  \"cq_mod\": " << r.cq_mod << ",\n";
+  os << "  \"inline_size\": " << r.inline_size << ",\n";
+  os << "  \"post_list\": " << r.post_list << ",\n";
+  os << "  \"recv_post_list\": " << r.recv_post_list << ",\n";
   os << "  \"iterations\": " << r.iterations << ",\n";
   os << "  \"duration_sec\": " << std::fixed << std::setprecision(6)
      << r.duration_sec << ",\n";
@@ -708,6 +941,14 @@ inline std::string to_json(result const& r) {
   os << "  \"latency_p999_us\": " << opt_double(r.latency_p999_us) << ",\n";
   os << "  \"latency_stdev_us\": " << opt_double(r.latency_stdev_us) << ",\n";
   os << "  \"latency_max_us\": " << opt_double(r.latency_max_us) << ",\n";
+  os << "  \"latency_histogram\": [";
+  for (std::size_t i = 0; i < r.latency_histogram.size(); ++i) {
+    if (i) os << ", ";
+    os << "{\"le_us\": " << std::fixed << std::setprecision(1)
+       << r.latency_histogram[i].first
+       << ", \"count\": " << r.latency_histogram[i].second << "}";
+  }
+  os << "],\n";
   os << "  \"latency_sample_method\": "
      << text_or_null(r.latency_sample_method == "null" ? "" :
                                                      r.latency_sample_method)

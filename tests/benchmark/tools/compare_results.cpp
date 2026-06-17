@@ -16,6 +16,10 @@ struct row {
   std::string mode;
   std::uint64_t message_size = 0;
   std::uint64_t queue_depth = 0;
+  std::uint64_t qps = 1;
+  std::uint64_t cq_mod = 1;
+  std::uint64_t inline_size = 0;
+  std::uint64_t post_list = 1;
   std::optional<double> gbit_s;
   std::optional<double> latency_p50_us;
   std::optional<double> latency_p99_us;
@@ -47,6 +51,10 @@ row load_row(std::filesystem::path const& path) {
   r.message_size =
       rdma_bench::json_u64_value(json, "message_size_bytes").value_or(0);
   r.queue_depth = rdma_bench::json_u64_value(json, "queue_depth").value_or(0);
+  r.qps = rdma_bench::json_u64_value(json, "qps").value_or(1);
+  r.cq_mod = rdma_bench::json_u64_value(json, "cq_mod").value_or(1);
+  r.inline_size = rdma_bench::json_u64_value(json, "inline_size").value_or(0);
+  r.post_list = rdma_bench::json_u64_value(json, "post_list").value_or(1);
   r.gbit_s = rdma_bench::json_double_value(json, "throughput_gbit_s");
   r.latency_p50_us = rdma_bench::json_double_value(json, "latency_p50_us");
   r.latency_p99_us = rdma_bench::json_double_value(json, "latency_p99_us");
@@ -68,10 +76,14 @@ int main(int argc, char* argv[]) {
     }
 
     std::cout << "| file | baseline | backend | topology | operation | metric | "
-                 "mode | size | qd | Gbit/s | p50 us | p99 us | note |\n";
-    std::cout << "|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---|\n";
+                 "mode | size | qd | Gbit/s | p50 us | p99 us | constraints | "
+                 "note |\n";
+    std::cout << "|---|---|---|---|---|---|---|---:|---:|---:|---:|---:|---|---|\n";
     for (auto const& r : rows) {
       std::string note = !r.first_error.empty() ? r.first_error : r.skip_reason;
+      std::ostringstream constraints;
+      constraints << "qp=" << r.qps << ",cq-mod=" << r.cq_mod
+                  << ",inline=" << r.inline_size << ",post-list=" << r.post_list;
       std::cout << "| " << rdma_bench::json_escape(r.file)
                 << " | " << r.baseline
                 << " | " << r.backend
@@ -84,6 +96,7 @@ int main(int argc, char* argv[]) {
                 << " | " << fmt(r.gbit_s)
                 << " | " << fmt(r.latency_p50_us)
                 << " | " << fmt(r.latency_p99_us)
+                << " | " << constraints.str()
                 << " | " << rdma_bench::json_escape(note) << " |\n";
     }
     return 0;

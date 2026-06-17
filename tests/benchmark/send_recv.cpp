@@ -38,6 +38,7 @@ public:
         listener_(io),
         conn_(io),
         qp_(io),
+        win_(opt_, static_cast<std::size_t>(opt_.iterations)),
         on_done_(std::move(on_done)) {
     result_.scenario_name = "send_recv_server";
   }
@@ -70,8 +71,12 @@ private:
   void on_accept(asio::error_code ec) {
     if (ec) return fail(ec.message());
     setup_buffers();
-    auto initial = std::min<std::uint64_t>(opt_.queue_depth, opt_.iterations);
-    for (std::uint64_t i = 0; i < initial; ++i) {
+    auto const prime =
+        win_.duration_mode()
+            ? static_cast<std::uint64_t>(opt_.queue_depth)
+            : std::min<std::uint64_t>(
+                  opt_.queue_depth, opt_.warmup_iterations + opt_.iterations);
+    for (std::uint64_t i = 0; i < prime; ++i) {
       post_recv(static_cast<std::size_t>(i));
     }
     send_ready();
@@ -109,16 +114,17 @@ private:
   void on_recv(std::size_t slot, asio::error_code ec, std::size_t n) {
     if (done_) return;
     if (ec) return fail(ec.message());
-    if (n != opt_.message_size) return fail("short receive");
-    if (completed_ == 0) begin_ = clock_type::now();
-    ++completed_;
-    result_.completed_count = completed_;
-
-    if (posted_ < opt_.iterations) {
-      post_recv(slot);
-      return;
+    if (n != opt_.message_size) {
+      if (win_.duration_mode()) return finish_success();  // 1-byte sentinel
+      return fail("short receive");
     }
-    if (completed_ == opt_.iterations) {
+    win_.note_complete_bw();
+    ++completed_;
+    std::uint64_t const total = opt_.warmup_iterations + opt_.iterations;
+    if (win_.duration_mode() || posted_ < total) {
+      post_recv(slot);
+    }
+    if (!win_.duration_mode() && completed_ >= total) {
       finish_success();
     }
   }
@@ -126,7 +132,8 @@ private:
   void finish_success() {
     if (done_) return;
     done_ = true;
-    finish_throughput(result_, begin_, clock_type::now());
+    rdma_bench::finalize_counts(result_, win_);
+    finish_throughput(result_, win_.window_begin_wall(), clock_type::now());
     result_.validation_passed = true;
     asio::error_code ignored;
     conn_.disconnect(ignored);
@@ -151,11 +158,11 @@ private:
   rdma::rdma_listener<tcp> listener_;
   rdma::rdma_connector<tcp> conn_;
   rdma::rdma_queue_pair qp_;
+  rdma_bench::window_controller win_;
   std::vector<char> storage_;
   std::unique_ptr<rdma::rdma_memory_region> mr_;
   std::uint64_t posted_ = 0;
   std::uint64_t completed_ = 0;
-  clock_type::time_point begin_ = clock_type::now();
   bool done_ = false;
   done_handler on_done_;
 };
@@ -173,6 +180,7 @@ public:
         result_(make_base_result(opt_, std::move(command_line))),
         conn_(io),
         qp_(io),
+        win_(opt_, static_cast<std::size_t>(opt_.iterations)),
         on_done_(std::move(on_done)) {
     result_.scenario_name = "send_recv_client";
   }
@@ -220,19 +228,20 @@ private:
     if (ec) return fail(ec.message());
     if (n != 1 || storage_[0] != 'R') return fail("missing server ready byte");
     cpu_begin_ = rdma_bench::take_cpu_snapshot();
-    begin_ = clock_type::now();
-    tposted_.reserve(static_cast<std::size_t>(opt_.iterations));
-    tcompleted_.reserve(static_cast<std::size_t>(opt_.iterations));
-    auto initial = std::min<std::uint64_t>(opt_.queue_depth, opt_.iterations);
-    for (std::uint64_t i = 0; i < initial; ++i) {
+    auto const prime =
+        win_.duration_mode()
+            ? static_cast<std::uint64_t>(opt_.queue_depth)
+            : std::min<std::uint64_t>(
+                  opt_.queue_depth, opt_.warmup_iterations + opt_.iterations);
+    for (std::uint64_t i = 0; i < prime; ++i) {
       post_send(static_cast<std::size_t>(i));
     }
   }
 
   void post_send(std::size_t slot) {
+    win_.note_post();
     ++posted_;
     result_.posted_count = posted_;
-    tposted_.push_back(rdma_bench::get_cycles());
     qp_.async_send(
         mr_->cslice(offset_for_slot(slot), opt_.message_size),
         [self = shared_from_this(), slot](asio::error_code ec, std::size_t n) {
@@ -244,24 +253,41 @@ private:
     if (done_) return;
     if (ec) return fail(ec.message());
     if (n != opt_.message_size) return fail("short send");
-    tcompleted_.push_back(rdma_bench::get_cycles());
+    win_.note_complete_bw();
+    if (win_.take_opened()) cpu_begin_ = rdma_bench::take_cpu_snapshot();
     ++completed_;
-    result_.completed_count = completed_;
-
-    if (posted_ < opt_.iterations) {
+    if (win_.should_post()) {
       post_send(slot);
       return;
     }
-    if (completed_ == opt_.iterations) {
-      finish_success();
+    // Window done: once all in-flight ops drain, finish. Duration mode first
+    // sends a 1-byte end-of-stream sentinel so the server stops.
+    if (completed_ >= posted_) {
+      if (win_.duration_mode()) {
+        send_sentinel();
+      } else {
+        finish_success();
+      }
     }
+  }
+
+  void send_sentinel() {
+    if (done_) return;
+    storage_[0] = 'E';
+    qp_.async_send(mr_->cslice(std::size_t{0}, std::size_t{1}),
+                   [self = shared_from_this()](asio::error_code, std::size_t) {
+                     self->finish_success();
+                   });
   }
 
   void finish_success() {
     if (done_) return;
     done_ = true;
-    rdma_bench::finish_bw_cycles(result_, tposted_, tcompleted_, opt_.post_list,
-                                 opt_.cq_mod, opt_.no_peak);
+    std::vector<rdma_bench::cycles_t> tp, tc;
+    win_.bw_arrays(tp, tc);
+    rdma_bench::finalize_counts(result_, win_);
+    rdma_bench::finish_bw_cycles(result_, tp, tc, opt_.post_list, opt_.cq_mod,
+                                 opt_.no_peak);
     rdma_bench::fill_cpu_metrics(result_, cpu_begin_,
                                  rdma_bench::take_cpu_snapshot());
     result_.validation_passed = true;
@@ -287,13 +313,11 @@ private:
   rdma_bench::result result_;
   rdma::rdma_connector<tcp> conn_;
   rdma::rdma_queue_pair qp_;
+  rdma_bench::window_controller win_;
   std::vector<char> storage_;
   std::unique_ptr<rdma::rdma_memory_region> mr_;
   std::uint64_t posted_ = 0;
   std::uint64_t completed_ = 0;
-  std::vector<rdma_bench::cycles_t> tposted_;
-  std::vector<rdma_bench::cycles_t> tcompleted_;
-  clock_type::time_point begin_ = clock_type::now();
   rdma_bench::cpu_snapshot cpu_begin_{};
   bool done_ = false;
   done_handler on_done_;
@@ -373,8 +397,19 @@ private:
   void on_recv(std::size_t slot, asio::error_code ec, std::size_t n) {
     if (done_) return;
     if (ec) return fail(ec.message());
-    if (n != opt_.message_size) return fail("short receive");
-    if (result_.completed_count + 1 < opt_.iterations) {
+    std::uint64_t const total = opt_.warmup_iterations + opt_.iterations;
+    bool const duration = opt_.duration_sec > 0.0;
+    if (n != opt_.message_size) {
+      // Duration mode: the client's 1-byte sentinel ends the stream (the server
+      // cannot know the round-trip count).
+      if (duration) {
+        result_.validation_passed = true;
+        return finish_success();
+      }
+      return fail("short receive");
+    }
+    bool const more = duration || (result_.completed_count + 1 < total);
+    if (more) {
       post_recv(1 - slot);
     }
     qp_.async_send(mr_->cslice(slot_offset(slot), opt_.message_size),
@@ -389,7 +424,8 @@ private:
     if (ec) return fail(ec.message());
     if (n != opt_.message_size) return fail("short send");
     ++result_.completed_count;
-    if (result_.completed_count == opt_.iterations) {
+    std::uint64_t const total = opt_.warmup_iterations + opt_.iterations;
+    if (opt_.duration_sec <= 0.0 && result_.completed_count == total) {
       result_.validation_passed = true;
       conn_.async_wait_disconnect(
           [self = shared_from_this()](asio::error_code) {
@@ -445,6 +481,7 @@ public:
         result_(make_base_result(opt_, std::move(command_line))),
         conn_(io),
         qp_(io),
+        win_(opt_, static_cast<std::size_t>(opt_.iterations)),
         on_done_(std::move(on_done)) {
     result_.scenario_name = "send_recv_latency_client";
   }
@@ -473,7 +510,6 @@ private:
     }
     mr_ = std::make_unique<rdma::rdma_memory_region>(
         device_, storage_.data(), storage_.size());
-    deltas_.reserve(static_cast<std::size_t>(opt_.iterations));
     qp_.async_recv(mr_->slice(std::size_t{0}, std::size_t{1}),
                    [self = shared_from_this()](asio::error_code ec,
                                                 std::size_t n) {
@@ -485,7 +521,6 @@ private:
     if (ec) return fail(ec.message());
     if (n != 1 || storage_[0] != 'R') return fail("missing server ready byte");
     cpu_begin_ = rdma_bench::take_cpu_snapshot();
-    begin_ = clock_type::now();
     start_iteration();
   }
 
@@ -515,22 +550,37 @@ private:
     auto sample_end_cyc = rdma_bench::get_cycles();
     if (ec) return fail(ec.message());
     if (n != opt_.message_size) return fail("short receive");
-    deltas_.push_back(sample_end_cyc - sample_begin_cyc_);
-    ++result_.completed_count;
-    if (result_.completed_count == opt_.iterations) {
-      finish_success();
+    win_.note_complete_lat(sample_end_cyc - sample_begin_cyc_);
+    if (win_.take_opened()) cpu_begin_ = rdma_bench::take_cpu_snapshot();
+    if (win_.opened() && win_.window_done()) {
+      // Duration mode first sends a 1-byte sentinel so the echo server stops.
+      if (win_.duration_mode()) {
+        send_sentinel();
+      } else {
+        finish_success();
+      }
       return;
     }
     start_iteration();
   }
 
+  void send_sentinel() {
+    if (done_) return;
+    storage_[0] = 'E';
+    qp_.async_send(mr_->cslice(std::size_t{0}, std::size_t{1}),
+                   [self = shared_from_this()](asio::error_code, std::size_t) {
+                     self->finish_success();
+                   });
+  }
+
   void finish_success() {
     if (done_) return;
     done_ = true;
-    finish_throughput(result_, begin_, clock_type::now());
+    rdma_bench::finalize_counts(result_, win_);
+    finish_throughput(result_, win_.window_begin_wall(), clock_type::now());
     rdma_bench::fill_cpu_metrics(result_, cpu_begin_,
                                  rdma_bench::take_cpu_snapshot());
-    rdma_bench::fill_latency_cycles(result_, std::move(deltas_), 2);
+    rdma_bench::fill_latency_cycles(result_, win_.lat_deltas(), 2);
     result_.validation_passed = true;
     asio::error_code ignored;
     conn_.disconnect(ignored);
@@ -554,10 +604,9 @@ private:
   rdma_bench::result result_;
   rdma::rdma_connector<tcp> conn_;
   rdma::rdma_queue_pair qp_;
+  rdma_bench::window_controller win_;
   std::vector<char> storage_;
   std::unique_ptr<rdma::rdma_memory_region> mr_;
-  std::vector<rdma_bench::cycles_t> deltas_;
-  clock_type::time_point begin_ = clock_type::now();
   rdma_bench::cycles_t sample_begin_cyc_ = 0;
   rdma_bench::cpu_snapshot cpu_begin_{};
   bool done_ = false;
@@ -737,28 +786,6 @@ rdma_bench::result failed_poll_result(rdma_bench::options const& opt,
   return r;
 }
 
-template <typename Predicate>
-bool poll_until(rdma::rdma_completion_queue& cq, Predicate done,
-                std::chrono::seconds timeout, std::string& error_message) {
-  auto const deadline = clock_type::now() + timeout;
-  while (!done()) {
-    asio::error_code ec;
-    auto const n = cq.poll(ec);
-    if (ec) {
-      error_message = ec.message();
-      return false;
-    }
-    if (n == 0) {
-      if (clock_type::now() >= deadline) {
-        error_message = "poll timeout";
-        return false;
-      }
-      std::this_thread::yield();
-    }
-  }
-  return true;
-}
-
 rdma_bench::result run_poll_callback_bandwidth_server_role(
     rdma_bench::options opt, std::string command_line,
     std::promise<void>* ready) {
@@ -827,7 +854,12 @@ rdma_bench::result run_poll_callback_bandwidth_server_role(
       }
     };
 
-    std::uint64_t posted = 0;
+    rdma_bench::window_controller win(
+        opt, static_cast<std::size_t>(opt.iterations));
+    std::uint64_t posted = 0, completed = 0;
+    std::uint64_t const total = opt.warmup_iterations + opt.iterations;
+    bool stop = false;  // duration: set when the client's end-of-stream arrives
+    auto cpu_begin = rdma_bench::take_cpu_snapshot();
     std::function<void(std::size_t)> post_recv;
     post_recv = [&](std::size_t slot) {
       ++posted;
@@ -837,15 +869,24 @@ rdma_bench::result run_poll_callback_bandwidth_server_role(
           [&, slot](asio::error_code ec, std::size_t n) {
             if (failed) return;
             if (ec) return fail(ec.message());
-            if (n != opt.message_size) return fail("short receive");
-            ++result.completed_count;
-            if (posted < opt.iterations) {
-              post_recv(slot);
+            if (n != opt.message_size) {
+              if (win.duration_mode()) {  // 1-byte end-of-stream sentinel
+                stop = true;
+                return;
+              }
+              return fail("short receive");
             }
+            win.note_complete_bw();
+            if (win.take_opened()) cpu_begin = rdma_bench::take_cpu_snapshot();
+            ++completed;
+            bool const more = win.duration_mode() ? !stop : (posted < total);
+            if (more) post_recv(slot);
           });
     };
 
-    for (std::uint64_t i = 0; i < slots; ++i) {
+    auto const prime =
+        win.duration_mode() ? slots : std::min<std::uint64_t>(slots, total);
+    for (std::uint64_t i = 0; i < prime; ++i) {
       post_recv(static_cast<std::size_t>(i));
     }
 
@@ -863,18 +904,19 @@ rdma_bench::result run_poll_callback_bandwidth_server_role(
     }
     if (failed) return failed_poll_result(opt, command_line, error_message);
 
-    auto cpu_begin = rdma_bench::take_cpu_snapshot();
-    auto begin = clock_type::now();
+    // iters: serve warmup+iters. duration: serve until the client's sentinel.
     if (!poll_until(cq,
                     [&] {
-                      return failed || result.completed_count >= opt.iterations;
+                      return failed ||
+                             (win.duration_mode() ? stop : completed >= total);
                     },
                     std::chrono::seconds(opt.timeout_sec), error_message)) {
       return failed_poll_result(opt, command_line, error_message);
     }
     if (failed) return failed_poll_result(opt, command_line, error_message);
 
-    finish_throughput(result, begin, clock_type::now());
+    rdma_bench::finalize_counts(result, win);
+    finish_throughput(result, win.window_begin_wall(), clock_type::now());
     rdma_bench::fill_cpu_metrics(result, cpu_begin,
                                  rdma_bench::take_cpu_snapshot());
     result.validation_passed = true;
@@ -959,46 +1001,65 @@ rdma_bench::result run_poll_callback_bandwidth_client_role(
     }
     if (failed) return failed_poll_result(opt, command_line, error_message);
 
-    std::vector<rdma_bench::cycles_t> tposted, tcompleted;
-    tposted.reserve(static_cast<std::size_t>(opt.iterations));
-    tcompleted.reserve(static_cast<std::size_t>(opt.iterations));
-    std::uint64_t posted = 0;
+    rdma_bench::window_controller win(
+        opt, static_cast<std::size_t>(opt.iterations));
+    std::uint64_t posted = 0, completed = 0;
+    auto cpu_begin = rdma_bench::take_cpu_snapshot();
     std::function<void(std::size_t)> post_send;
     post_send = [&](std::size_t slot) {
+      win.note_post();
       ++posted;
       result.posted_count = posted;
-      tposted.push_back(rdma_bench::get_cycles());
       qp.async_send(
           mr.cslice(offset_for_slot(slot), opt.message_size),
           [&, slot](asio::error_code ec, std::size_t n) {
             if (failed) return;
             if (ec) return fail(ec.message());
             if (n != opt.message_size) return fail("short send");
-            tcompleted.push_back(rdma_bench::get_cycles());
-            ++result.completed_count;
-            if (posted < opt.iterations) {
-              post_send(slot);
-            }
+            win.note_complete_bw();
+            if (win.take_opened()) cpu_begin = rdma_bench::take_cpu_snapshot();
+            ++completed;
+            if (win.should_post()) post_send(slot);
           });
     };
 
-    auto cpu_begin = rdma_bench::take_cpu_snapshot();
-    auto begin = clock_type::now();
-    for (std::uint64_t i = 0; i < slots; ++i) {
+    auto const prime = win.duration_mode()
+                           ? slots
+                           : std::min<std::uint64_t>(
+                                 slots, opt.warmup_iterations + opt.iterations);
+    for (std::uint64_t i = 0; i < prime; ++i) {
       post_send(static_cast<std::size_t>(i));
     }
+    // Timed window: stop once warmup is done and the window (iters count or
+    // duration deadline) is complete.
     if (!poll_until(cq,
-                    [&] {
-                      return failed || result.completed_count >= opt.iterations;
-                    },
+                    [&] { return failed || (win.opened() && win.window_done()); },
                     std::chrono::seconds(opt.timeout_sec), error_message)) {
       return failed_poll_result(opt, command_line, error_message);
     }
     if (failed) return failed_poll_result(opt, command_line, error_message);
+    // Drain ops still in flight (their callbacks no longer repost).
+    if (!poll_until(cq, [&] { return failed || completed >= posted; },
+                    std::chrono::seconds(opt.timeout_sec), error_message)) {
+      return failed_poll_result(opt, command_line, error_message);
+    }
+    if (failed) return failed_poll_result(opt, command_line, error_message);
+    // Duration mode: 1-byte end-of-stream sentinel so the server breaks (the
+    // server cannot know the op count; see run_poll_bandwidth_client_role).
+    if (win.duration_mode()) {
+      storage[0] = 'E';
+      bool sent = false;
+      qp.async_send(mr.cslice(std::size_t{0}, std::size_t{1}),
+                    [&](asio::error_code, std::size_t) { sent = true; });
+      poll_until(cq, [&] { return failed || sent; },
+                 std::chrono::seconds(opt.timeout_sec), error_message);
+    }
 
-    rdma_bench::finish_bw_cycles(result, tposted, tcompleted, opt.post_list,
-                                 opt.cq_mod, opt.no_peak);
-    (void)begin;
+    std::vector<rdma_bench::cycles_t> tp, tc;
+    win.bw_arrays(tp, tc);
+    rdma_bench::finalize_counts(result, win);
+    rdma_bench::finish_bw_cycles(result, tp, tc, opt.post_list, opt.cq_mod,
+                                 opt.no_peak);
     rdma_bench::fill_cpu_metrics(result, cpu_begin,
                                  rdma_bench::take_cpu_snapshot());
     result.validation_passed = true;
@@ -1066,13 +1127,17 @@ rdma_bench::result run_poll_bandwidth_server_role(rdma_bench::options opt,
 
     cq_spinner spinner(cq);
     std::vector<future_result> recvs(opt.queue_depth);
-    std::uint64_t posted = 0;
-    auto initial = std::min<std::uint64_t>(opt.queue_depth, opt.iterations);
-    for (std::uint64_t i = 0; i < initial; ++i) {
-      recvs[static_cast<std::size_t>(i)] =
-          qp.async_recv(mr.slice(offset_for_slot(static_cast<std::size_t>(i)),
-                                 opt.message_size),
-                        use_fut);
+    rdma_bench::window_controller win(
+        opt, static_cast<std::size_t>(opt.iterations));
+    std::uint64_t posted = 0, completed = 0;
+    std::uint64_t const total = opt.warmup_iterations + opt.iterations;
+    auto const prime = win.duration_mode()
+                           ? static_cast<std::uint64_t>(opt.queue_depth)
+                           : std::min<std::uint64_t>(opt.queue_depth, total);
+    for (std::uint64_t i = 0; i < prime; ++i) {
+      auto const slot = static_cast<std::size_t>(i % opt.queue_depth);
+      recvs[slot] = qp.async_recv(
+          mr.slice(offset_for_slot(slot), opt.message_size), use_fut);
       ++posted;
     }
     result.posted_count = posted;
@@ -1087,26 +1152,27 @@ rdma_bench::result run_poll_bandwidth_server_role(rdma_bench::options opt,
     }
 
     auto cpu_begin = rdma_bench::take_cpu_snapshot();
-    auto begin = clock_type::now();
-    while (result.completed_count < opt.iterations) {
-      auto const slot =
-          static_cast<std::size_t>(result.completed_count % opt.queue_depth);
+    // iters: serve warmup+iters recvs. duration: serve until the client
+    // disconnects (recv retires with an error / flush) -- the termination
+    // barrier, since the server cannot know the duration-mode op count.
+    for (;;) {
+      if (!win.duration_mode() && completed >= total) break;
+      auto const slot = static_cast<std::size_t>(completed % opt.queue_depth);
       auto [ec, n] = recvs[slot].get();
-      if (ec) return failed_poll_result(opt, command_line, ec.message());
-      if (n != opt.message_size) {
-        return failed_poll_result(opt, command_line, "short receive");
-      }
-      ++result.completed_count;
-      if (posted < opt.iterations) {
-        recvs[slot] =
-            qp.async_recv(mr.slice(offset_for_slot(slot), opt.message_size),
-                          use_fut);
+      if (ec || n != opt.message_size) break;  // client done (disconnect/flush)
+      win.note_complete_bw();
+      if (win.take_opened()) cpu_begin = rdma_bench::take_cpu_snapshot();
+      ++completed;
+      if (win.duration_mode() || posted < total) {
+        recvs[slot] = qp.async_recv(
+            mr.slice(offset_for_slot(slot), opt.message_size), use_fut);
         ++posted;
         result.posted_count = posted;
       }
     }
 
-    finish_throughput(result, begin, clock_type::now());
+    rdma_bench::finalize_counts(result, win);
+    finish_throughput(result, win.window_begin_wall(), clock_type::now());
     rdma_bench::fill_cpu_metrics(result, cpu_begin,
                                  rdma_bench::take_cpu_snapshot());
     result.validation_passed = true;
@@ -1172,46 +1238,72 @@ rdma_bench::result run_poll_bandwidth_client_role(rdma_bench::options opt,
     }
 
     std::vector<future_result> sends(opt.queue_depth);
-    std::vector<rdma_bench::cycles_t> tposted, tcompleted;
-    tposted.reserve(static_cast<std::size_t>(opt.iterations));
-    tcompleted.reserve(static_cast<std::size_t>(opt.iterations));
-    std::uint64_t posted = 0;
-    auto initial = std::min<std::uint64_t>(opt.queue_depth, opt.iterations);
+    // Stage 9b: warmup (first warmup_iterations ops excluded) + duration/margin
+    // window via window_controller. iters mode posts warmup+iters total; duration
+    // mode posts until the deadline. The window opens once warmup completions
+    // retire; cpu snapshot is taken there.
+    rdma_bench::window_controller win(
+        opt, static_cast<std::size_t>(opt.iterations));
+    std::uint64_t posted = 0, completed = 0;
+    std::uint64_t const total_posts = opt.warmup_iterations + opt.iterations;
+    auto const prime =
+        win.duration_mode()
+            ? static_cast<std::uint64_t>(opt.queue_depth)
+            : std::min<std::uint64_t>(opt.queue_depth, total_posts);
     auto cpu_begin = rdma_bench::take_cpu_snapshot();
-    auto begin = clock_type::now();
-    for (std::uint64_t i = 0; i < initial; ++i) {
-      tposted.push_back(rdma_bench::get_cycles());
-      sends[static_cast<std::size_t>(i)] =
-          qp.async_send(mr.cslice(offset_for_slot(static_cast<std::size_t>(i)),
-                                  opt.message_size),
-                        use_fut);
+    for (std::uint64_t i = 0; i < prime; ++i) {
+      auto const slot = static_cast<std::size_t>(i % opt.queue_depth);
+      win.note_post();
+      sends[slot] = qp.async_send(
+          mr.cslice(offset_for_slot(slot), opt.message_size), use_fut);
       ++posted;
     }
     result.posted_count = posted;
 
-    while (result.completed_count < opt.iterations) {
-      auto const slot =
-          static_cast<std::size_t>(result.completed_count % opt.queue_depth);
+    while (!(win.opened() && win.window_done())) {
+      auto const slot = static_cast<std::size_t>(completed % opt.queue_depth);
       auto [ec, n] = sends[slot].get();
       if (ec) return failed_poll_result(opt, command_line, ec.message());
       if (n != opt.message_size) {
         return failed_poll_result(opt, command_line, "short send");
       }
-      tcompleted.push_back(rdma_bench::get_cycles());
-      ++result.completed_count;
-      if (posted < opt.iterations) {
-        tposted.push_back(rdma_bench::get_cycles());
-        sends[slot] =
-            qp.async_send(mr.cslice(offset_for_slot(slot), opt.message_size),
-                          use_fut);
+      win.note_complete_bw();
+      if (win.take_opened()) cpu_begin = rdma_bench::take_cpu_snapshot();
+      ++completed;
+      if (win.should_post()) {
+        win.note_post();
+        sends[slot] = qp.async_send(
+            mr.cslice(offset_for_slot(slot), opt.message_size), use_fut);
         ++posted;
         result.posted_count = posted;
       }
     }
+    // Drain ops still in flight after the window closed (not recorded).
+    while (completed < posted) {
+      auto const slot = static_cast<std::size_t>(completed % opt.queue_depth);
+      auto [ec, n] = sends[slot].get();
+      (void)ec;
+      (void)n;
+      ++completed;
+    }
+    // Duration mode: the server serves until end-of-stream (it cannot know the
+    // op count, and a poll-mode disconnect's DREQ is not processed by the server
+    // mid-measure since it does not run its io_context). Send a zero-length
+    // sentinel -> the server recv completes with n==0 (!= message_size) and it
+    // breaks. iters mode needs none: the server stops on its warmup+iters count.
+    if (win.duration_mode()) {
+      storage[0] = 'E';
+      auto [se, sn] =
+          qp.async_send(mr.cslice(std::size_t{0}, std::size_t{1}), use_fut).get();
+      (void)se;
+      (void)sn;
+    }
 
-    rdma_bench::finish_bw_cycles(result, tposted, tcompleted, opt.post_list,
-                                 opt.cq_mod, opt.no_peak);
-    (void)begin;
+    std::vector<rdma_bench::cycles_t> tp, tc;
+    win.bw_arrays(tp, tc);
+    rdma_bench::finalize_counts(result, win);
+    rdma_bench::finish_bw_cycles(result, tp, tc, opt.post_list, opt.cq_mod,
+                                 opt.no_peak);
     rdma_bench::fill_cpu_metrics(result, cpu_begin,
                                  rdma_bench::take_cpu_snapshot());
     result.validation_passed = true;
@@ -1285,17 +1377,26 @@ rdma_bench::result run_poll_latency_server_role(rdma_bench::options opt,
                                          : "short ready send");
     }
 
-    for (std::uint64_t i = 0; i < opt.iterations; ++i) {
+    // iters: echo warmup+iters round-trips. duration: echo until the client's
+    // 1-byte sentinel (recv n != message_size) -- the server cannot know the
+    // duration-mode round-trip count.
+    std::uint64_t const total = opt.warmup_iterations + opt.iterations;
+    bool const duration_mode = opt.duration_sec > 0.0;
+    std::uint64_t completed = 0;
+    for (std::uint64_t i = 0;; ++i) {
+      if (!duration_mode && completed >= total) break;
       auto slot = static_cast<std::size_t>(i % 2);
       auto [recv_ec, recv_n] = pending.get();
       if (recv_ec) {
         return failed_poll_result(opt, command_line, recv_ec.message());
       }
       if (recv_n != opt.message_size) {
+        if (duration_mode) break;  // 1-byte end-of-stream sentinel
         return failed_poll_result(opt, command_line, "short receive");
       }
       future_result next;
-      if (i + 1 < opt.iterations) {
+      bool const more = duration_mode || (completed + 1 < total);
+      if (more) {
         auto next_slot = std::size_t{1} - slot;
         next = qp.async_recv(mr.slice(slot_offset(next_slot), opt.message_size),
                              use_fut);
@@ -1310,11 +1411,12 @@ rdma_bench::result run_poll_latency_server_role(rdma_bench::options opt,
       if (send_n != opt.message_size) {
         return failed_poll_result(opt, command_line, "short send");
       }
-      ++result.completed_count;
+      ++completed;
       pending = std::move(next);
     }
 
-    result.payload_bytes = result.completed_count * opt.message_size;
+    result.completed_count = completed;
+    result.payload_bytes = completed * opt.message_size;
     result.validation_passed = true;
     asio::error_code ignored;
     conn.disconnect(ignored);
@@ -1373,11 +1475,10 @@ rdma_bench::result run_poll_latency_client_role(rdma_bench::options opt,
                                          : "missing server ready byte");
     }
 
-    std::vector<rdma_bench::cycles_t> deltas;
-    deltas.reserve(static_cast<std::size_t>(opt.iterations));
+    rdma_bench::window_controller win(
+        opt, static_cast<std::size_t>(opt.iterations));
     auto cpu_begin = rdma_bench::take_cpu_snapshot();
-    auto begin = clock_type::now();
-    for (std::uint64_t i = 0; i < opt.iterations; ++i) {
+    while (!(win.opened() && win.window_done())) {
       auto sample_begin_cyc = rdma_bench::get_cycles();
       auto recv =
           qp.async_recv(mr.slice(recv_offset, opt.message_size), use_fut);
@@ -1397,15 +1498,23 @@ rdma_bench::result run_poll_latency_client_role(rdma_bench::options opt,
       if (recv_n != opt.message_size) {
         return failed_poll_result(opt, command_line, "short receive");
       }
-      deltas.push_back(sample_end_cyc - sample_begin_cyc);
-      ++result.posted_count;
-      ++result.completed_count;
+      win.note_complete_lat(sample_end_cyc - sample_begin_cyc);
+      if (win.take_opened()) cpu_begin = rdma_bench::take_cpu_snapshot();
+      result.posted_count = win.in_window_count() + win.warmup_done_count();
+    }
+    // Duration mode: 1-byte sentinel so the echo server stops (it cannot know
+    // the round-trip count). The server recv completes with n==1 (!= size) and
+    // breaks without echoing.
+    if (win.duration_mode()) {
+      storage[0] = 'E';
+      qp.async_send(mr.cslice(std::size_t{0}, std::size_t{1}), use_fut).get();
     }
 
-    finish_throughput(result, begin, clock_type::now());
+    rdma_bench::finalize_counts(result, win);
+    finish_throughput(result, win.window_begin_wall(), clock_type::now());
     rdma_bench::fill_cpu_metrics(result, cpu_begin,
                                  rdma_bench::take_cpu_snapshot());
-    rdma_bench::fill_latency_cycles(result, std::move(deltas), 2);
+    rdma_bench::fill_latency_cycles(result, win.lat_deltas(), 2);
     result.validation_passed = true;
     asio::error_code ignored;
     conn.disconnect(ignored);

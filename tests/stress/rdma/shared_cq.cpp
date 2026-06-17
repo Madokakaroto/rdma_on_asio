@@ -255,6 +255,31 @@ int main(int argc, char* argv[]) {
                       .get_first_available_device(tcp::v4(), {});
     rdma::use_device(io, device);
 
+    // Stage 4 contract: an io_context that binds no event-mode QP must never
+    // start the shared-CQ poller, so its run() returns on idle. A poller wrongly
+    // started (e.g. eagerly at use_device) would block run() forever -- detect it
+    // on a throwaway control-plane-only io_context before the main stress.
+    bool idle_return_ok = true;
+    {
+      asio::io_context idle_io;
+      rdma::use_device(idle_io, device);
+      rdma::rdma_listener<tcp> idle_listener(idle_io);
+      idle_listener.open(tcp::v4());  // control-plane only; no event-mode QP
+      std::atomic<bool> returned{false};
+      std::thread idle_thread([&] {
+        idle_io.run();
+        returned.store(true);
+      });
+      for (int i = 0; i < 200 && !returned.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      if (!returned.load()) {
+        idle_return_ok = false;  // run() blocked -> poller contract broken
+        idle_io.stop();
+      }
+      idle_thread.join();
+    }
+
     std::vector<std::unique_ptr<rdma::rdma_listener<tcp>>> listeners;
     listeners.reserve(opt.qps);
     for (std::uint32_t i = 0; i < opt.qps; ++i) {
@@ -315,9 +340,15 @@ int main(int argc, char* argv[]) {
     r.completed_count = server_completed.load() + client_completed.load();
     r.payload_bytes = r.completed_count * opt.message_size;
     r.errors = errors.load();
-    r.validation_passed = (r.errors == 0 && r.completed_count == r.posted_count);
+    r.validation_passed = (r.errors == 0 &&
+                           r.completed_count == r.posted_count &&
+                           idle_return_ok);
     if (!*r.validation_passed) {
-      r.first_error = "shared-CQ stress completion count mismatch or error";
+      r.first_error =
+          !idle_return_ok
+              ? "poll/control-only io_context run() did not return on idle "
+                "(shared-CQ poller contract broken)"
+              : "shared-CQ stress completion count mismatch or error";
       r.exit_code = 1;
     }
     rdma_bench::write_result(r, opt.json_out);

@@ -46,6 +46,37 @@ int cli_main(int argc, char** argv, char const* preset_op,
     // (asio_*_lat) set the metric -- parse_options ran before the preset, so its
     // own latency->qd=1 clamp did not see the preset metric.
     if (opt.metric == rdma_bench::metric_kind::latency) opt.queue_depth = 1;
+    // Stage 9b duration mode: margin trims the ramp from both ends, so 2*margin
+    // must be strictly less than the window or nothing is measured. Reject early
+    // with a clear skip.
+    if (opt.duration_sec > 0.0 && 2.0 * opt.margin_sec >= opt.duration_sec) {
+      auto r = rdma_bench::make_skip_result(
+          opt, cmd, "2*margin >= duration leaves an empty measured window",
+          "margin_too_large");
+      rdma_bench::write_result(r, opt.json_out);
+      return 0;
+    }
+    // Duration mode: the server serves for the whole window, so its watchdog /
+    // poll timeout must outlive duration + 2*margin (the poll-mode send/recv
+    // server gates its poll_until on timeout_sec). Bump it if the user's value
+    // is too small.
+    if (opt.duration_sec > 0.0) {
+      auto const need = static_cast<std::uint32_t>(
+                            opt.duration_sec + 2.0 * opt.margin_sec) +
+                        15u;
+      if (opt.timeout_sec < need) opt.timeout_sec = need;
+    }
+    // Not-implemented gate: perftest knobs that need rdma-on-asio interface/impl
+    // work which is out of scope this iteration (inline_size / cq-mod / post_list
+    // selective signaling + WR batching). The flags parse for command-line parity,
+    // but a non-default value cannot be honored through the current public API, so
+    // emit a not_implemented skip instead of a misleading number. (--connection
+    // non-RC already throws at parse.)
+    if (auto reason = rdma_bench::not_implemented_reason(opt); !reason.empty()) {
+      auto r = rdma_bench::make_skip_result(opt, cmd, reason, "not_implemented");
+      rdma_bench::write_result(r, opt.json_out);
+      return 0;  // a capability skip is not a process failure
+    }
     return dispatch(std::move(opt), std::move(cmd));
   } catch (std::runtime_error const& e) {
     if (std::string_view(e.what()) == "help") {

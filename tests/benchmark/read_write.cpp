@@ -192,6 +192,7 @@ public:
         result_(rdma_bench::make_base_result(opt_, std::move(command_line))),
         conn_(io),
         qp_(io),
+        win_(opt_, static_cast<std::size_t>(opt_.iterations)),
         on_done_(std::move(on_done)) {
     result_.scenario_name =
         opt_.operation == rdma_bench::operation_kind::write
@@ -250,24 +251,24 @@ private:
     }
     setup_buffers();
     cpu_begin_ = rdma_bench::take_cpu_snapshot();
-    begin_ = clock_type::now();
     if (opt_.metric == rdma_bench::metric_kind::latency) {
-      deltas_.reserve(static_cast<std::size_t>(opt_.iterations));
       post_latency_iteration();
       return;
     }
-    tposted_.reserve(static_cast<std::size_t>(opt_.iterations));
-    tcompleted_.reserve(static_cast<std::size_t>(opt_.iterations));
-    auto initial = slot_count();
-    for (std::size_t slot = 0; slot < initial; ++slot) {
+    auto const prime =
+        win_.duration_mode()
+            ? slot_count()
+            : static_cast<std::size_t>(std::min<std::uint64_t>(
+                  slot_count(), opt_.warmup_iterations + opt_.iterations));
+    for (std::size_t slot = 0; slot < prime; ++slot) {
       post_one(slot);
     }
   }
 
   void post_one(std::size_t slot) {
+    win_.note_post();
     ++posted_;
     result_.posted_count = posted_;
-    tposted_.push_back(rdma_bench::get_cycles());
     auto remote = remote_for_slot(slot);
     if (opt_.operation == rdma_bench::operation_kind::write) {
       qp_.async_write(mr_->cslice(offset_for_slot(slot), opt_.message_size),
@@ -293,13 +294,16 @@ private:
     // Bandwidth: NO per-op data validation in the measured window -- verify_pattern
     // over the whole message every op would be the bottleneck (it throttled read
     // bw to ~1/5 of perftest). Read data is validated once at the end instead.
-    tcompleted_.push_back(rdma_bench::get_cycles());
-    ++result_.completed_count;
-    if (posted_ < opt_.iterations) {
+    win_.note_complete_bw();
+    if (win_.take_opened()) cpu_begin_ = rdma_bench::take_cpu_snapshot();
+    ++completed_;
+    if (win_.should_post()) {
       post_one(slot);
       return;
     }
-    if (result_.completed_count == opt_.iterations) {
+    // Window done: finish once all in-flight ops drain. No sentinel -- the
+    // passive server ends on the client's disconnect (async_wait_disconnect).
+    if (completed_ >= posted_) {
       finish_success();
     }
   }
@@ -337,9 +341,9 @@ private:
                         opt_.message_size)) {
       return fail("read validation failed");
     }
-    deltas_.push_back(sample_end_cyc - sample_begin_cyc_);
-    ++result_.completed_count;
-    if (result_.completed_count == opt_.iterations) {
+    win_.note_complete_lat(sample_end_cyc - sample_begin_cyc_);
+    if (win_.take_opened()) cpu_begin_ = rdma_bench::take_cpu_snapshot();
+    if (win_.opened() && win_.window_done()) {
       finish_success();
       return;
     }
@@ -349,14 +353,19 @@ private:
   void finish_success() {
     if (done_) return;
     done_ = true;
+    rdma_bench::finalize_counts(result_, win_);
     if (opt_.metric == rdma_bench::metric_kind::bandwidth) {
-      rdma_bench::finish_bw_cycles(result_, tposted_, tcompleted_,
-                                   opt_.post_list, opt_.cq_mod, opt_.no_peak);
+      std::vector<rdma_bench::cycles_t> tp, tc;
+      win_.bw_arrays(tp, tc);
+      rdma_bench::finish_bw_cycles(result_, tp, tc, opt_.post_list, opt_.cq_mod,
+                                   opt_.no_peak);
     } else {
-      rdma_bench::finish_throughput(result_, begin_, clock_type::now());
-      if (!deltas_.empty()) {
+      rdma_bench::finish_throughput(result_, win_.window_begin_wall(),
+                                    clock_type::now());
+      auto deltas = win_.lat_deltas();
+      if (!deltas.empty()) {
         rdma_bench::fill_latency_cycles(
-            result_, std::move(deltas_),
+            result_, std::move(deltas),
             opt_.operation == rdma_bench::operation_kind::write ? 2 : 1);
       }
     }
@@ -405,11 +414,9 @@ private:
   std::vector<char> storage_;
   std::unique_ptr<rdma::rdma_memory_region> mr_;
   rdma::rdma_remote_addr_t remote_base_{};
-  std::vector<rdma_bench::cycles_t> deltas_;
-  std::vector<rdma_bench::cycles_t> tposted_;
-  std::vector<rdma_bench::cycles_t> tcompleted_;
+  rdma_bench::window_controller win_;
   std::uint64_t posted_ = 0;
-  clock_type::time_point begin_ = clock_type::now();
+  std::uint64_t completed_ = 0;
   rdma_bench::cycles_t sample_begin_cyc_ = 0;
   rdma_bench::cpu_snapshot cpu_begin_{};
   bool done_ = false;
@@ -639,12 +646,11 @@ rdma_bench::result run_poll_client_role(rdma_bench::options opt,
     rdma::rdma_memory_region mr(device, storage.data(), storage.size());
 
     cq_spinner spinner(cq);
+    rdma_bench::window_controller win(
+        opt, static_cast<std::size_t>(opt.iterations));
     auto cpu_begin = rdma_bench::take_cpu_snapshot();
-    auto begin = clock_type::now();
     if (opt.metric == rdma_bench::metric_kind::latency) {
-      std::vector<rdma_bench::cycles_t> deltas;
-      deltas.reserve(static_cast<std::size_t>(opt.iterations));
-      for (std::uint64_t i = 0; i < opt.iterations; ++i) {
+      while (!(win.opened() && win.window_done())) {
         auto sample_begin_cyc = rdma_bench::get_cycles();
         auto remote = poll_remote_for_slot(remote_base, opt, std::size_t{0});
         future_result op;
@@ -666,22 +672,20 @@ rdma_bench::result run_poll_client_role(rdma_bench::options opt,
                             opt.message_size)) {
           return make_error(opt, command_line, "read validation failed");
         }
-        deltas.push_back(sample_end_cyc - sample_begin_cyc);
-        ++result.posted_count;
-        ++result.completed_count;
+        win.note_complete_lat(sample_end_cyc - sample_begin_cyc);
+        if (win.take_opened()) cpu_begin = rdma_bench::take_cpu_snapshot();
       }
-      rdma_bench::finish_throughput(result, begin, clock_type::now());
+      rdma_bench::finalize_counts(result, win);
+      rdma_bench::finish_throughput(result, win.window_begin_wall(),
+                                    clock_type::now());
       rdma_bench::fill_latency_cycles(
-          result, std::move(deltas),
+          result, win.lat_deltas(),
           opt.operation == rdma_bench::operation_kind::write ? 2 : 1);
     } else {
-      std::vector<rdma_bench::cycles_t> tposted, tcompleted;
-      tposted.reserve(static_cast<std::size_t>(opt.iterations));
-      tcompleted.reserve(static_cast<std::size_t>(opt.iterations));
       std::vector<future_result> ops(slots);
-      std::uint64_t posted = 0;
+      std::uint64_t posted = 0, completed = 0;
       auto post_one = [&](std::size_t slot) {
-        tposted.push_back(rdma_bench::get_cycles());
+        win.note_post();
         auto remote = poll_remote_for_slot(remote_base, opt, slot);
         if (opt.operation == rdma_bench::operation_kind::write) {
           ops[slot] =
@@ -697,9 +701,14 @@ rdma_bench::result run_poll_client_role(rdma_bench::options opt,
         result.posted_count = posted;
       };
 
-      for (std::size_t slot = 0; slot < slots; ++slot) post_one(slot);
-      while (result.completed_count < opt.iterations) {
-        auto slot = static_cast<std::size_t>(result.completed_count % slots);
+      auto const prime =
+          win.duration_mode()
+              ? slots
+              : static_cast<std::size_t>(std::min<std::uint64_t>(
+                    slots, opt.warmup_iterations + opt.iterations));
+      for (std::size_t slot = 0; slot < prime; ++slot) post_one(slot);
+      while (!(win.opened() && win.window_done())) {
+        auto slot = static_cast<std::size_t>(completed % slots);
         auto [ec, n] = ops[slot].get();
         if (ec) return make_error(opt, command_line, ec.message());
         if (n != opt.message_size) {
@@ -707,12 +716,24 @@ rdma_bench::result run_poll_client_role(rdma_bench::options opt,
         }
         // Bandwidth: no per-op validation in the measured window (validated once
         // below, outside it).
-        tcompleted.push_back(rdma_bench::get_cycles());
-        ++result.completed_count;
-        if (posted < opt.iterations) post_one(slot);
+        win.note_complete_bw();
+        if (win.take_opened()) cpu_begin = rdma_bench::take_cpu_snapshot();
+        ++completed;
+        if (win.should_post()) post_one(slot);
       }
-      rdma_bench::finish_bw_cycles(result, tposted, tcompleted, opt.post_list,
-                                   opt.cq_mod, opt.no_peak);
+      // Drain in-flight after the window closed (not recorded).
+      while (completed < posted) {
+        auto slot = static_cast<std::size_t>(completed % slots);
+        auto [ec, n] = ops[slot].get();
+        (void)ec;
+        (void)n;
+        ++completed;
+      }
+      std::vector<rdma_bench::cycles_t> tp, tc;
+      win.bw_arrays(tp, tc);
+      rdma_bench::finalize_counts(result, win);
+      rdma_bench::finish_bw_cycles(result, tp, tc, opt.post_list, opt.cq_mod,
+                                   opt.no_peak);
       if (opt.operation == rdma_bench::operation_kind::read) {
         for (std::size_t slot = 0; slot < slots; ++slot) {
           if (!verify_pattern(storage, poll_offset_for_slot(opt, slot), slot,

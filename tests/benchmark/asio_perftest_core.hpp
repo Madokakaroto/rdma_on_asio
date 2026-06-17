@@ -67,6 +67,33 @@ inline void signal_ready(std::promise<void>* ready) {
   }
 }
 
+// Busy-polls `cq` until `done()` returns true or `timeout` elapses. The shared
+// poll-mode phase driver (warmup / window / barrier pumps). Returns false with
+// error_message set on a CQ error or timeout. (Promoted from send_recv.cpp so
+// read_write's poll roles and the Stage 9b barrier pumps can share it.)
+template <typename Predicate>
+inline bool poll_until(rdma::rdma_completion_queue& cq, Predicate done,
+                       std::chrono::seconds timeout,
+                       std::string& error_message) {
+  auto const deadline = clock_type::now() + timeout;
+  while (!done()) {
+    asio::error_code ec;
+    auto const n = cq.poll(ec);
+    if (ec) {
+      error_message = ec.message();
+      return false;
+    }
+    if (n == 0) {
+      if (clock_type::now() >= deadline) {
+        error_message = "poll timeout";
+        return false;
+      }
+      std::this_thread::yield();
+    }
+  }
+  return true;
+}
+
 namespace asio_perftest {
 
 // Verb-module entry points. Each lives in its own translation unit
