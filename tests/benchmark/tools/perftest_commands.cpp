@@ -32,8 +32,12 @@ std::string build_common_args(rdma_bench::options const& opt) {
   std::ostringstream os;
   os << " --connection RC"
      << " --size " << opt.message_size
-     << " --port " << opt.port
-     << " --inline_size " << opt.inline_size;
+     << " --port " << opt.port;
+  // READ/ATOMIC verbs reject --inline_size (even 0): "Inline feature not
+  // available on READ/Atomic verbs". Emit it only for send/write.
+  if (opt.operation != rdma_bench::operation_kind::read) {
+    os << " --inline_size " << opt.inline_size;
+  }
   if (opt.metric == rdma_bench::metric_kind::latency) {
     os << " --iters " << opt.iterations;
   } else if (opt.duration_sec > 0.0) {
@@ -42,9 +46,13 @@ std::string build_common_args(rdma_bench::options const& opt) {
     os << " --iters " << opt.iterations;
   }
   if (opt.metric == rdma_bench::metric_kind::bandwidth) {
-    os << " --tx-depth " << opt.queue_depth
-       << " --rx-depth " << opt.queue_depth
-       << " --cq-mod " << opt.cq_mod;
+    os << " --tx-depth " << opt.queue_depth;
+    // READ rx-depth can only be 1 (the reader side posts no recv); perftest
+    // rejects a larger value ("rx depth can be only 1"). Only send/write take it.
+    if (opt.operation != rdma_bench::operation_kind::read) {
+      os << " --rx-depth " << opt.queue_depth;
+    }
+    os << " --cq-mod " << opt.cq_mod;
   }
   if (opt.mode == "event") os << " --events";
   os << " --rdma_cm";

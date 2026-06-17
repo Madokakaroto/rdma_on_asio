@@ -1,0 +1,23 @@
+{
+  "name": "write_bw_event_single_host_two_process",
+  "backend": "auto",
+  "baseline": ["rdma_on_asio", "perftest"],
+  "operation": "write",
+  "metric": "bandwidth",
+  "completion_mode": "event",
+  "token_type": "callback",
+  "connection": "RC",
+  "message_size": 4096,
+  "queue_depth": 64,
+  "qps": 1,
+  "threads": 1,
+  "iterations": 20000,
+  "duration_sec": 0,
+  "margin_sec": 0,
+  "inline_size": 0,
+  "cq_mod": 1,
+  "post_list": 1,
+  "recv_post_list": 1,
+  "signaled_every": 1,
+  "topology": "single_host_two_process"
+}

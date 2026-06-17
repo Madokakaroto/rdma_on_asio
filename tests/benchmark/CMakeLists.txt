@@ -50,6 +50,17 @@ rdma_add_benchmark_tool(rdma_benchmark_parse_perftest
 rdma_add_benchmark_tool(rdma_benchmark_run_scenario
                         ${CMAKE_SOURCE_DIR}/tests/benchmark/tools/run_scenario.cpp)
 
+# Stage 8 comparison driver: shell orchestration that reuses the four C++ tools
+# to run the lib bench (two-process) and perftest side by side. Copied next to
+# the built binaries so its default --bin-dir (dirname $0) resolves the tools +
+# asio_perftest. Invoked as `bash run_comparison.sh ...` (no exec-bit reliance).
+if(NOT WIN32)
+  configure_file(
+      ${CMAKE_SOURCE_DIR}/tests/benchmark/tools/run_comparison.sh
+      ${CMAKE_CURRENT_BINARY_DIR}/run_comparison.sh
+      COPYONLY)
+endif()
+
 if(RDMA_BUILD_PERFORMANCE_TESTS)
   # asio_perftest: the unified, perftest-aligned benchmark (Stage 9a). The two
   # verb modules and the dispatcher compile once into an object library; the
@@ -129,6 +140,18 @@ if(RDMA_BUILD_PERFORMANCE_TESTS)
                      --message-size 64 --iterations 32 --queue-depth 4)
     set_tests_properties(performance_asio_read_bw_poll_single_host_smoke
         PROPERTIES LABELS "performance;hardware;manual;rdma" TIMEOUT 30)
+
+    # Stage 8 driver smoke: drive one case (send/recv bw, event) lib-vs-perftest
+    # via run_comparison.sh. Manual-labeled like every hardware test here.
+    math(EXPR RDMA_BENCH_COMPARISON_PORT "${RDMA_TEST_BASE_PORT} + 330")
+    add_test(NAME performance_run_comparison_send_bw_smoke
+             COMMAND bash ${CMAKE_CURRENT_BINARY_DIR}/run_comparison.sh
+                     --scenario ${CMAKE_SOURCE_DIR}/tests/benchmark/scenarios/comparison/send_bw_event.json
+                     --local-addr ${RDMA_TEST_ADDR}
+                     --output-dir ${CMAKE_CURRENT_BINARY_DIR}/comparison-run-ctest
+                     --base-port ${RDMA_BENCH_COMPARISON_PORT})
+    set_tests_properties(performance_run_comparison_send_bw_smoke
+        PROPERTIES LABELS "performance;hardware;manual;rdma;comparison" TIMEOUT 120)
   endif()
 endif()
 
