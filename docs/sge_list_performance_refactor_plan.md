@@ -80,30 +80,45 @@ Remaining work:
 ## IBV Remaining Work
 
 The Windows/ND side has been built, unit-tested, and smoke-tested locally. The
-IBV code has been updated in parallel, but still needs backend-specific
-validation on Linux hardware before this refactor is considered complete for both
-platforms.
+IBV code has been updated in parallel and is now validated on Linux RoCE hardware
+(host `10.234.66.132`, `mlx5_0`, `max_sge=30`).
 
 IBV follow-up checklist:
 
-- Build the IBV-enabled tree on Linux and run the default unit-test suite.
-- Run `unit_ibv_buffer` and any IBV public-header/compile tests to verify the
+- [x] Build the IBV-enabled tree on Linux and run the default unit-test suite.
+- [x] Run `unit_ibv_buffer` and any IBV public-header/compile tests to verify the
   shared `small_sglist` aliases and backend field mapping compile cleanly with
-  real `ibv_sge`.
-- Add or run an IBV multi-SGE hardware smoke test covering send/recv, read, and
-  write with SGE counts `1, 2, 4, 8, 9`.
-- Confirm the IBV post paths for send, recv, read, and write no longer call
-  `ibv_verbs_service::get_sglist()` and do not use TLS.
+  real `ibv_sge` (`unit_ibv_buffer` + `unit_rdma_buffer` pass).
+- [x] Add or run an IBV multi-SGE hardware smoke test covering send/recv, read,
+  and write across the inline/heap-spill boundary. `tests/rdma/test_rdma_sgl`
+  now has four RoCE phases, all passing: phase 1 (2-SGE multi-MR gather/scatter
+  send/recv), phase 2 (too-many-sge rejection + recovery), phase 3 (9-SGE
+  heap-spill gather-send + scatter-recv), phase 4 (9-SGE heap-spill RDMA
+  read + write). 9 > `inline_count` 8 forces the heap path; read/write share the
+  identical `build_native_sglist` + `small_sglist` machinery as send/recv.
+- [x] Confirm the IBV post paths for send, recv, read, and write no longer call
+  `ibv_verbs_service::get_sglist()` and do not use TLS. All four `do_post_*` in
+  `ibv_service_verbs.hpp` use a stack `native_sge_t` single-buffer fast path plus
+  a stack-local `ibv_sglist_t` for the multi-buffer path; `get_sglist()` is gone.
 - Compare IBV RDMA-on-Asio one-SGE results against `perftest` for send, write,
   and read. `perftest` remains the native IBV baseline; this repo should not add
-  a separate native IBV benchmark unless a later plan justifies it.
+  a separate native IBV benchmark unless a later plan justifies it. (Covered by
+  the `asio_perftest` comparison matrix; see `tests/benchmark` README.)
 - Capture before/after flame graphs for small-message IBV read/write if SGE
   construction remains visible after the no-TLS and inline-storage changes.
+  (Optional; not required for correctness acceptance.)
 
 IBV acceptance is intentionally stricter than "it compiles": the no-TLS design
 must be validated under real post/completion traffic, because the whole point of
 this refactor is to prove that per-call SGE descriptors are enough for both ND
-and IBV.
+and IBV. This is now met on Linux -- the heap-spill SGL (9 > inline 8) round-trips
+intact over RoCE for all four verbs (send, recv, read, write).
+
+A note on the SGE-count limit: the effective `max_send_sge_` / `max_recv_sge_`
+auto-derive to `min(device_cap, 4)` (`ibv_config_derive.hpp`), so reaching the
+9-SGE heap-spill path on the wire requires `use_device` with an explicit
+`max_*_sge_ >= 9` (phases 3 and 4 set it to 9). Multi-SGE work above the
+small default is opt-in via config, not the default.
 
 ## Thread-Local Review
 

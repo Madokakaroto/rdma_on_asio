@@ -18,6 +18,18 @@
 //     error -- no raw HW EINVAL, no hang), and the connection stays usable (a
 //     subsequent single-segment send/echo still round-trips).
 //
+//   Phase 3 -- 9-segment gather/scatter heap spill (send/recv):
+//     a 9-segment SGL exceeds small_sglist's inline_count (8), so the native SGE
+//     list spills to a heap buffer. This exercises the no-TLS heap-spill path on
+//     the wire (unit tests only cover the logic) for both gather-send and
+//     scatter-recv. Requires max_*_sge_ >= 9 (the default derives to 4).
+//
+//   Phase 4 -- 9-segment heap spill (one-sided read/write):
+//     the one-sided counterpart to Phase 3 -- a 9-SGE RDMA read (scatter) and a
+//     9-SGE RDMA write (gather) against a remote MR. do_post_read/write share the
+//     same build_native_sglist + small_sglist machinery as send/recv, so this
+//     validates the heap-spill SGL for the one-sided verbs too.
+//
 // Usage: test_rdma_sgl <roce-ip> [port]   (skips if no arg).
 #include <array>
 #include <atomic>
@@ -237,6 +249,246 @@ bool phase_too_many_sge(rdma::rdma_device_ptr const& device,
   return ok;
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3: 9-segment gather/scatter -- exceeds small_sglist inline_count (8), so
+// the native SGE list spills to heap. Unit tests cover the heap-spill logic; this
+// exercises it on the wire (RoCE) in both gather-send and scatter-recv. The
+// read/write multi-SGE paths share the same build_native_sglist + small_sglist
+// machinery (do_post_read/write differ only in opcode + remote address), so this
+// + the Phase 4 single-buffer read/write perftest runs cover them.
+// ---------------------------------------------------------------------------
+bool phase_heap_spill(rdma::rdma_device_ptr const& device, std::string const& ip,
+                      uint16_t port) {
+  asio::io_context io;
+  // The effective max_*_sge defaults to min(device_cap, 4); raise it so a
+  // 9-segment SGL (> small_sglist inline_count 8) is accepted and actually
+  // posts -- this is what exercises the heap-spill path on the wire.
+  rdma::rdma_config_t cfg{};
+  cfg.max_send_sge_ = 9;
+  cfg.max_recv_sge_ = 9;
+  rdma::use_device(io, device, cfg);
+
+  rdma::rdma_listener<tcp> lis(io);
+  lis.open(tcp::v4());
+  lis.bind(port);
+  lis.listen();
+
+  bool ok = false;
+  std::atomic<int> remaining{2};
+  auto on_done = [&](std::exception_ptr) {
+    if (--remaining == 0) io.stop();
+  };
+
+  asio::co_spawn(io, server_echo_once(io, device, lis), on_done);
+
+  asio::co_spawn(
+      io,
+      [&]() -> asio::awaitable<void> {
+        rdma::rdma_connector<tcp> conn(io);
+        conn.open(tcp::v4());
+        rdma::rdma_queue_pair qp(io);
+        tcp::endpoint ep(asio::ip::make_address(ip), port);
+        std::string cli_pd = "c";
+        auto [ecc, rpn] = co_await conn.async_connect(
+            qp, ep, asio::buffer(cli_pd), asio::mutable_buffer{}, nothrow);
+        if (ecc) co_return;
+
+        // 9 contiguous segments (> inline_count 8) -> the SGE list spills to heap.
+        constexpr std::size_t kSeg = 9;
+        constexpr std::size_t kSegLen = 4;
+        constexpr std::size_t kTotal = kSeg * kSegLen;  // 36 bytes
+        std::array<char, 64> src{};
+        for (std::size_t i = 0; i < kTotal; ++i) {
+          src[i] = static_cast<char>('A' + (i % 26));
+        }
+        rdma::rdma_memory_region mr_src(device, src.data(), src.size());
+
+        std::vector<rdma::rdma_const_buffer> gather;
+        for (std::size_t i = 0; i < kSeg; ++i) {
+          gather.push_back(mr_src.cslice(i * kSegLen, kSegLen));
+        }
+        auto [es, sn] = co_await qp.async_send(gather, nothrow);
+        if (es || sn != kTotal) {
+          std::cerr << "[phase3] 9-SGE gather-send failed: ec='" << es.message()
+                    << "' sn=" << sn << " (expect " << kTotal << ")\n";
+          conn.disconnect();
+          co_return;
+        }
+
+        std::array<char, 64> dst{};
+        rdma::rdma_memory_region mr_dst(device, dst.data(), dst.size());
+        std::vector<rdma::rdma_mutable_buffer> scatter;
+        for (std::size_t i = 0; i < kSeg; ++i) {
+          scatter.push_back(rdma::buffer(mr_dst, i * kSegLen, kSegLen));
+        }
+        auto [er, rn] = co_await qp.async_recv(scatter, nothrow);
+        if (er || rn != kTotal) {
+          std::cerr << "[phase3] 9-SGE scatter-recv failed: ec='" << er.message()
+                    << "' rn=" << rn << "\n";
+          conn.disconnect();
+          co_return;
+        }
+
+        ok = std::memcmp(src.data(), dst.data(), kTotal) == 0;
+        if (!ok) {
+          std::cerr << "[phase3] 9-SGE heap-spill round-trip mismatch\n";
+        }
+        conn.disconnect();
+      },
+      on_done);
+
+  io.run();
+
+  if (ok) {
+    std::cout << "[PASS] phase 3: 9-SGE gather/scatter (heap spill > inline 8) "
+                 "round-trips intact\n";
+  } else {
+    std::cerr << "[FAIL] phase 3: 9-SGE heap-spill round-trip\n";
+  }
+  return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: 9-segment (heap-spill) RDMA write + read against a remote MR. This is
+// the one-sided counterpart to Phase 3: do_post_read/do_post_write share the
+// exact same build_native_sglist + small_sglist machinery as send/recv (they
+// differ only in opcode + remote address), so this validates the heap-spill SGL
+// on the wire for the one-sided verbs too. Single-process loopback: the client
+// reads the server MR's remote_addr directly (shared variable, no wire exchange).
+// ---------------------------------------------------------------------------
+bool phase_rw_heap_spill(rdma::rdma_device_ptr const& device,
+                         std::string const& ip, uint16_t port) {
+  asio::io_context io;
+  rdma::rdma_config_t cfg{};
+  cfg.max_send_sge_ = 9;  // RDMA read/write use the send SGL
+  cfg.max_recv_sge_ = 9;
+  rdma::use_device(io, device, cfg);
+
+  rdma::rdma_listener<tcp> lis(io);
+  lis.open(tcp::v4());
+  lis.bind(port);
+  lis.listen();
+
+  constexpr std::size_t kSeg = 9;
+  constexpr std::size_t kSegLen = 4;
+  constexpr std::size_t kTotal = kSeg * kSegLen;  // 36 bytes
+  constexpr std::size_t kWriteOff = 128;
+
+  // Server MR: known readable pattern at [0, kTotal); the client RDMA-writes
+  // into [kWriteOff, kWriteOff + kTotal).
+  std::array<char, 256> srv_storage{};
+  for (std::size_t i = 0; i < kTotal; ++i) {
+    srv_storage[i] = static_cast<char>('a' + (i % 26));
+  }
+  rdma::rdma_memory_region srv_mr(device, srv_storage.data(), srv_storage.size());
+  auto const read_remote = srv_mr.remote_addr(std::size_t{0}, kTotal);
+  auto const write_remote = srv_mr.remote_addr(kWriteOff, kTotal);
+
+  bool read_ok = false, write_ok = false;
+  std::atomic<int> remaining{2};
+  auto on_done = [&](std::exception_ptr) {
+    if (--remaining == 0) io.stop();
+  };
+
+  asio::co_spawn(
+      io,
+      [&]() -> asio::awaitable<void> {
+        auto [ecg, conn, rqn] =
+            co_await lis.async_get_connection(asio::mutable_buffer{}, nothrow);
+        if (ecg) co_return;
+        rdma::rdma_queue_pair qp(io);
+        auto [eca] = co_await conn.async_accept(qp, asio::const_buffer{},
+                                                nothrow);
+        if (eca) co_return;
+
+        // One control byte signals "client write complete" -> verify the write.
+        std::array<char, 1> ctrl{};
+        rdma::rdma_memory_region ctrl_mr(device, ctrl.data(), ctrl.size());
+        auto [er, n] =
+            co_await qp.async_recv(ctrl_mr.slice(std::size_t{0}, ctrl.size()),
+                                   nothrow);
+        write_ok = !er && n == 1;
+        for (std::size_t i = 0; i < kTotal && write_ok; ++i) {
+          write_ok = srv_storage[kWriteOff + i] ==
+                     static_cast<char>('A' + (i % 26));
+        }
+        if (!write_ok) {
+          std::cerr << "[phase4] server write verification failed: ec='"
+                    << er.message() << "' n=" << n << "\n";
+        }
+        co_await conn.async_wait_disconnect(nothrow);
+      },
+      on_done);
+
+  asio::co_spawn(
+      io,
+      [&]() -> asio::awaitable<void> {
+        rdma::rdma_connector<tcp> conn(io);
+        conn.open(tcp::v4());
+        rdma::rdma_queue_pair qp(io);
+        tcp::endpoint ep(asio::ip::make_address(ip), port);
+        auto [ecc, rpn] = co_await conn.async_connect(
+            qp, ep, asio::const_buffer{}, asio::mutable_buffer{}, nothrow);
+        if (ecc) co_return;
+
+        std::array<char, 256> cli_storage{};
+        rdma::rdma_memory_region cli_mr(device, cli_storage.data(),
+                                        cli_storage.size());
+
+        // RDMA READ into 9 scatter SGEs (heap spill) <- contiguous remote region.
+        std::vector<rdma::rdma_mutable_buffer> scatter;
+        for (std::size_t i = 0; i < kSeg; ++i) {
+          scatter.push_back(rdma::buffer(cli_mr, i * kSegLen, kSegLen));
+        }
+        auto [erd, rdn] = co_await qp.async_read(scatter, read_remote, nothrow);
+        read_ok = !erd && rdn == kTotal;
+        for (std::size_t i = 0; i < kTotal && read_ok; ++i) {
+          read_ok = cli_storage[i] == static_cast<char>('a' + (i % 26));
+        }
+        if (!read_ok) {
+          std::cerr << "[phase4] 9-SGE read failed: ec='" << erd.message()
+                    << "' rn=" << rdn << "\n";
+          conn.disconnect();
+          co_return;
+        }
+
+        // RDMA WRITE from 9 gather SGEs (heap spill) -> contiguous remote region.
+        for (std::size_t i = 0; i < kTotal; ++i) {
+          cli_storage[64 + i] = static_cast<char>('A' + (i % 26));
+        }
+        std::vector<rdma::rdma_const_buffer> gather;
+        for (std::size_t i = 0; i < kSeg; ++i) {
+          gather.push_back(cli_mr.cslice(64 + i * kSegLen, kSegLen));
+        }
+        auto [ewr, wrn] = co_await qp.async_write(gather, write_remote, nothrow);
+        if (ewr || wrn != kTotal) {
+          std::cerr << "[phase4] 9-SGE write failed: ec='" << ewr.message()
+                    << "' wn=" << wrn << "\n";
+          conn.disconnect();
+          co_return;
+        }
+
+        // Signal the server that the write landed (1-byte control send).
+        cli_storage[200] = '!';
+        co_await qp.async_send(cli_mr.cslice(std::size_t{200}, std::size_t{1}),
+                               nothrow);
+        conn.disconnect();
+      },
+      on_done);
+
+  io.run();
+
+  bool const ok = read_ok && write_ok;
+  if (ok) {
+    std::cout << "[PASS] phase 4: 9-SGE RDMA read + write (heap spill > inline 8) "
+                 "round-trips intact\n";
+  } else {
+    std::cerr << "[FAIL] phase 4: read_ok=" << read_ok
+              << " write_ok=" << write_ok << "\n";
+  }
+  return ok;
+}
+
 int main(int argc, char* argv[]) {
   if (argc < 2) {
     std::cout << "[SKIP] usage: " << argv[0] << " <roce-ip> [port] "
@@ -252,6 +504,8 @@ int main(int argc, char* argv[]) {
     bool ok = true;
     ok &= phase_gather_scatter(device, ip, port);
     ok &= phase_too_many_sge(device, ip, static_cast<uint16_t>(port + 1));
+    ok &= phase_heap_spill(device, ip, static_cast<uint16_t>(port + 2));
+    ok &= phase_rw_heap_spill(device, ip, static_cast<uint16_t>(port + 3));
 
     if (ok) {
       std::cout << "\nAll rdma scatter/gather tests passed.\n";
