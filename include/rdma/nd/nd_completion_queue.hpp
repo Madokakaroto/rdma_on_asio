@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include "asio/detail/mutex.hpp"
 #include "asio/detail/op_queue.hpp"
 #include "rdma/nd/nd_types.hpp"
@@ -26,6 +28,9 @@ public:
     asio::error_code ec;
 
     effective_config_ = detail::derive_effective_config(config, device->info_);
+    wc_buf_.resize(effective_config_.cq_poll_batch_
+                       ? effective_config_.cq_poll_batch_
+                       : detail::default_cq_poll_batch);
 
     handle_.reset(
         detail::create_overlapped_file(device->adapter_.Get(), ec));
@@ -66,10 +71,10 @@ public:
     std::size_t total = drain_ready();
     ULONG retrieved = 0;
     do {
-      std::array<detail::native_wc_t, 16> results{};
-      retrieved = detail::verbs_ops::poll_cq(cq_.Get(), results);
+      retrieved = detail::verbs_ops::poll_cq(
+          cq_.Get(), wc_buf_.data(), static_cast<size_type>(wc_buf_.size()));
       for (ULONG i = 0; i < retrieved; ++i) {
-        dispatch_completion(this, results[i]);
+        dispatch_completion(this, wc_buf_[i]);
       }
       total += retrieved;
     } while (retrieved != 0);
@@ -156,6 +161,7 @@ private:
   nd_config_t effective_config_{};
   detail::nd2_completion_queue_ptr cq_;
   detail::unique_handle_t handle_;
+  std::vector<detail::native_wc_t> wc_buf_;
   mutable asio::detail::mutex mutex_;
   asio::detail::op_queue<detail::rdma_verbs_op_base> ready_;
 };

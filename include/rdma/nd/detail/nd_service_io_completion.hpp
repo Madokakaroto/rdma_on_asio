@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <ranges>
+#include <vector>
 
 #include "asio/detail/config.hpp"
 #include "asio/detail/handler_alloc_helpers.hpp"
@@ -11,6 +12,7 @@
 #include "asio/detail/win_iocp_io_context.hpp"
 #include "rdma/nd/nd_types.hpp"
 #include "rdma/nd/nd_error.hpp"
+#include "rdma/nd/detail/nd_config_derive.hpp"
 #include "rdma/nd/detail/nd_impl_types.hpp"
 #include "rdma/nd/detail/nd_device_impl.hpp"
 #include "rdma/nd/detail/nd_op_base.hpp"
@@ -54,7 +56,7 @@ public:
   // Create the shared CQ + overlapped handle on the IOCP scheduler. The device is
   // used transiently for its adapter (not stored); cqe is the derived CQ depth.
   void initialize(nd_adapter_ptr const& device, std::uint32_t cqe,
-                  asio::error_code& ec) {
+                  std::uint32_t poll_batch, asio::error_code& ec) {
     if (cq_) {
       ec = rdma_errc::already_registered;
       ASIO_ERROR_LOCATION(ec);
@@ -92,6 +94,7 @@ public:
       ASIO_ERROR_LOCATION(ec);
       return;
     }
+    wc_buf_.resize(poll_batch ? poll_batch : default_cq_poll_batch);
   }
 
   native_cq_t* get_cq() const noexcept { return cq_.Get(); }
@@ -105,8 +108,6 @@ public:
   }
 
 private:
-  static constexpr std::size_t poll_wcs_count = 16;
-
   // Single-in-flight, self-perpetuating CQ poller. Each cycle uses a fresh IOCP
   // overlapped op (allocated in arm_poller), so only one is ever outstanding --
   // GetResults is serialized. On completion it drains+dispatches the CQ and
@@ -164,9 +165,9 @@ private:
     asio::detail::op_queue<rdma_verbs_op_base> ops;
     ULONG n = 0;
     do {
-      std::array<native_wc_t, poll_wcs_count> results{};
-      n = verbs_ops::poll_cq(cq_.Get(), results);
-      std::ranges::for_each_n(results.begin(), n, [&](auto const& wc) {
+      n = verbs_ops::poll_cq(
+          cq_.Get(), wc_buf_.data(), static_cast<size_type>(wc_buf_.size()));
+      std::ranges::for_each_n(wc_buf_.begin(), n, [&](auto const& wc) {
         ops.push(resolve_wc(wc));
       });
     } while (n != 0);
@@ -202,6 +203,7 @@ private:
   asio::detail::win_iocp_io_context& scheduler_;
   nd2_completion_queue_ptr cq_;
   unique_handle_t cq_handle_;
+  std::vector<native_wc_t> wc_buf_;
   std::atomic<bool> poller_started_{false};
 };
 

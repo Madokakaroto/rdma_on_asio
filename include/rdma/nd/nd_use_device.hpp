@@ -30,7 +30,7 @@ inline void use_device(asio::io_context& io_ctx, nd_device_ptr const& device,
   auto const effective = detail::derive_effective_config(config, device->info_);
   // Initialize the CQ/notify service first; register the device only on success.
   auto& io_svc = asio::use_service<detail::nd_io_completion_service>(io_ctx);
-  io_svc.initialize(device, effective.cqe_, ec);
+  io_svc.initialize(device, effective.cqe_, effective.cq_poll_batch_, ec);
   if (ec) {
     return;
   }

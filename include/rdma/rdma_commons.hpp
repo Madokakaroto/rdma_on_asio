@@ -43,11 +43,13 @@ struct rdma_config_t {
   std::uint32_t inbound_read_limit_ = 0;  // 0 = device default
   std::uint32_t outbound_read_limit_ = 0; // 0 = device default
   // RNR (receiver-not-ready) handling. These are not 0=auto-derive: they are the
-  // operating defaults directly. rnr_retry_ -> rdma_conn_param.rnr_retry_count
-  // (7 = infinite). min_rnr_timer_ is the 5-bit RNR NAK timer code (12 = 0.64 ms);
-  // rdma_cm does not expose it, so it is applied via ibv_modify_qp once the QP is
-  // RTS. (rdma_cm's own default is code 0 == ~655 ms, which stalls senders on a
-  // receive-window underrun.)
+  // operating defaults directly. ibv: rnr_retry_ ->
+  // rdma_conn_param.rnr_retry_count (7 = infinite), and min_rnr_timer_ is the
+  // 5-bit RNR NAK timer code (12 = 0.64 ms) applied via ibv_modify_qp once the
+  // QP is RTS. (rdma_cm's own default is code 0 == ~655 ms, which stalls senders
+  // on a receive-window underrun.) nd: NetworkDirect does not expose RNR retry or
+  // timer knobs; the provider owns equivalent behavior internally and these
+  // fields are ignored.
   std::uint8_t rnr_retry_ = 7;
   std::uint8_t min_rnr_timer_ = 12;
   // CM address/route resolution timeout (ms). 0 = default_cm_resolve_timeout_ms.

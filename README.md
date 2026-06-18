@@ -297,11 +297,13 @@ Observations:
   cycle counters). The earlier 64 B - 128 KiB sweep showed both paths reaching ~90-96 Gbit/s at
   large messages.
 
-### Windows (`nd` backend)
+### Windows (`nd` backend) -- RDMA-on-Asio vs native NetworkDirect
 
-The 2026-06-15 measurements were collected on a single Windows host using the NetworkDirect
-backend and same-process loopback. They are useful as local engineering and regression signals,
-not as final cross-machine line-rate claims.
+Collected 2026-06-18 with `tests/benchmark/tools/run_nd_comparison.ps1`, which runs
+`asio_perftest` and `nd_perftest` over the same scenario set. The sweep uses single-host
+same-process loopback, 64 outstanding WRs, 20000 measured iterations, and 128 warmup iterations.
+These numbers are local engineering / regression signals, not final cross-machine line-rate
+claims.
 
 Test environment:
 
@@ -314,44 +316,45 @@ Test environment:
 | Total tested RDMA link bandwidth | 100 Gbit/s |
 | OS/backend | Windows + NetworkDirect (`nd`) |
 | Topology | Single host, same-process loopback |
-| Build | Release, plus RelWithDebInfo for CPU sampling/flame graphs |
+| Build | Release |
+| Comparison baseline | direct ND2 API via `nd_perftest` (`baseline=native_nd`, poll mode only) |
 
-Send/recv bandwidth summary from the stable schedule comparison:
+Native ND is intentionally poll-only. Event-mode rows therefore measure RDMA-on-Asio scheduler
+integration only; the native event baseline returns an explicit skip.
 
-| Path | 64 B | 4 KiB | 64 KiB | 128 KiB | Best in sweep |
-|---|---:|---:|---:|---:|---:|
-| RDMA-on-Asio / event callback | 0.561 Gbit/s | 43.840 Gbit/s | 90.801 Gbit/s | 92.797 Gbit/s | 92.797 Gbit/s |
-| RDMA-on-Asio / poll callback | 0.950 Gbit/s | 50.873 Gbit/s | 93.209 Gbit/s | 91.979 Gbit/s | 93.209 Gbit/s |
-| Native ND / poll | 0.975 Gbit/s | 57.003 Gbit/s | 91.201 Gbit/s | 90.101 Gbit/s | 91.201 Gbit/s |
-
-The dedicated send/recv poll/callback run also reached `93.172 Gbit/s` at `128 KiB`, while the
-native ND direct run reached `92.979 Gbit/s` at the same size. In this single-host setup,
-large-message send/recv is therefore close to the reported 100G link rate on both the portable
-RDMA-on-Asio path and the native ND poll baseline.
-
-RDMA write bandwidth summary:
+Send/recv bandwidth (Gbit/s):
 
 | Path | 64 B | 4 KiB | 64 KiB | 128 KiB | Best in sweep |
 |---|---:|---:|---:|---:|---:|
-| RDMA-on-Asio / event callback | 0.635 Gbit/s | 44.024 Gbit/s | 91.681 Gbit/s | 91.905 Gbit/s | 91.905 Gbit/s |
-| RDMA-on-Asio / poll `use_future` | 0.209 Gbit/s | 13.720 Gbit/s | 92.170 Gbit/s | 92.946 Gbit/s | 92.946 Gbit/s |
-| Native ND / poll | 1.086 Gbit/s | 71.165 Gbit/s | 89.088 Gbit/s | 89.470 Gbit/s | 89.470 Gbit/s |
+| RDMA-on-Asio / event callback | 0.406 | 27.513 | 88.682 | 90.857 | 90.857 |
+| RDMA-on-Asio / poll callback | 0.760 | 50.633 | 91.515 | 92.846 | 92.846 |
+| Native ND / poll | 0.875 | 52.704 | 88.807 | 90.493 | 90.493 |
 
-The current RDMA-on-Asio poll read/write benchmark uses `as_tuple(use_future)`, so its small and
-medium-message numbers include promise/future allocation, heap traffic, and locking. A fairer
-poll/callback read/write benchmark is planned before drawing final wrapper-overhead conclusions.
-
-RDMA read bandwidth summary:
+RDMA write bandwidth (Gbit/s):
 
 | Path | 64 B | 4 KiB | 64 KiB | 128 KiB | Best in sweep |
 |---|---:|---:|---:|---:|---:|
-| RDMA-on-Asio / event callback | 0.609 Gbit/s | 7.357 Gbit/s | 8.469 Gbit/s | 8.600 Gbit/s | 8.600 Gbit/s |
-| RDMA-on-Asio / poll `use_future` | 0.184 Gbit/s | 5.938 Gbit/s | 8.440 Gbit/s | 8.650 Gbit/s | 8.650 Gbit/s |
-| Native ND / poll | 0.904 Gbit/s | 8.168 Gbit/s | 8.861 Gbit/s | 8.811 Gbit/s | 8.929 Gbit/s |
+| RDMA-on-Asio / event callback | 0.507 | 38.184 | 89.206 | 84.474 | 89.206 |
+| RDMA-on-Asio / poll `use_future` | 0.237 | 15.295 | 92.548 | 89.670 | 92.548 |
+| Native ND / poll | 0.842 | 65.233 | 91.051 | 85.462 | 91.051 |
 
-RDMA read plateaus around `8-9 Gbit/s` for all three paths on this machine. That makes the
-large-message read result look provider/platform/operation limited in the current single-host
-NetworkDirect setup, while small-message read still needs cleaner callback-token profiling.
+RDMA read bandwidth (Gbit/s):
+
+| Path | 64 B | 4 KiB | 64 KiB | 128 KiB | Best in sweep |
+|---|---:|---:|---:|---:|---:|
+| RDMA-on-Asio / event callback | 0.505 | 36.352 | 61.953 | 61.025 | 61.953 |
+| RDMA-on-Asio / poll `use_future` | 0.498 | 13.224 | 61.887 | 61.016 | 61.887 |
+| Native ND / poll | 1.009 | 56.645 | 62.076 | 61.198 | 62.076 |
+
+Observations:
+
+- Large-message send/recv and write remain close to the 100G link on both RDMA-on-Asio and native
+  ND poll paths.
+- The 2026-06-18 read sweep supersedes the older 8-9 Gbit/s single-host read snapshot: current
+  RDMA read reaches about 61-62 Gbit/s on both RDMA-on-Asio and native ND for 64 KiB+ messages.
+- RDMA-on-Asio poll read/write still use `as_tuple(use_future)`, so small and medium-message
+  numbers include promise/future allocation, heap traffic, and locking. The remaining fair
+  comparison task is a poll/callback read/write path.
 
 Next performance work:
 
@@ -362,13 +365,9 @@ Next performance work:
   no `std::distance()`, no repeated buffer scans, and no avoidable sglist resize.
 - Measure custom associated allocators and operation recycling for small-message hot paths while
   preserving standard Asio async completion semantics.
-- Keep `async_read` / `async_write` completion semantics intact. If a lower-overhead expert path
-  is still justified, design it separately as `post_read` / `post_write` with explicit CQ polling
-  and user-managed lifetime.
 - Continue event-mode tuning by measuring CQ drain batch sizes and re-arm frequency.
-- Done (2026-06-16): single-host Linux/`ibv` comparison against `perftest` (`ib_send_bw`,
-  `ib_write_bw`, `ib_read_bw`) -- see the Linux table above. Extend to a multi-host (two-box)
-  comparison when matching hardware on both ends is available.
+- Extend the Linux and Windows comparisons to real multi-host runs when matching hardware on both
+  ends is available.
 
 ## Requirements
 

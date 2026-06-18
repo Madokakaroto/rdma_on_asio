@@ -115,10 +115,14 @@ inline size_type poll_cq(native_cq_t* cq, native_wc_t& wc) {
   assert(cq);
   return cq->GetResults(&wc, 1);
 }
+inline size_type poll_cq(native_cq_t* cq, native_wc_t* wcs, size_type count) {
+  assert(cq);
+  assert(wcs || count == 0);
+  return cq->GetResults(wcs, count);
+}
 template <size_t Num>
 inline size_type poll_cq(native_cq_t* cq, std::array<native_wc_t, Num>& wcs) {
-  assert(cq);
-  return cq->GetResults(wcs.data(), static_cast<size_type>(Num));
+  return poll_cq(cq, wcs.data(), static_cast<size_type>(Num));
 }
 
 /// qp ops

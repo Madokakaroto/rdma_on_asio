@@ -190,23 +190,47 @@ if(RDMA_BUILD_STRESS_TESTS)
   endif()
 endif()
 
-if(RDMA_BUILD_NATIVE_BASELINES)
-  rdma_add_benchmark(native_nd_send_recv_bench
-                     ${CMAKE_SOURCE_DIR}/tests/native/nd/native_nd_baseline.cpp)
-  rdma_add_benchmark(native_nd_read_write_bench
-                     ${CMAKE_SOURCE_DIR}/tests/native/nd/native_nd_baseline.cpp)
+if(RDMA_BUILD_NATIVE_BASELINES AND RDMA_BACKEND STREQUAL "nd")
+  set(ND_PERFTEST_SOURCE ${CMAKE_SOURCE_DIR}/tests/benchmark/native/nd/nd_perftest.cpp)
+  configure_file(
+      ${CMAKE_SOURCE_DIR}/tests/benchmark/tools/run_nd_comparison.ps1
+      ${CMAKE_CURRENT_BINARY_DIR}/run_nd_comparison.ps1
+      COPYONLY)
+
+  function(rdma_add_nd_perftest name)
+    add_executable(${name} ${ND_PERFTEST_SOURCE})
+    rdma_configure_benchmark_target(${name})
+  endfunction()
+
+  function(rdma_add_nd_perftest_entry name operation metric)
+    rdma_add_nd_perftest(${name})
+    target_compile_definitions(${name} PRIVATE
+        ND_PERFTEST_PRESET_OPERATION="${operation}"
+        ND_PERFTEST_PRESET_METRIC="${metric}")
+  endfunction()
+
+  rdma_add_nd_perftest(nd_perftest)
+  rdma_add_nd_perftest_entry(nd_send_bw   send_recv bandwidth)
+  rdma_add_nd_perftest_entry(nd_send_lat  send_recv latency)
+  rdma_add_nd_perftest_entry(nd_write_bw  write     bandwidth)
+  rdma_add_nd_perftest_entry(nd_write_lat write     latency)
+  rdma_add_nd_perftest_entry(nd_read_bw   read      bandwidth)
+  rdma_add_nd_perftest_entry(nd_read_lat  read      latency)
+
+  # Compatibility binaries for one transition cycle. New tooling should use
+  # nd_perftest or the nd_{send,read,write}_{bw,lat} entrypoints.
+  rdma_add_nd_perftest(native_nd_send_recv_bench)
+  rdma_add_nd_perftest(native_nd_read_write_bench)
 
   if(RDMA_ENABLE_HARDWARE_TESTS AND RDMA_TEST_ADDR)
     math(EXPR RDMA_NATIVE_ND_PORT "${RDMA_TEST_BASE_PORT} + 500")
     math(EXPR RDMA_NATIVE_ND_WRITE_PORT "${RDMA_TEST_BASE_PORT} + 510")
     math(EXPR RDMA_NATIVE_ND_READ_PORT "${RDMA_TEST_BASE_PORT} + 520")
     add_test(NAME baseline_native_nd_send_recv_smoke
-             COMMAND native_nd_send_recv_bench
+             COMMAND nd_send_bw
                      --single-process
                      --local-addr ${RDMA_TEST_ADDR}
                      --port ${RDMA_NATIVE_ND_PORT}
-                     --operation send_recv
-                     --metric bandwidth
                      --mode poll
                      --topology single_host_same_process
                      --message-size 64
@@ -216,12 +240,10 @@ if(RDMA_BUILD_NATIVE_BASELINES)
         PROPERTIES LABELS "baseline;native_nd;nd;hardware;manual" TIMEOUT 30)
 
     add_test(NAME baseline_native_nd_write_smoke
-             COMMAND native_nd_read_write_bench
+             COMMAND nd_write_bw
                      --single-process
                      --local-addr ${RDMA_TEST_ADDR}
                      --port ${RDMA_NATIVE_ND_WRITE_PORT}
-                     --operation write
-                     --metric bandwidth
                      --mode poll
                      --topology single_host_same_process
                      --message-size 64
@@ -231,12 +253,10 @@ if(RDMA_BUILD_NATIVE_BASELINES)
         PROPERTIES LABELS "baseline;native_nd;nd;hardware;manual" TIMEOUT 30)
 
     add_test(NAME baseline_native_nd_read_smoke
-             COMMAND native_nd_read_write_bench
+             COMMAND nd_read_bw
                      --single-process
                      --local-addr ${RDMA_TEST_ADDR}
                      --port ${RDMA_NATIVE_ND_READ_PORT}
-                     --operation read
-                     --metric bandwidth
                      --mode poll
                      --topology single_host_same_process
                      --message-size 64

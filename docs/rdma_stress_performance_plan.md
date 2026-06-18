@@ -2,9 +2,10 @@
 
 A separate, hardware-only, opt-in suite for: stress-testing the RDMA-on-Asio
 state machines under concurrency; measuring send/recv and RDMA read/write
-throughput and latency; and comparing against `linux-rdma/perftest` (IBV) and a
-native NetworkDirect baseline (ND). Kept apart from `unit_test_plan.md`, which
-owns small, deterministic correctness tests.
+throughput and latency; and comparing against `linux-rdma/perftest` (IBV). Kept
+apart from `unit_test_plan.md`, which owns small, deterministic correctness tests.
+Native NetworkDirect performance work is tracked separately in
+`docs/nd_perftest_plan.md`.
 
 The measurement tool is **`asio_perftest`** -- a benchmark project built as a
 deliberate mirror of perftest (same CLI, same run/verbs-driving structure) that
@@ -21,7 +22,7 @@ the abstraction's cost against an industry-standard baseline (see
 - **This plan owns stability and measurement signals**: multi-thread shared-CQ
   stress, multi-QP over one event-mode CQ, connect/disconnect soak, send/recv and
   read/write bandwidth + latency, poll-vs-event comparison, and RDMA-on-Asio vs
-  perftest / native-ND comparison.
+  perftest comparison.
 
 ## Library Capability Prerequisites
 
@@ -54,13 +55,13 @@ re-baseline rather than comparing across the API change.
 Switches (all default OFF; added when the first program in each group lands):
 
 - `RDMA_BUILD_STRESS_TESTS`, `RDMA_BUILD_PERFORMANCE_TESTS`,
-  `RDMA_BUILD_NATIVE_BASELINES`, `RDMA_ENABLE_PERFTEST_BASELINE`,
+  `RDMA_ENABLE_PERFTEST_BASELINE`,
   `RDMA_BUILD_PERFTEST`, `RDMA_ENABLE_HARDWARE_TESTS` (outer hardware gate).
 - `RDMA_PERFTEST_MODE=system` (when baseline enabled), `RDMA_PERFTEST_BIN_DIR`,
   `RDMA_TEST_ADDR`, `RDMA_TEST_PEER_ADDR`, `RDMA_TEST_BASE_PORT`.
 
 CTest labels: `stress`, `performance`, `latency`, `baseline`, `hardware`,
-`manual`, and backend scope `nd` / `ibv` / `rdma`. **Default `ctest` must not run
+`manual`, and backend scope `ibv` / `rdma`. **Default `ctest` must not run
 stress/performance/latency** -- they are explicitly selected
 (`ctest -L "performance|latency"`, `ctest -L stress`). Use Release for numbers;
 Debug only for stress correctness / sanitizers.
@@ -70,7 +71,6 @@ Current layout (create a directory only when its first real program lands):
 ```text
 tests/
   stress/rdma/        shared_cq.cpp, connect_disconnect_soak.cpp   (stability/race, not perf)
-  native/nd/          native_nd_baseline.cpp
   benchmark/          -- the asio_perftest project (all of it):
     rdma_bench_common.hpp, asio_perftest_core.hpp, asio_perftest_clock.hpp
     asio_perftest.cpp                  (dispatch + cli_main)
@@ -105,8 +105,8 @@ Three modes:
 - `managed`: build a project-managed checkout only when `RDMA_BUILD_PERFTEST=ON`.
 
 Ownership boundary: RDMA-on-Asio tools measure this library; perftest measures
-direct verbs; comparison tooling normalizes and compares. On Windows, perftest
-normally probes as unavailable -> use the native ND baseline instead.
+direct verbs; comparison tooling normalizes and compares. Windows NetworkDirect
+native comparison is outside this plan; see `docs/nd_perftest_plan.md`.
 
 **Decision: system install is the default; a pinned submodule is the opt-in
 `managed` mode only.**
@@ -121,10 +121,8 @@ A submodule's only edge is version pinning, better served by **recording the
 perftest version/commit in result metadata** than by vendoring a GPL autotools
 tree the library never links. Hence `system` -> `external` -> `managed`.
 
-**No native IBV baseline.** A native (raw-verbs) baseline exists only where no
-authoritative external one does. perftest *is* the IBV verbs baseline, so the repo
-must not add `tests/native/ibv/`. The native ND baseline exists solely because
-Windows NetworkDirect has no perftest equivalent.
+**No native IBV baseline.** perftest *is* the IBV verbs baseline, so the repo
+must not add `tests/native/ibv/`.
 
 ### Comparison strategy
 
@@ -269,8 +267,8 @@ window = duration - 2*margin -- mirroring perftest `--margin`), `--queue-depth`,
 `--inline-size`, `--cq-mod`, `--post-list`/`--recv-post-list`, `--signaled-every`,
 `--no-peak` (perftest `-N`), `--report-gbits` (Gb/sec vs MiB/sec), `--baseline`,
 `--topology`, `--scenario`, `--json-out`, `--raw-stdout`/`--raw-stderr`. The
-parser rejects unsupported combinations explicitly (e.g. `--gid-index` is
-IBV-specific; ND tools warn in compat mode or reject in strict mode).
+parser rejects unsupported combinations explicitly (for example, backend-specific
+fabric options must not be silently ignored).
 
 ### Result schema and units
 
@@ -308,7 +306,7 @@ claim a regression from a single noisy run.
 
 ### Scenario files and suites
 
-Scenarios describe intent, not executable flags, keeping perftest / native-ND /
+Scenarios describe intent, not executable flags, keeping perftest /
 RDMA-on-Asio runs aligned (fields mirror the result schema: name, backend,
 baseline list, operation, metric, completion_mode, token_type, connection,
 message_size, queue_depth, qps, threads, iterations/duration_sec, margin_sec,
@@ -355,81 +353,12 @@ partial logs, and write a manifest (scenario, commands, pids, exit codes,
 timestamps, output paths). Multi-host can start manual (print exact per-host
 commands, collect results into one directory).
 
-Probe before large suites: IBV devices/ports/link/MTU/speed/GID, ND
-providers/adapters/addresses, perftest presence + version, loopback/dual-port
+Probe before large suites: IBV devices/ports/link/MTU/speed/GID,
+perftest presence + version, loopback/dual-port
 support, free control-plane ports. Skip policy: missing hardware/perftest,
 unsupported topology or completion mode -> `skipped`; connection failure after a
 valid probe, or watchdog timeout -> failure; perftest parser failure is a
 reporting failure but raw output is preserved.
-
-## Native ND Baseline
-
-perftest is verbs-only, so ND uses a native Windows baseline calling ND2 directly
-(no RDMA-on-Asio wrappers), in `tests/native/nd/`. This answers the Windows
-abstraction-cost question perftest cannot, and is the ND analogue of the IBV-vs-
-perftest comparison. Currently implemented (`native_nd_send_recv_bench`,
-`native_nd_read_write_bench`): polling send/recv bandwidth + ping-pong latency,
-and polling RDMA write/read bandwidth + latency, via direct ND2
-provider/adapter/PD/CQ/QP/connector/listener and MR APIs.
-
-Rules:
-
-- Share the scenario + result JSON schema and the common option parsing / raw-log
-  archiving / watchdog / report code with the RDMA-on-Asio tools; mark
-  `baseline=native_nd`, `backend=nd`; store output beside the RDMA-on-Asio run.
-- Build switches: `RDMA_BUILD_NATIVE_BASELINES` + `RDMA_ENABLE_HARDWARE_TESTS`
-  gate registration; labels `baseline;native_nd;nd;hardware;manual`.
-- Keep buffer registration, queue depth, inline size, message size, CPU placement
-  aligned with the RDMA-on-Asio ND run; setup/registration/teardown and validation
-  outside the measured window.
-- **Poll-mode only by design**: RDMA-on-Asio event mode is the event-scheduler
-  measurement; native ND IOCP/event is out of scope.
-- For RDMA r/w, exchange `rdma_remote_addr_t` via a small control message /
-  private data; validate write on the server, read on the client.
-
-This yields three comparable tracks: IBV RDMA-on-Asio vs perftest; ND
-RDMA-on-Asio vs native ND; and IBV vs ND RDMA-on-Asio as a portability/abstraction
-signal (not a hardware-equivalent comparison unless HW/link/host match).
-
-## ND backend parity (TODO for the NetworkDirect agent)
-
-The ibv backend just gained three changes; nd (Windows NetworkDirect) must follow
-to stay aligned. `rdma_config_t` is shared across backends, so the new fields
-already exist for nd -- the nd agent acts on, or explicitly documents, each.
-
-1. **CQ poll batch (`cq_poll_batch_`).** nd's `nd_config_derive.hpp` fills
-   cqe/wr/sge/inline/read_limit but not this -- add
-   `if (cq_poll_batch_ == 0) cq_poll_batch_ = 16;` (mirror ibv's
-   `default_cq_poll_batch`). Size the `IND2CompletionQueue::GetResults` result
-   array from the effective `cq_poll_batch_` in `nd_completion_queue.hpp` /
-   `nd_service_io_completion.hpp` (replace the hard-coded reap count), and pass it
-   through `nd_use_device` into the io-completion service (mirror ibv's
-   `initialize(..., poll_batch, ...)`).
-
-2. **RNR knobs (`rnr_retry_` / `min_rnr_timer_`) -- treat as ibv-only.** ibv added
-   these because rdma_cm leaves `min_rnr_timer` at its ~655 ms default, which stalls
-   send/recv on a receive-window underrun. ND2's `IND2Connector::Connect` exposes
-   inbound/outbound read limits (the `read_limit` analogue) but does **not** expose
-   an RNR NAK timer or retry count -- those are IB-verbs concepts the ND provider
-   owns internally. So nd **ignores** `rnr_retry_` / `min_rnr_timer_` (note this in
-   the `rdma_commons.hpp` field comments); do not invent an ND equivalent.
-   **Must verify**: run nd send/recv bandwidth 2-process (streaming, full receive
-   window) and confirm it does NOT stall the way ibv did before the fix -- prove
-   ND's provider defaults are sane rather than assume it (ibv hid a 655 ms pothole
-   exactly here).
-
-3. **Read-bw validation out of the measured window.** The asio_perftest verb
-   modules (`send_recv.cpp` / `read_write.cpp`) are cross-platform, so nd builds
-   inherit this fix automatically. But `tests/native/nd/native_nd_baseline.cpp` has
-   the same bug the ibv bench had: its read-bandwidth loop calls `verify_read(slot)`
-   per op inside the timed window (between `begin` and `finish_throughput`), pinning
-   read bw to the per-message memcmp rate. Move it out (validate once after the
-   timed window, as `read_write.cpp`'s `finish_success` now does).
-
-4. **Config-field consistency.** Resolve each shared field explicitly:
-   `cq_poll_batch_` -> applied to the ND CQ reap; `rnr_retry_` / `min_rnr_timer_`
-   -> documented ibv-only. Update nd's `is_config_compatible` if it range-checks
-   config fields.
 
 ## asio_perftest: Feature Parity With perftest
 
@@ -697,14 +626,6 @@ handle, no atomic ops, hard-coded `IBV_QPT_RC`). The CLI surfaces them as not-im
 `--connection` rejects non-RC at parse, and UD/atomics have no operation or entrypoint to
 invoke. Pursue them only if a future iteration grows the public API.
 
-### Stage 13 -- Align native ND baseline to perftest
-
-Bring `native_nd_baseline.cpp` onto the same `asio_perftest_core` CLI + output
-(Stages 9-10): same perftest-spelled flags, stdout table, latency stats, and
-`RDMA_BENCH_READY` handshake (poll-mode only, per the ND baseline rules). Result: a
-3-way table -- `baseline=rdma_on_asio` / `perftest` (IBV verbs) / `native_nd` (ND
-verbs) -- all sharing topology, size, queue depth, iterations, mode, address.
-
 ## Roadmap And Status
 
 **Foundation (done):** capability probe + smoke validation; the benchmark harness
@@ -717,7 +638,7 @@ bw+lat in both event and poll mode (`rdma_send_recv_bench`,
 `rdma_remote_addr_t` via private data and validates payloads); the benchmark tools
 (`capability_probe`, `perftest_commands`, `run_scenario` with `--execute` for
 single-host same-process, `compare_results`, `parse_perftest`); the concurrency
-stress + soak tests; and the native ND baseline (above).
+stress + soak tests.
 
 **Shared-CQ poller contract (Stage 4 stress -- the standing CLAUDE.md TODO).**
 `rdma_shared_cq_stress` must exercise and assert: several `run()` threads +
@@ -736,7 +657,7 @@ specific-bug regressions stay in `unit_test_plan.md`.
 
 **Reporting (Stage 6).** Raw JSON under an output dir with git/backend/build/
 compiler/OS/CPU/NIC/command-line; perftest command lines in the same dir;
-comparison tables (RDMA-on-Asio vs perftest, and vs native ND); raw stdout/stderr
+comparison tables (RDMA-on-Asio vs perftest); raw stdout/stderr
 preserved as source of truth. Performance numbers are not a CI pass/fail threshold
 until a stable dedicated runner exists -- use only sanity checks (nonzero
 throughput, all iterations completed, p99 recorded).
@@ -779,7 +700,7 @@ NIC driver/firmware/MTU/link-speed capture.
 
 - Unit/correctness tests stay separate; stress/performance/latency never run in
   default CTest; benchmark tools run as explicit client/server programs.
-- Scenario files drive RDMA-on-Asio, perftest, and native-ND runs without source
+- Scenario files drive RDMA-on-Asio and perftest runs without source
   changes; measurement semantics are defined per operation before comparing.
 - Scenario knobs are validated against real library capability: this iteration,
   inline / selective-signaling / WR-batching are **skipped via a `not_implemented`
@@ -794,8 +715,6 @@ NIC driver/firmware/MTU/link-speed capture.
   preservation make hangs diagnosable.
 - IBV has a clear perftest comparison path (send/read/write); perftest stays an
   external, unlinked, non-vendored baseline.
-- ND has a clear native direct-ND comparison path; the plan keeps RDMA-on-Asio ND
-  results distinct from native ND baseline results.
 - Single-host results (same-process and two-process) are labeled
   development/regression signals and are the validated comparison path; real
   two-box (multi-host) results carry topology/host/NIC/command-line metadata and

@@ -155,6 +155,36 @@ inline char const* metric_name(metric_kind metric) {
   return metric == metric_kind::bandwidth ? "bandwidth" : "latency";
 }
 
+inline void validate_and_normalize_options(options& opt, bool require_role) {
+  if (require_role && !opt.single_process && !opt.server && !opt.client) {
+    throw std::invalid_argument("choose --single-process, --server, or --client");
+  }
+  if (require_role && opt.client && opt.peer_addr.empty()) {
+    throw std::invalid_argument("--client requires HOST or --peer-addr");
+  }
+  if (require_role && opt.single_process && opt.local_addr.empty()) {
+    throw std::invalid_argument("--single-process requires --local-addr");
+  }
+  if (opt.message_size == 0) {
+    throw std::invalid_argument("--message-size must be greater than zero");
+  }
+  if (opt.iterations == 0) {
+    throw std::invalid_argument("--iterations must be greater than zero");
+  }
+  if (opt.queue_depth == 0) opt.queue_depth = 1;
+  // Latency is a one-outstanding ping-pong (perftest does the same). Forcing
+  // queue_depth=1 here also keeps the write-latency server (which validates
+  // queue_depth buffer slots) consistent with the single slot the client writes.
+  if (opt.metric == metric_kind::latency) opt.queue_depth = 1;
+  if (opt.mode != "event" && opt.mode != "poll") {
+    throw std::invalid_argument("unsupported --mode: " + opt.mode);
+  }
+  if (opt.token_type != "callback" && opt.token_type != "use_future" &&
+      opt.token_type != "use_awaitable") {
+    throw std::invalid_argument("unsupported --token-type: " + opt.token_type);
+  }
+}
+
 inline options parse_options(int argc, char* argv[], bool require_role = true) {
   options opt;
   for (int i = 1; i < argc; ++i) {
@@ -299,33 +329,7 @@ inline options parse_options(int argc, char* argv[], bool require_role = true) {
     }
   }
 
-  if (require_role && !opt.single_process && !opt.server && !opt.client) {
-    throw std::invalid_argument("choose --single-process, --server, or --client");
-  }
-  if (require_role && opt.client && opt.peer_addr.empty()) {
-    throw std::invalid_argument("--client requires HOST or --peer-addr");
-  }
-  if (require_role && opt.single_process && opt.local_addr.empty()) {
-    throw std::invalid_argument("--single-process requires --local-addr");
-  }
-  if (opt.message_size == 0) {
-    throw std::invalid_argument("--message-size must be greater than zero");
-  }
-  if (opt.iterations == 0) {
-    throw std::invalid_argument("--iterations must be greater than zero");
-  }
-  if (opt.queue_depth == 0) opt.queue_depth = 1;
-  // Latency is a one-outstanding ping-pong (perftest does the same). Forcing
-  // queue_depth=1 here also keeps the write-latency server (which validates
-  // queue_depth buffer slots) consistent with the single slot the client writes.
-  if (opt.metric == metric_kind::latency) opt.queue_depth = 1;
-  if (opt.mode != "event" && opt.mode != "poll") {
-    throw std::invalid_argument("unsupported --mode: " + opt.mode);
-  }
-  if (opt.token_type != "callback" && opt.token_type != "use_future" &&
-      opt.token_type != "use_awaitable") {
-    throw std::invalid_argument("unsupported --token-type: " + opt.token_type);
-  }
+  validate_and_normalize_options(opt, require_role);
   return opt;
 }
 
@@ -1112,6 +1116,11 @@ inline void apply_scenario(options& opt, std::string const& json) {
     opt.threads = static_cast<std::uint32_t>(*v);
   }
   if (auto v = json_u64_value(json, "iterations")) opt.iterations = *v;
+  if (auto v = json_double_value(json, "duration_sec")) opt.duration_sec = *v;
+  if (auto v = json_double_value(json, "margin_sec")) opt.margin_sec = *v;
+  if (auto v = json_u64_value(json, "warmup_iterations")) {
+    opt.warmup_iterations = static_cast<std::uint32_t>(*v);
+  }
   if (auto v = json_u64_value(json, "inline_size")) {
     opt.inline_size = static_cast<std::uint32_t>(*v);
   }
@@ -1134,6 +1143,7 @@ inline options parse_options_with_scenario(int argc, char* argv[],
   auto opt = parse_options(argc, argv, require_role);
   if (!opt.scenario_path.empty()) {
     apply_scenario(opt, read_text_file(opt.scenario_path));
+    validate_and_normalize_options(opt, require_role);
   }
   return opt;
 }

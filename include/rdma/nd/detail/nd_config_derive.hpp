@@ -6,6 +6,7 @@
 namespace asio::rdma::detail {
 
 inline constexpr size_type default_cqe = 4096;
+inline constexpr size_type default_cq_poll_batch = 16;
 inline constexpr size_type default_max_send_wr = 128;
 inline constexpr size_type default_max_recv_wr = 128;
 inline constexpr size_type default_max_send_sge = 4;
@@ -17,6 +18,10 @@ inline nd_config_t derive_effective_config(nd_config_t const& user_config,
 
   if (effective.cqe_ == 0) {
     effective.cqe_ = (std::min)(caps.MaxCompletionQueueDepth, default_cqe);
+  }
+  if (effective.cq_poll_batch_ == 0) {
+    effective.cq_poll_batch_ =
+        static_cast<std::uint32_t>(default_cq_poll_batch);
   }
   if (effective.max_send_wr_ == 0) {
     effective.max_send_wr_ =

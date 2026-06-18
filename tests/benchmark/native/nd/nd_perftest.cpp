@@ -26,9 +26,48 @@
 
 #include "ndsupport.h"
 #include "rdma_bench_common.hpp"
+#include "rdma_perftest_engine.hpp"
 
 using Microsoft::WRL::ComPtr;
 using clock_type = std::chrono::steady_clock;
+
+constexpr char k_ready_byte = 'R';
+constexpr char k_stop_byte = 'E';
+
+char const* preset_operation() {
+#ifdef ND_PERFTEST_PRESET_OPERATION
+  return ND_PERFTEST_PRESET_OPERATION;
+#else
+  return nullptr;
+#endif
+}
+
+char const* preset_metric() {
+#ifdef ND_PERFTEST_PRESET_METRIC
+  return ND_PERFTEST_PRESET_METRIC;
+#else
+  return nullptr;
+#endif
+}
+
+void apply_entrypoint_presets(rdma_bench::options& opt) {
+  if (auto const* operation = preset_operation()) {
+    opt.operation = rdma_bench::parse_operation(operation);
+  }
+  if (auto const* metric = preset_metric()) {
+    if (std::string_view(metric) == "latency") {
+      opt.metric = rdma_bench::metric_kind::latency;
+    } else if (std::string_view(metric) == "bandwidth") {
+      opt.metric = rdma_bench::metric_kind::bandwidth;
+    } else {
+      throw std::invalid_argument(std::string("unsupported ND perftest metric preset: ") +
+                                  metric);
+    }
+  }
+  if (opt.metric == rdma_bench::metric_kind::latency) {
+    opt.queue_depth = 1;
+  }
+}
 
 struct nd_error : std::runtime_error {
   HRESULT hr;
@@ -162,7 +201,7 @@ ULONG checked_message_size(rdma_bench::options const& opt) {
 std::size_t native_slot_count(rdma_bench::options const& opt,
                               std::uint64_t limit = (std::numeric_limits<std::uint64_t>::max)()) {
   auto capped = (std::min)(static_cast<std::uint64_t>(opt.queue_depth), limit);
-  capped = (std::min)(capped, opt.iterations);
+  if (opt.duration_sec <= 0.0) capped = (std::min)(capped, opt.iterations);
   return static_cast<std::size_t>((std::max<std::uint64_t>)(1, capped));
 }
 
@@ -545,48 +584,31 @@ rdma_bench::result run_native_read_write_client(rdma_bench::options opt,
       }
     };
 
-    auto cpu_begin = rdma_bench::take_cpu_snapshot();
-    auto begin = clock_type::now();
     if (opt.metric == rdma_bench::metric_kind::bandwidth) {
       std::vector<op_context> op_ctx(slots);
-      std::uint64_t posted = 0;
-      auto submit = [&](std::size_t slot) {
+      auto post = [&](std::size_t slot) {
         post_one(op_ctx[slot], slot);
-        ++posted;
-        result.posted_count = posted;
       };
-
-      for (std::size_t slot = 0; slot < slots; ++slot) submit(slot);
-      while (result.completed_count < opt.iterations) {
-        auto slot = static_cast<std::size_t>(result.completed_count % slots);
+      auto wait = [&](std::size_t slot) {
         s.wait_for(op_ctx[slot]);
-        verify_read(slot);
-        ++result.completed_count;
-        if (posted < opt.iterations) submit(slot);
+      };
+      rdma_bench::run_bandwidth_window(result, opt, slots, post, wait);
+      if (opt.operation == rdma_bench::operation_kind::read) {
+        for (std::size_t slot = 0; slot < slots; ++slot) {
+          verify_read(slot);
+        }
       }
-      rdma_bench::finish_throughput(result, begin, clock_type::now());
     } else {
-      std::vector<double> samples;
-      samples.reserve(static_cast<std::size_t>(opt.iterations));
-      for (std::uint64_t i = 0; i < opt.iterations; ++i) {
-        auto sample_begin = clock_type::now();
+      auto operation = [&] {
         op_context ctx;
         post_one(ctx, std::size_t{0});
-        ++result.posted_count;
         s.wait_for(ctx);
-        auto sample_end = clock_type::now();
         verify_read(std::size_t{0});
-        samples.push_back(
-            std::chrono::duration<double, std::micro>(sample_end - sample_begin)
-                .count());
-        ++result.completed_count;
-      }
-      rdma_bench::finish_throughput(result, begin, clock_type::now());
-      rdma_bench::fill_latency(result, samples);
+      };
+      rdma_bench::run_latency_window(
+          result, opt, operation,
+          opt.operation == rdma_bench::operation_kind::write ? 2 : 1);
     }
-
-    rdma_bench::fill_cpu_metrics(result, cpu_begin,
-                                 rdma_bench::take_cpu_snapshot());
 
     overlapped_holder ov_disconnect;
     hr = s.connector_->Disconnect(ov_disconnect.get());
@@ -615,9 +637,7 @@ rdma_bench::result run_native_server(rdma_bench::options opt,
     nd_session s(local);
     s.create_cq_and_qp(opt.queue_depth);
 
-    std::size_t slots =
-        static_cast<std::size_t>(std::max<std::uint64_t>(
-            1, std::min<std::uint64_t>(opt.queue_depth, opt.iterations)));
+    auto const slots = native_slot_count(opt);
     std::vector<char> storage(1 + opt.message_size * std::max<std::size_t>(2, slots), 0);
     s.create_and_register_mr(storage.data(), storage.size(),
                              ND_MR_FLAG_ALLOW_LOCAL_WRITE);
@@ -638,15 +658,22 @@ rdma_bench::result run_native_server(rdma_bench::options opt,
     wait_overlapped(s.listener_.Get(), ov_get.ov, hr,
                     "IND2Listener::GetConnectionRequest failed");
 
+    auto const message_size = checked_message_size(opt);
     if (opt.metric == rdma_bench::metric_kind::bandwidth) {
       std::vector<op_context> recv_ctx(slots);
-      for (std::size_t slot = 0; slot < slots; ++slot) {
+      rdma_bench::window_controller win(
+          opt, static_cast<std::size_t>(opt.iterations));
+      std::uint64_t posted = 0;
+      auto post_recv_slot = [&](std::size_t slot) {
         auto offset = 1 + slot * opt.message_size;
-        auto recv_sge = s.sge(storage.data() + offset,
-                              static_cast<ULONG>(opt.message_size));
+        auto recv_sge = s.sge(storage.data() + offset, message_size);
         s.post_recv(recv_ctx[slot], recv_sge);
-        ++result.posted_count;
-      }
+        ++posted;
+        result.posted_count = posted;
+      };
+      auto const total = rdma_bench::planned_total_ops(opt);
+      auto const prime = rdma_bench::prime_count(opt, slots);
+      for (std::size_t slot = 0; slot < prime; ++slot) post_recv_slot(slot);
 
       overlapped_holder ov_accept;
       hr = s.connector_->Accept(s.qp_.Get(), 0, 0, nullptr, 0,
@@ -654,35 +681,48 @@ rdma_bench::result run_native_server(rdma_bench::options opt,
       wait_overlapped(s.connector_.Get(), ov_accept.ov, hr,
                       "IND2Connector::Accept failed");
 
-      storage[0] = 'R';
+      storage[0] = k_ready_byte;
       op_context ready_send;
       auto ready_sge = s.sge(storage.data(), 1);
       s.post_send(ready_send, ready_sge);
       s.wait_for(ready_send);
 
-      auto begin = clock_type::now();
-      while (result.completed_count < opt.iterations) {
-        auto slot = static_cast<std::size_t>(result.completed_count % slots);
+      std::uint64_t completed = 0;
+      auto cpu_begin = rdma_bench::take_cpu_snapshot();
+      bool stop = false;
+      while (win.duration_mode() ? !stop : completed < total) {
+        auto slot = static_cast<std::size_t>(completed % slots);
         s.wait_for(recv_ctx[slot]);
-        if (recv_ctx[slot].bytes != opt.message_size) {
+        auto offset = 1 + slot * opt.message_size;
+        if (recv_ctx[slot].bytes != message_size) {
+          if (win.duration_mode() && recv_ctx[slot].bytes == 1 &&
+              storage[offset] == k_stop_byte) {
+            stop = true;
+            break;
+          }
           throw std::runtime_error("short native ND receive");
         }
-        ++result.completed_count;
-        if (result.posted_count < opt.iterations) {
-          auto offset = 1 + slot * opt.message_size;
-          auto recv_sge = s.sge(storage.data() + offset,
-                                static_cast<ULONG>(opt.message_size));
-          s.post_recv(recv_ctx[slot], recv_sge);
-          ++result.posted_count;
+        win.note_complete_bw();
+        if (win.take_opened()) cpu_begin = rdma_bench::take_cpu_snapshot();
+        ++completed;
+        if (win.duration_mode() || posted < total) {
+          post_recv_slot(slot);
         }
       }
-      rdma_bench::finish_throughput(result, begin, clock_type::now());
+      rdma_bench::finalize_counts(result, win);
+      rdma_bench::finish_throughput(result, win.window_begin_wall(),
+                                    clock_type::now());
+      rdma_bench::fill_cpu_metrics(result, cpu_begin,
+                                   rdma_bench::take_cpu_snapshot());
     } else {
       op_context recv_ctx[2];
-      auto recv_sge0 = s.sge(storage.data() + 1,
-                             static_cast<ULONG>(opt.message_size));
-      s.post_recv(recv_ctx[0], recv_sge0);
-      ++result.posted_count;
+      auto post_recv_slot = [&](std::size_t slot) {
+        auto recv_sge = s.sge(storage.data() + 1 + slot * opt.message_size,
+                              message_size);
+        s.post_recv(recv_ctx[slot], recv_sge);
+        ++result.posted_count;
+      };
+      post_recv_slot(0);
 
       overlapped_holder ov_accept;
       hr = s.connector_->Accept(s.qp_.Get(), 0, 0, nullptr, 0,
@@ -690,32 +730,43 @@ rdma_bench::result run_native_server(rdma_bench::options opt,
       wait_overlapped(s.connector_.Get(), ov_accept.ov, hr,
                       "IND2Connector::Accept failed");
 
-      storage[0] = 'R';
+      storage[0] = k_ready_byte;
       op_context ready_send;
       auto ready_sge = s.sge(storage.data(), 1);
       s.post_send(ready_send, ready_sge);
       s.wait_for(ready_send);
 
-      for (std::uint64_t i = 0; i < opt.iterations; ++i) {
-        auto slot = static_cast<std::size_t>(i % 2);
+      auto const total = rdma_bench::planned_total_ops(opt);
+      std::uint64_t completed = 0;
+      bool stop = false;
+      while (opt.duration_sec > 0.0 ? !stop : completed < total) {
+        auto slot = static_cast<std::size_t>(completed % 2);
         s.wait_for(recv_ctx[slot]);
-        if (recv_ctx[slot].bytes != opt.message_size) {
+        auto offset = 1 + slot * opt.message_size;
+        if (recv_ctx[slot].bytes != message_size) {
+          if (opt.duration_sec > 0.0 && recv_ctx[slot].bytes == 1 &&
+              storage[offset] == k_stop_byte) {
+            stop = true;
+            break;
+          }
           throw std::runtime_error("short native ND latency receive");
         }
-        if (i + 1 < opt.iterations) {
-          auto next_slot = std::size_t{1} - slot;
-          auto next_sge = s.sge(storage.data() + 1 + next_slot * opt.message_size,
-                                static_cast<ULONG>(opt.message_size));
-          s.post_recv(recv_ctx[next_slot], next_sge);
-          ++result.posted_count;
+        auto next_slot = std::size_t{1} - slot;
+        if (opt.duration_sec > 0.0 || completed + 1 < total) {
+          post_recv_slot(next_slot);
         }
         op_context send_ctx;
-        auto send_sge = s.sge(storage.data() + 1 + slot * opt.message_size,
-                              static_cast<ULONG>(opt.message_size));
+        auto send_sge = s.sge(storage.data() + offset, message_size);
         s.post_send(send_ctx, send_sge);
         s.wait_for(send_ctx);
-        ++result.completed_count;
+        ++completed;
       }
+      result.warmup_iterations =
+          static_cast<std::uint64_t>((std::min<std::uint64_t>)(
+              completed, opt.warmup_iterations));
+      result.completed_count =
+          completed > opt.warmup_iterations ? completed - opt.warmup_iterations
+                                            : 0;
     }
 
     overlapped_holder ov_disconnect;
@@ -744,9 +795,8 @@ rdma_bench::result run_native_client(rdma_bench::options opt,
     nd_session s(local);
     s.create_cq_and_qp(opt.queue_depth);
 
-    std::size_t slots =
-        static_cast<std::size_t>(std::max<std::uint64_t>(
-            1, std::min<std::uint64_t>(opt.queue_depth, opt.iterations)));
+    auto const slots = native_slot_count(opt);
+    auto const message_size = checked_message_size(opt);
     std::vector<char> storage(1 + opt.message_size * std::max<std::size_t>(2, slots), 0);
     for (std::size_t slot = 0; slot < std::max<std::size_t>(2, slots); ++slot) {
       fill_payload(storage, 1 + slot * opt.message_size, opt.message_size);
@@ -776,55 +826,52 @@ rdma_bench::result run_native_client(rdma_bench::options opt,
                     "IND2Connector::CompleteConnect failed");
 
     s.wait_for(ready_recv);
-    if (storage[0] != 'R') throw std::runtime_error("missing native ND ready byte");
+    if (storage[0] != k_ready_byte) {
+      throw std::runtime_error("missing native ND ready byte");
+    }
 
-    auto cpu_begin = rdma_bench::take_cpu_snapshot();
-    auto begin = clock_type::now();
     if (opt.metric == rdma_bench::metric_kind::bandwidth) {
       std::vector<op_context> send_ctx(slots);
-      std::uint64_t posted = 0;
-      auto post_one = [&](std::size_t slot) {
+      auto post = [&](std::size_t slot) {
         auto sge = s.sge(storage.data() + 1 + slot * opt.message_size,
-                         static_cast<ULONG>(opt.message_size));
+                         message_size);
         s.post_send(send_ctx[slot], sge);
-        ++posted;
-        result.posted_count = posted;
       };
-      for (std::size_t slot = 0; slot < slots; ++slot) post_one(slot);
-      while (result.completed_count < opt.iterations) {
-        auto slot = static_cast<std::size_t>(result.completed_count % slots);
+      auto wait = [&](std::size_t slot) {
         s.wait_for(send_ctx[slot]);
-        ++result.completed_count;
-        if (posted < opt.iterations) post_one(slot);
+      };
+      rdma_bench::run_bandwidth_window(result, opt, slots, post, wait);
+      if (opt.duration_sec > 0.0) {
+        storage[0] = k_stop_byte;
+        op_context stop_ctx;
+        auto stop_sge = s.sge(storage.data(), 1);
+        s.post_send(stop_ctx, stop_sge);
+        s.wait_for(stop_ctx);
       }
-      rdma_bench::finish_throughput(result, begin, clock_type::now());
     } else {
-      std::vector<double> samples;
-      samples.reserve(static_cast<std::size_t>(opt.iterations));
-      for (std::uint64_t i = 0; i < opt.iterations; ++i) {
-        auto sample_begin = clock_type::now();
+      auto operation = [&] {
         op_context recv_ctx;
         auto recv_sge = s.sge(storage.data() + 1 + opt.message_size,
-                              static_cast<ULONG>(opt.message_size));
+                              message_size);
         s.post_recv(recv_ctx, recv_sge);
         op_context send_ctx;
-        auto send_sge = s.sge(storage.data() + 1,
-                              static_cast<ULONG>(opt.message_size));
+        auto send_sge = s.sge(storage.data() + 1, message_size);
         s.post_send(send_ctx, send_sge);
         s.wait_for(send_ctx);
         s.wait_for(recv_ctx);
-        auto sample_end = clock_type::now();
-        samples.push_back(
-            std::chrono::duration<double, std::micro>(sample_end - sample_begin)
-                .count() / 2.0);
-        ++result.posted_count;
-        ++result.completed_count;
+        if (recv_ctx.bytes != message_size) {
+          throw std::runtime_error("short native ND latency receive");
+        }
+      };
+      rdma_bench::run_latency_window(result, opt, operation, 2);
+      if (opt.duration_sec > 0.0) {
+        storage[0] = k_stop_byte;
+        op_context stop_ctx;
+        auto stop_sge = s.sge(storage.data(), 1);
+        s.post_send(stop_ctx, stop_sge);
+        s.wait_for(stop_ctx);
       }
-      rdma_bench::finish_throughput(result, begin, clock_type::now());
-      rdma_bench::fill_latency(result, samples);
     }
-    rdma_bench::fill_cpu_metrics(result, cpu_begin,
-                                 rdma_bench::take_cpu_snapshot());
 
     overlapped_holder ov_disconnect;
     s.connector_->Disconnect(ov_disconnect.get());
@@ -873,6 +920,7 @@ int main(int argc, char* argv[]) {
   try {
     auto opt = rdma_bench::parse_options_with_scenario(argc, argv);
     auto cmd = rdma_bench::command_line(argc, argv);
+    apply_entrypoint_presets(opt);
     opt.backend = "nd";
     opt.baseline = "native_nd";
 
@@ -883,7 +931,15 @@ int main(int argc, char* argv[]) {
           "native_nd_mode_" + opt.mode);
       r.backend = "nd";
       r.baseline = "native_nd";
-      r.scenario_name = "native_nd_baseline";
+      r.scenario_name = "nd_perftest";
+      rdma_bench::write_result(r, opt.json_out);
+      return 0;
+    }
+    if (auto reason = rdma_bench::not_implemented_reason(opt); !reason.empty()) {
+      auto r = rdma_bench::make_skip_result(opt, cmd, reason, "not_implemented");
+      r.backend = "nd";
+      r.baseline = "native_nd";
+      r.scenario_name = "nd_perftest";
       rdma_bench::write_result(r, opt.json_out);
       return 0;
     }
