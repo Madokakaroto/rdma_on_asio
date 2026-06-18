@@ -1,5 +1,8 @@
 #pragma once
 
+#include <concepts>
+#include <type_traits>
+
 #include "asio/detail/reactor.hpp"
 #include "asio/execution_context.hpp"
 #include "asio/io_context.hpp"
@@ -197,11 +200,6 @@ public:
 private:
   asio::error_code success_ec_;
 
-  static ibv_sglist_t& get_sglist() {
-    static thread_local ibv_sglist_t sglist;
-    return sglist;
-  }
-
   // Reject a buffer sequence whose SGE count exceeds the device's max_sge before
   // posting -- a clean library error instead of a raw EINVAL from ibv_post_*.
   // Returns true (and sets ec) when over the limit. (sge_max == 0 means the
@@ -215,52 +213,101 @@ private:
     return false;
   }
 
+  template <typename BufferSequence>
+  static constexpr bool is_single_buffer_sequence_v =
+      std::same_as<std::remove_cvref_t<BufferSequence>, const_buffer> ||
+      std::same_as<std::remove_cvref_t<BufferSequence>, mutable_buffer>;
+
   // Post the work request. Returns true if the op completed *immediately* (empty
   // buffer sequence or a synchronous post failure) and so needs the
   // immediate-completion sink; false if it was posted and will complete via a CQE.
   template <typename SendOpType>
   static bool do_post_send(implementation_type& impl, SendOpType* op) {
     auto const& buffers = op->get_buffer_sequence();
-    if (all_empty(buffers)) {
+    if constexpr (is_single_buffer_sequence_v<decltype(buffers)>) {
+      if (buffers.length() == 0) {
+        return true;
+      }
+      if (exceeds_sge_limit(1, impl.config_.max_send_sge_, op->ec_)) {
+        return true;
+      }
+      native_sge_t sge{};
+      fill_native_sge(sge, buffers);
+      verbs_ops::post_send(impl.qp_, op, &sge, 1, 0, op->ec_);
+      return static_cast<bool>(op->ec_);
+    }
+
+    ibv_sglist_t sglist;
+    auto built = build_native_sglist(buffers, sglist, impl.config_.max_send_sge_);
+    if (built.all_empty) {
       return true;
     }
-    auto& sglist = get_sglist();
-    buffers2sglist(buffers, sglist);
-    if (exceeds_sge_limit(sglist.size(), impl.config_.max_send_sge_, op->ec_)) {
+    if (built.too_many_sge) {
+      op->ec_ = make_error_code(rdma_errc::too_many_sge);
       return true;
     }
-    verbs_ops::post_send(impl.qp_, op, sglist.data(), sglist.size(), 0, op->ec_);
+    verbs_ops::post_send(impl.qp_, op, built.data, built.count, 0, op->ec_);
     return static_cast<bool>(op->ec_);
   }
 
   template <typename RecvOpType>
   static bool do_post_recv(implementation_type& impl, RecvOpType* op) {
     auto const& buffers = op->get_buffer_sequence();
-    if (all_empty(buffers)) {
+    if constexpr (is_single_buffer_sequence_v<decltype(buffers)>) {
+      if (buffers.length() == 0) {
+        return true;
+      }
+      if (exceeds_sge_limit(1, impl.config_.max_recv_sge_, op->ec_)) {
+        return true;
+      }
+      native_sge_t sge{};
+      fill_native_sge(sge, buffers);
+      verbs_ops::post_recv(impl.qp_, op, &sge, 1, op->ec_);
+      return static_cast<bool>(op->ec_);
+    }
+
+    ibv_sglist_t sglist;
+    auto built = build_native_sglist(buffers, sglist, impl.config_.max_recv_sge_);
+    if (built.all_empty) {
       return true;
     }
-    auto& sglist = get_sglist();
-    buffers2sglist(buffers, sglist);
-    if (exceeds_sge_limit(sglist.size(), impl.config_.max_recv_sge_, op->ec_)) {
+    if (built.too_many_sge) {
+      op->ec_ = make_error_code(rdma_errc::too_many_sge);
       return true;
     }
-    verbs_ops::post_recv(impl.qp_, op, sglist.data(), sglist.size(), op->ec_);
+    verbs_ops::post_recv(impl.qp_, op, built.data, built.count, op->ec_);
     return static_cast<bool>(op->ec_);
   }
 
   template <typename ReadOpType>
   static bool do_post_read(implementation_type& impl, ReadOpType* op) {
     auto const& buffers = op->get_buffer_sequence();
-    if (all_empty(buffers)) {
+    if constexpr (is_single_buffer_sequence_v<decltype(buffers)>) {
+      if (buffers.length() == 0) {
+        return true;
+      }
+      if (exceeds_sge_limit(1, impl.config_.max_send_sge_, op->ec_)) {
+        return true;
+      }
+      native_sge_t sge{};
+      fill_native_sge(sge, buffers);
+      auto const& ra = op->get_remote_addr();
+      verbs_ops::post_read(impl.qp_, op, &sge, 1, ra.addr_, ra.token_, 0,
+                           op->ec_);
+      return static_cast<bool>(op->ec_);
+    }
+
+    ibv_sglist_t sglist;
+    auto built = build_native_sglist(buffers, sglist, impl.config_.max_send_sge_);
+    if (built.all_empty) {
       return true;
     }
-    auto& sglist = get_sglist();
-    buffers2sglist(buffers, sglist);
-    if (exceeds_sge_limit(sglist.size(), impl.config_.max_send_sge_, op->ec_)) {
+    if (built.too_many_sge) {
+      op->ec_ = make_error_code(rdma_errc::too_many_sge);
       return true;
     }
     auto const& ra = op->get_remote_addr();
-    verbs_ops::post_read(impl.qp_, op, sglist.data(), sglist.size(), ra.addr_,
+    verbs_ops::post_read(impl.qp_, op, built.data, built.count, ra.addr_,
                          ra.token_, 0, op->ec_);
     return static_cast<bool>(op->ec_);
   }
@@ -268,16 +315,32 @@ private:
   template <typename WriteOpType>
   static bool do_post_write(implementation_type& impl, WriteOpType* op) {
     auto const& buffers = op->get_buffer_sequence();
-    if (all_empty(buffers)) {
+    if constexpr (is_single_buffer_sequence_v<decltype(buffers)>) {
+      if (buffers.length() == 0) {
+        return true;
+      }
+      if (exceeds_sge_limit(1, impl.config_.max_send_sge_, op->ec_)) {
+        return true;
+      }
+      native_sge_t sge{};
+      fill_native_sge(sge, buffers);
+      auto const& ra = op->get_remote_addr();
+      verbs_ops::post_write(impl.qp_, op, &sge, 1, ra.addr_, ra.token_, 0,
+                            op->ec_);
+      return static_cast<bool>(op->ec_);
+    }
+
+    ibv_sglist_t sglist;
+    auto built = build_native_sglist(buffers, sglist, impl.config_.max_send_sge_);
+    if (built.all_empty) {
       return true;
     }
-    auto& sglist = get_sglist();
-    buffers2sglist(buffers, sglist);
-    if (exceeds_sge_limit(sglist.size(), impl.config_.max_send_sge_, op->ec_)) {
+    if (built.too_many_sge) {
+      op->ec_ = make_error_code(rdma_errc::too_many_sge);
       return true;
     }
     auto const& ra = op->get_remote_addr();
-    verbs_ops::post_write(impl.qp_, op, sglist.data(), sglist.size(), ra.addr_,
+    verbs_ops::post_write(impl.qp_, op, built.data, built.count, ra.addr_,
                           ra.token_, 0, op->ec_);
     return static_cast<bool>(op->ec_);
   }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rdma/detail/small_sglist.hpp"
 #include "rdma/rdma_commons.hpp"
 
 namespace asio::rdma::detail {
@@ -183,45 +184,7 @@ enum class connect_state : int {
 
 namespace asio::rdma::detail {
 
-// Scatter-gather list with small-buffer optimization (mirrors ibv_sglist_t).
-class nd_sglist_t {
- public:
-  static constexpr std::size_t inline_sge_count = 8;
-
-  nd_sglist_t() = default;
-  ~nd_sglist_t() { reset(); }
-  nd_sglist_t(nd_sglist_t const&) = delete;
-  nd_sglist_t& operator=(nd_sglist_t const&) = delete;
-
-  void resize(std::size_t count) {
-    reset();
-    if (count > inline_sge_count) {
-      heap_ = new native_sge_t[count]{};
-      data_ = heap_;
-    }
-    else {
-      data_ = inline_.data();
-    }
-    size_ = count;
-  }
-
-  native_sge_t* data() noexcept { return data_; }
-  native_sge_t const* data() const noexcept { return data_; }
-  std::size_t size() const noexcept { return size_; }
-  native_sge_t& operator[](std::size_t i) noexcept { return data_[i]; }
-
- private:
-  void reset() noexcept {
-    delete[] heap_;
-    heap_ = nullptr;
-    data_ = nullptr;
-    size_ = 0;
-  }
-
-  std::array<native_sge_t, inline_sge_count> inline_{};
-  native_sge_t* heap_ = nullptr;
-  native_sge_t* data_ = nullptr;
-  std::size_t size_ = 0;
-};
+// Scatter-gather list with inline storage for the common small-SGE path.
+using nd_sglist_t = small_sglist<native_sge_t, 8>;
 
 }

@@ -11,6 +11,7 @@
 #include <rdma/rdma_cma.h>
 
 #include "asio/error_code.hpp"
+#include "rdma/detail/small_sglist.hpp"
 #include "rdma/rdma_commons.hpp"
 
 namespace asio::rdma::detail {
@@ -134,47 +135,8 @@ inline constexpr std::size_t max_private_data_size = 256;
 // initiation (rdma_errc::private_data_too_large) rather than silently truncated.
 inline constexpr std::size_t max_outgoing_private_data = 255;
 
-// Scatter-gather list of ibv_sge with small-buffer optimization. SGE counts are
-// small in practice; spill to the heap only beyond the inline capacity.
-class ibv_sglist_t {
- public:
-  static constexpr std::size_t inline_sge_count = 8;
-
-  ibv_sglist_t() = default;
-  ~ibv_sglist_t() { reset(); }
-  ibv_sglist_t(ibv_sglist_t const&) = delete;
-  ibv_sglist_t& operator=(ibv_sglist_t const&) = delete;
-
-  void resize(std::size_t count) {
-    reset();
-    if (count > inline_sge_count) {
-      heap_ = new native_sge_t[count];
-      data_ = heap_;
-    }
-    else {
-      data_ = inline_.data();
-    }
-    size_ = count;
-  }
-
-  native_sge_t* data() noexcept { return data_; }
-  native_sge_t const* data() const noexcept { return data_; }
-  std::size_t size() const noexcept { return size_; }
-  native_sge_t& operator[](std::size_t i) noexcept { return data_[i]; }
-
- private:
-  void reset() noexcept {
-    delete[] heap_;
-    heap_ = nullptr;
-    data_ = nullptr;
-    size_ = 0;
-  }
-
-  std::array<native_sge_t, inline_sge_count> inline_{};
-  native_sge_t* heap_ = nullptr;
-  native_sge_t* data_ = nullptr;
-  std::size_t size_ = 0;
-};
+// Scatter-gather list with inline storage for the common small-SGE path.
+using ibv_sglist_t = small_sglist<native_sge_t, 8>;
 
 // the minimal CM resources of a connector/listener (mirrors rdma_cm_block_t)
 struct ibv_cm_block_t {

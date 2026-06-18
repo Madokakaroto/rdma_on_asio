@@ -61,6 +61,9 @@ Acceptance criteria:
 
 ## Stage 1: SGE Construction Fast Path
 
+Detailed design and execution tracking for this stage lives in
+[`docs/sge_list_performance_refactor_plan.md`](docs/sge_list_performance_refactor_plan.md).
+
 The current SGE path is generic and correct, but it still does work on every
 small operation:
 

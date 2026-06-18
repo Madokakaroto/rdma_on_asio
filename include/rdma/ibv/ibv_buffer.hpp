@@ -8,22 +8,49 @@
 // Only buffers2sglist is backend-specific: it fills the native ibv_sge list.
 namespace asio::rdma::detail {
 
+inline void fill_native_sge(native_sge_t& sge, const_buffer const& buffer) {
+  sge.addr = reinterpret_cast<std::uint64_t>(buffer.addr());
+  sge.length = static_cast<std::uint32_t>(buffer.length());
+  sge.lkey = buffer.local_key();
+}
+
+inline void fill_native_sge(native_sge_t& sge, mutable_buffer const& buffer) {
+  sge.addr = reinterpret_cast<std::uint64_t>(buffer.addr());
+  sge.length = static_cast<std::uint32_t>(buffer.length());
+  sge.lkey = buffer.local_key();
+}
+
 template <mr_adapted_buffer_sequence BufferSequence>
-inline void buffers2sglist(BufferSequence const& bs, ibv_sglist_t& sglist) {
+inline built_sglist<native_sge_t> build_native_sglist(
+    BufferSequence const& bs, ibv_sglist_t& sglist, std::uint32_t max_sge = 0) {
+  built_sglist<native_sge_t> built;
+  sglist.clear();
+
   auto it = buffer_sequence_begin(bs);
   auto const end = buffer_sequence_end(bs);
-  auto const size = std::distance(it, end);
-  if (size > 0) {
-    sglist.resize(static_cast<std::size_t>(size));
-    // Forward-iterator traversal (++it), not begin + index: supports any forward
-    // buffer sequence (std::list, asio-style iterators), not just random-access.
-    for (std::size_t i = 0; it != end; ++it, ++i) {
-      auto& sge = sglist[i];
-      sge.addr = reinterpret_cast<std::uint64_t>(it->addr());
-      sge.length = static_cast<std::uint32_t>(it->length());
-      sge.lkey = it->local_key();
+  asio::error_code ec;
+  for (; it != end; ++it) {
+    if (max_sge != 0 && built.count >= max_sge) {
+      built.too_many_sge = true;
+      built.data = sglist.data();
+      built.heap_spilled = sglist.uses_heap();
+      return built;
     }
+    auto& sge = sglist.append_uninitialized(ec);
+    fill_native_sge(sge, *it);
+    ++built.count;
+    built.total_bytes += it->length();
+    built.all_empty = built.all_empty && it->length() == 0;
   }
+
+  built.data = sglist.data();
+  built.heap_spilled = sglist.uses_heap();
+  return built;
+}
+
+template <mr_adapted_buffer_sequence BufferSequence>
+inline void buffers2sglist(BufferSequence const& bs, ibv_sglist_t& sglist) {
+  build_native_sglist(bs, sglist);
 }
 
 }
