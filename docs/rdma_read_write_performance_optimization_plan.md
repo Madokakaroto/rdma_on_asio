@@ -36,9 +36,17 @@ The current conclusion is:
 
 Add fair benchmark cases before changing library internals.
 
+Status:
+
+- Implemented `read/write --mode poll --token-type callback` as a rolling-QD
+  standalone-CQ path.
+- Updated the ND comparison read/write poll scenarios to use `callback`.
+- Kept `poll/use_future` available as a token-overhead benchmark, but it is no
+  longer the baseline path for read/write bandwidth.
+
 Tasks:
 
-- Add `rdma_read_write_bench --mode poll --token-type callback`.
+- Add `rdma_read_write_bench --mode poll --token-type callback`. [done]
 - Keep existing `poll/use_future` as a token-overhead benchmark.
 - Add `--validate full|sample|none` for read/write benchmarks.
   - `full`: current behavior, every completed read is checked.
@@ -57,7 +65,7 @@ Acceptance criteria:
 
 - Results document can show which cost belongs to scheduler, token, wrapper, and
   benchmark validation.
-- `poll/callback` read/write becomes the main wrapper-overhead baseline.
+- `poll/callback` read/write becomes the main wrapper-overhead baseline. [done]
 
 ## Stage 1: SGE Construction Fast Path
 
@@ -259,7 +267,8 @@ Tasks:
 
 ## Priority Order
 
-1. Add read/write `poll/callback` benchmark and validation mode.
+1. Add read/write `poll/callback` benchmark and validation mode. `poll/callback`
+   benchmark is done; validation mode remains.
 2. Generate read64/write64 `poll/callback` flame graphs.
 3. Implement single-buffer SGE fast path.
 4. Re-run Release and RelWithDebInfo comparisons.

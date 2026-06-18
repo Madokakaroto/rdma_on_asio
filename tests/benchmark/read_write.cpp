@@ -755,11 +755,212 @@ rdma_bench::result run_poll_client_role(rdma_bench::options opt,
   }
 }
 
+rdma_bench::result run_poll_callback_client_role(rdma_bench::options opt,
+                                                 std::string command_line) {
+  opt.client = true;
+  opt.server = false;
+  opt.single_process = false;
+  auto result = rdma_bench::make_base_result(opt, command_line);
+  result.scenario_name =
+      opt.operation == rdma_bench::operation_kind::write
+          ? "write_poll_callback_client"
+          : "read_poll_callback_client";
+
+  try {
+    asio::io_context io;
+    auto device = rdma::rdma_device_manager_t::instance()
+                      .get_first_available_device(tcp::v4(), {});
+    rdma::use_device(io, device);
+
+    rdma::rdma_completion_queue cq(device);
+    rdma::rdma_connector<tcp> conn(io);
+    conn.open(tcp::v4());
+    rdma::rdma_queue_pair qp(cq);
+    rdma::rdma_remote_addr_t remote_base{};
+    tcp::endpoint endpoint(asio::ip::make_address(opt.peer_addr), opt.port);
+    asio::error_code connect_ec;
+    std::size_t reply_len = 0;
+    conn.async_connect(qp, endpoint, asio::const_buffer{},
+                       asio::buffer(&remote_base, sizeof(remote_base)),
+                       [&](asio::error_code ec, std::size_t n) {
+                         connect_ec = ec;
+                         reply_len = n;
+                       });
+    io.run();
+    io.restart();
+    if (connect_ec) return make_error(opt, command_line, connect_ec.message());
+    if (reply_len < sizeof(remote_base)) {
+      return make_error(opt, command_line,
+                        "server did not return a complete remote address");
+    }
+
+    auto slots = poll_slot_count(opt);
+    std::vector<char> storage(opt.message_size * slots, 0);
+    if (opt.operation == rdma_bench::operation_kind::write) {
+      for (std::size_t slot = 0; slot < slots; ++slot) {
+        fill_pattern(storage, poll_offset_for_slot(opt, slot), slot,
+                     opt.message_size);
+      }
+    }
+    rdma::rdma_memory_region mr(device, storage.data(), storage.size());
+
+    std::string error_message;
+    bool failed = false;
+    auto fail = [&](std::string message) {
+      if (!failed) {
+        failed = true;
+        error_message = std::move(message);
+      }
+    };
+
+    rdma_bench::window_controller win(
+        opt, static_cast<std::size_t>(opt.iterations));
+    auto cpu_begin = rdma_bench::take_cpu_snapshot();
+
+    if (opt.metric == rdma_bench::metric_kind::latency) {
+      bool one_done = false;
+      rdma_bench::cycles_t sample_begin_cyc = 0;
+      rdma_bench::cycles_t sample_end_cyc = 0;
+      std::function<void()> post_one_latency;
+      post_one_latency = [&] {
+        one_done = false;
+        sample_begin_cyc = rdma_bench::get_cycles();
+        auto remote = poll_remote_for_slot(remote_base, opt, std::size_t{0});
+        if (opt.operation == rdma_bench::operation_kind::write) {
+          qp.async_write(mr.cslice(std::size_t{0}, opt.message_size), remote,
+                         [&](asio::error_code ec, std::size_t n) {
+                           sample_end_cyc = rdma_bench::get_cycles();
+                           if (ec) fail(ec.message());
+                           else if (n != opt.message_size) {
+                             fail("short RDMA operation");
+                           }
+                           one_done = true;
+                         });
+        } else {
+          qp.async_read(mr.slice(std::size_t{0}, opt.message_size), remote,
+                        [&](asio::error_code ec, std::size_t n) {
+                          sample_end_cyc = rdma_bench::get_cycles();
+                          if (ec) fail(ec.message());
+                          else if (n != opt.message_size) {
+                            fail("short RDMA operation");
+                          }
+                          one_done = true;
+                        });
+        }
+        ++result.posted_count;
+      };
+
+      while (!(win.opened() && win.window_done())) {
+        post_one_latency();
+        if (!poll_until(cq, [&] { return failed || one_done; },
+                        std::chrono::seconds(opt.timeout_sec), error_message)) {
+          return make_error(opt, command_line, error_message);
+        }
+        if (failed) return make_error(opt, command_line, error_message);
+        if (opt.operation == rdma_bench::operation_kind::read &&
+            !verify_pattern(storage, std::size_t{0}, std::size_t{0},
+                            opt.message_size)) {
+          return make_error(opt, command_line, "read validation failed");
+        }
+        win.note_complete_lat(sample_end_cyc - sample_begin_cyc);
+        if (win.take_opened()) cpu_begin = rdma_bench::take_cpu_snapshot();
+      }
+      rdma_bench::finalize_counts(result, win);
+      rdma_bench::finish_throughput(result, win.window_begin_wall(),
+                                    clock_type::now());
+      rdma_bench::fill_latency_cycles(
+          result, win.lat_deltas(),
+          opt.operation == rdma_bench::operation_kind::write ? 2 : 1);
+    } else {
+      std::uint64_t posted = 0, completed = 0;
+      std::function<void(std::size_t)> post_one;
+      post_one = [&](std::size_t slot) {
+        win.note_post();
+        auto remote = poll_remote_for_slot(remote_base, opt, slot);
+        ++posted;
+        result.posted_count = posted;
+        if (opt.operation == rdma_bench::operation_kind::write) {
+          qp.async_write(
+              mr.cslice(poll_offset_for_slot(opt, slot), opt.message_size),
+              remote, [&, slot](asio::error_code ec, std::size_t n) {
+                if (failed) return;
+                if (ec) return fail(ec.message());
+                if (n != opt.message_size) return fail("short RDMA operation");
+                win.note_complete_bw();
+                if (win.take_opened()) {
+                  cpu_begin = rdma_bench::take_cpu_snapshot();
+                }
+                ++completed;
+                if (win.should_post()) post_one(slot);
+              });
+        } else {
+          qp.async_read(
+              mr.slice(poll_offset_for_slot(opt, slot), opt.message_size),
+              remote, [&, slot](asio::error_code ec, std::size_t n) {
+                if (failed) return;
+                if (ec) return fail(ec.message());
+                if (n != opt.message_size) return fail("short RDMA operation");
+                win.note_complete_bw();
+                if (win.take_opened()) {
+                  cpu_begin = rdma_bench::take_cpu_snapshot();
+                }
+                ++completed;
+                if (win.should_post()) post_one(slot);
+              });
+        }
+      };
+
+      auto const prime =
+          win.duration_mode()
+              ? slots
+              : static_cast<std::size_t>(std::min<std::uint64_t>(
+                    slots, opt.warmup_iterations + opt.iterations));
+      for (std::size_t slot = 0; slot < prime; ++slot) post_one(slot);
+      if (!poll_until(cq,
+                      [&] {
+                        return failed || (win.opened() && win.window_done());
+                      },
+                      std::chrono::seconds(opt.timeout_sec), error_message)) {
+        return make_error(opt, command_line, error_message);
+      }
+      if (failed) return make_error(opt, command_line, error_message);
+      if (!poll_until(cq, [&] { return failed || completed >= posted; },
+                      std::chrono::seconds(opt.timeout_sec), error_message)) {
+        return make_error(opt, command_line, error_message);
+      }
+      if (failed) return make_error(opt, command_line, error_message);
+
+      std::vector<rdma_bench::cycles_t> tp, tc;
+      win.bw_arrays(tp, tc);
+      rdma_bench::finalize_counts(result, win);
+      rdma_bench::finish_bw_cycles(result, tp, tc, opt.post_list, opt.cq_mod,
+                                   opt.no_peak);
+      if (opt.operation == rdma_bench::operation_kind::read) {
+        for (std::size_t slot = 0; slot < slots; ++slot) {
+          if (!verify_pattern(storage, poll_offset_for_slot(opt, slot), slot,
+                              opt.message_size)) {
+            return make_error(opt, command_line, "read validation failed");
+          }
+        }
+      }
+    }
+
+    auto cpu_end = rdma_bench::take_cpu_snapshot();
+    rdma_bench::fill_cpu_metrics(result, cpu_begin, cpu_end);
+    result.validation_passed = true;
+    asio::error_code ignored;
+    conn.disconnect(ignored);
+    return result;
+  } catch (std::exception const& e) {
+    return make_error(opt, command_line, e.what());
+  }
+}
+
 int run_poll_read_write(rdma_bench::options opt, std::string command_line) {
-  if (opt.token_type != "use_future") {
+  if (opt.token_type != "callback" && opt.token_type != "use_future") {
     auto r = rdma_bench::make_skip_result(
         opt, command_line,
-        "poll-mode read/write uses as_tuple(use_future) in this benchmark",
+        "poll-mode read/write supports callback and as_tuple(use_future)",
         "read_write_poll_token_" + opt.token_type);
     rdma_bench::write_result(r, opt.json_out);
     return 0;
@@ -779,7 +980,11 @@ int run_poll_read_write(rdma_bench::options opt, std::string command_line) {
       server_result = run_poll_server_role(server_opt, command_line, &ready);
     });
     ready_fut.wait();
-    selected = run_poll_client_role(client_opt, command_line);
+    if (opt.token_type == "callback") {
+      selected = run_poll_callback_client_role(client_opt, command_line);
+    } else {
+      selected = run_poll_client_role(client_opt, command_line);
+    }
     if (server.joinable()) server.join();
     if (selected.errors == 0 && server_result.errors != 0) {
       selected = server_result;
@@ -789,7 +994,11 @@ int run_poll_read_write(rdma_bench::options opt, std::string command_line) {
   } else if (opt.server) {
     selected = run_poll_server_role(opt, command_line, nullptr);
   } else {
-    selected = run_poll_client_role(opt, command_line);
+    if (opt.token_type == "callback") {
+      selected = run_poll_callback_client_role(opt, command_line);
+    } else {
+      selected = run_poll_client_role(opt, command_line);
+    }
   }
 
   rdma_bench::write_result(selected, opt.json_out);

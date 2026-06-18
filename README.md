@@ -302,8 +302,9 @@ Observations:
 Collected 2026-06-18 with `tests/benchmark/tools/run_nd_comparison.ps1`, which runs
 `asio_perftest` and `nd_perftest` over the same scenario set. The sweep uses single-host
 same-process loopback, 64 outstanding WRs, 20000 measured iterations, and 128 warmup iterations.
-These numbers are local engineering / regression signals, not final cross-machine line-rate
-claims.
+The poll rows below use callback rolling-QD completion for RDMA-on-Asio; `use_future` is kept only
+as a token-overhead diagnostic. These numbers are local engineering / regression signals, not final
+cross-machine line-rate claims.
 
 Test environment:
 
@@ -327,24 +328,24 @@ Send/recv bandwidth (Gbit/s):
 | Path | 64 B | 4 KiB | 64 KiB | 128 KiB | Best in sweep |
 |---|---:|---:|---:|---:|---:|
 | RDMA-on-Asio / event callback | 0.406 | 27.513 | 88.682 | 90.857 | 90.857 |
-| RDMA-on-Asio / poll callback | 0.760 | 50.633 | 91.515 | 92.846 | 92.846 |
-| Native ND / poll | 0.875 | 52.704 | 88.807 | 90.493 | 90.493 |
+| RDMA-on-Asio / poll callback | 0.758 | 51.453 | 91.473 | 91.722 | 91.722 |
+| Native ND / poll | 0.868 | 48.654 | 89.535 | 90.679 | 90.679 |
 
 RDMA write bandwidth (Gbit/s):
 
 | Path | 64 B | 4 KiB | 64 KiB | 128 KiB | Best in sweep |
 |---|---:|---:|---:|---:|---:|
 | RDMA-on-Asio / event callback | 0.507 | 38.184 | 89.206 | 84.474 | 89.206 |
-| RDMA-on-Asio / poll `use_future` | 0.237 | 15.295 | 92.548 | 89.670 | 92.548 |
-| Native ND / poll | 0.842 | 65.233 | 91.051 | 85.462 | 91.051 |
+| RDMA-on-Asio / poll callback | 0.763 | 54.453 | 90.982 | 91.769 | 91.769 |
+| Native ND / poll | 0.862 | 62.715 | 90.831 | 91.128 | 91.128 |
 
 RDMA read bandwidth (Gbit/s):
 
 | Path | 64 B | 4 KiB | 64 KiB | 128 KiB | Best in sweep |
 |---|---:|---:|---:|---:|---:|
 | RDMA-on-Asio / event callback | 0.505 | 36.352 | 61.953 | 61.025 | 61.953 |
-| RDMA-on-Asio / poll `use_future` | 0.498 | 13.224 | 61.887 | 61.016 | 61.887 |
-| Native ND / poll | 1.009 | 56.645 | 62.076 | 61.198 | 62.076 |
+| RDMA-on-Asio / poll callback | 0.756 | 64.376 | 61.956 | 61.033 | 64.376 |
+| Native ND / poll | 0.842 | 47.729 | 62.130 | 61.182 | 62.130 |
 
 Observations:
 
@@ -352,17 +353,15 @@ Observations:
   ND poll paths.
 - The 2026-06-18 read sweep supersedes the older 8-9 Gbit/s single-host read snapshot: current
   RDMA read reaches about 61-62 Gbit/s on both RDMA-on-Asio and native ND for 64 KiB+ messages.
-- RDMA-on-Asio poll read/write still use `as_tuple(use_future)`, so small and medium-message
-  numbers include promise/future allocation, heap traffic, and locking. The remaining fair
-  comparison task is a poll/callback read/write path.
+- RDMA-on-Asio poll read/write now use callback rolling-QD for the fair baseline. The 4 KiB
+  write path improved from the old `use_future` snapshot (15.295 Gbit/s) to 54.453 Gbit/s, and
+  the read path is now in the same range as native ND on this single-host loopback run.
 
 Next performance work:
 
-- Add `rdma_read_write_bench --mode poll --token-type callback` so read/write poll mode can be
-  compared against native ND poll without `use_future` overhead.
 - Add `--validate full|sample|none` so benchmark validation cost is visible and configurable.
-- Optimize the SGE fast path for single-buffer read/write/send/recv operations: stack native SGE,
-  no `std::distance()`, no repeated buffer scans, and no avoidable sglist resize.
+- Continue profiling the SGE fast path on Linux/IBV and larger multi-SGE workloads; the common
+  single-buffer path now uses stack native SGEs and the small-SGL path avoids TLS.
 - Measure custom associated allocators and operation recycling for small-message hot paths while
   preserving standard Asio async completion semantics.
 - Continue event-mode tuning by measuring CQ drain batch sizes and re-arm frequency.
@@ -441,9 +440,9 @@ completes them as `operation_aborted`.
 
 ## TODO
 
-- **Performance follow-up** -- finish the fair read/write poll/callback benchmark, SGE fast path,
-  allocator measurements, event scheduler tuning, and multi-host `perftest` comparison. This work
-  is tracked in [`docs/rdma_stress_performance_plan.md`](docs/rdma_stress_performance_plan.md) and
+- **Performance follow-up** -- continue validation-mode controls, allocator measurements, event
+  scheduler tuning, and multi-host `perftest` comparison. This work is tracked in
+  [`docs/rdma_stress_performance_plan.md`](docs/rdma_stress_performance_plan.md) and
   [`docs/rdma_read_write_performance_optimization_plan.md`](docs/rdma_read_write_performance_optimization_plan.md).
 
 **Done:** a deterministic, no-hardware unit-test suite (Asio-style harness,

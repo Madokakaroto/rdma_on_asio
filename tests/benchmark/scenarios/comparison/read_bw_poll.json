@@ -5,7 +5,7 @@
   "operation": "read",
   "metric": "bandwidth",
   "completion_mode": "poll",
-  "token_type": "use_future",
+  "token_type": "callback",
   "connection": "RC",
   "message_size": 4096,
   "queue_depth": 64,
