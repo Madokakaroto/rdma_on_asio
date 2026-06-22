@@ -211,7 +211,7 @@ and effective/operating config (`derive_effective_config(config, caps)`, stored 
 **nd (Windows):**
 - Async control-plane ops use `nd_op_base` (inherits `asio::detail::operation` with OVERLAPPED semantics).
 - Data-plane ops use `rdma_verbs_op_base` dispatched via CQ `RequestContext` → `nd_op_notify_wr` bridges to IOCP.
-- NetworkDirect splits adapters by v4/v6; `tcp::get_adapters(provider)` selects by family.
+- NetworkDirect devices are grouped by AdapterId: one device carries the adapter's v4/v6 local addresses, and connector/listener choose the family at the control plane (`open(ps)` / endpoint).
 
 **ibv (Linux):**
 - Async control-plane ops use `reactor_op` with internal state machine (returns `status::not_done` to re-arm on the same event-channel fd).

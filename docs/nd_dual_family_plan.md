@@ -5,7 +5,9 @@
 > 采用**方案 A:按 `AdapterId` 归并 -- 同一块物理网卡只 `OpenAdapter` 一次(一个 PD/资源域),
 > 该 adapter 实例同时挂 v4/v6 两个本地地址**;control plane(connector/listener)按地址族选择要绑定的本地地址。
 >
-> 状态:**计划态(未实现)**。ibv 数据面已天然双族,只需验证 + 去掉端口空间参数;nd 需要发现层 + 控制面改造。
+> 状态:**主体已实现,验收补强中**。nd 已按 AdapterId 归并为单 device 双地址族,控制面按
+> `open(ps)` / endpoint family 选择本地地址;ibv/nd 的 `get_first_available_device` 已统一去掉端口空间参数。
+> 待补齐项集中在 dual-family echo 的自动化验收、v6 硬件覆盖、ibv 多网卡 caveat 验证。
 > 相关:`io_completion_service_split_plan.md`(device_service / io_completion_service 拆分)、
 > `queue_pair_semantics_plan.md`(QP bind/poll 语义)、`rdma_error_unification_plan.md`(错误码)。
 
@@ -353,3 +355,31 @@ co_await echo_once(io_ctx, dev, v6_endpoint);        // v4 完成后再连 v6,�
    (需内部双 IND2Listener + 多路复用,留作后续增量)。双族 echo 目标用顺序 `open(v4)`/`open(v6)` 即可,不阻塞主线。
 4. **`local_addr_for` 找不到匹配族地址:报错(不回退 any)** -- 显式返回 `address_family_not_supported`
    (Phase 0/2 引入的码),不静默回退到 any 地址。
+
+---
+
+## 10. 2026-06-22 实现状态复查
+
+已完成:
+- nd device 发现层已由 `v4_adapters_` / `v6_adapters_` 改为按 `AdapterId` 归并的 `devices_`;
+  `nd_adapter_t` 持有 `v4_addr_` / `v6_addr_` 与 `local_addr_for(family)`。
+- nd connector/listener 已在控制面按 endpoint / `open(ps)` 的 family 选择本地地址,缺族时返回
+  `rdma_errc::address_family_not_supported`。
+- nd/ibv 的 `get_first_available_device(config)` API 已统一,现有调用点不再传 `tcp::v4()` / `tcp::v6()`。
+- `tcp` 已删除 nd-only adapter selection 语义,改为暴露 `family()`。
+- 已新增跨平台 `test_rdma_dual_family_echo` 可执行文件,用于手动跑 v4-then-v6 同 device echo。
+
+2026-06-22 手动验证:
+- Windows/ND 单机上同一 device 报告 `v4=yes v6=yes`。
+- `test_rdma_dual_family_echo` 使用 `10.234.66.130` 与 link-local IPv6
+  `fe80::de0e:a231:21f7:331%9` 手动跑通 v4-then-v6 echo,两轮 client/server 均打印 `OK`。
+
+仍需补强:
+- `test_rdma_dual_family_echo` 目前只编译,未纳入 CTest 自动编排;需要一个 server/client harness
+  或单进程双端测试,让 dual-family 往返能成为 CI/CTest 的硬验收。
+- 该测试的 round 失败目前主要靠日志表达;纳入自动化前需把失败传回 `main` 的 exit code,并明确“缺少某族地址”
+  是 skip 还是 fail。
+- 手动验证时 server 两轮 echo 完成后没有在 20 秒内自然退出;自动化前需修正 teardown/退出路径,避免 CTest
+  或脚本挂住。
+- v6 硬件验证还应扩展到非 link-local/global IPv6 和 ibv 环境;当前仅覆盖 Windows/ND link-local IPv6。
+- ibv 单网卡双族模型已经对齐;多网卡下 rdma_cm 路由与 `use_device` 绑定 device 不一致的问题仍属于后续增量。

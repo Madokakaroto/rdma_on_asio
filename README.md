@@ -73,7 +73,7 @@ asio::awaitable<void> client(asio::io_context& io, rdma_device_ptr dev,
 int main() {
   asio::io_context io;
   auto dev = rdma_device_manager_t::instance()
-                 .get_first_available_device(tcp::v4(), {});   // discover a device
+                 .get_first_available_device({});              // discover a dual-family device
   use_device(io, dev);                   // install this device's shared CQ on io
   asio::co_spawn(io, client(io, dev, "10.0.0.1", 5000), asio::detached);
   io.run();                              // pumps both the CM handshake and verbs completions
@@ -122,7 +122,7 @@ constexpr auto use_fut = asio::as_tuple(asio::use_future);  // no exceptions; co
 
 int main() {
   asio::io_context io;
-  auto dev = rdma_device_manager_t::instance().get_first_available_device(tcp::v4(), {});
+  auto dev = rdma_device_manager_t::instance().get_first_available_device({});
   use_device(io, dev);                 // required even in poll mode (backs the QP)
 
   rdma_completion_queue cq(dev);       // standalone CQ (no comp_channel), holds the device
