@@ -16,7 +16,7 @@ using asio::rdma::tcp;
 void test_listener_open_bind_listen() {
   asio::io_context io;
   auto device = asio::rdma::ibv_device_manager_t::instance()
-                    .get_first_available_device(tcp::v4(), {});
+                    .get_first_available_device({});
   asio::error_code ec;
   asio::rdma::use_device(io, device, {}, ec);
   if (ec) {
@@ -48,7 +48,7 @@ void test_listener_open_bind_listen() {
 void test_connector_open() {
   asio::io_context io;
   auto device = asio::rdma::ibv_device_manager_t::instance()
-                    .get_first_available_device(tcp::v4(), {});
+                    .get_first_available_device({});
   asio::error_code ec;
   asio::rdma::use_device(io, device, {}, ec);
   if (ec) {
@@ -73,7 +73,7 @@ void compile_only_async_surface(bool run) {
   }
   asio::io_context io;
   auto device = asio::rdma::ibv_device_manager_t::instance()
-                    .get_first_available_device(tcp::v4(), {});
+                    .get_first_available_device({});
   asio::rdma::use_device(io, device);
   asio::rdma::ibv_queue_pair qp(io);
   asio::rdma::ibv_connector<tcp> connector(io);

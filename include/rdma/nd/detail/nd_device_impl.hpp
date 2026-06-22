@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cassert>
+
 #include "rdma/nd/nd_types.hpp"
 #include "rdma/nd/nd_error.hpp"
 #include "rdma/nd/detail/nd_impl_types.hpp"
@@ -25,19 +27,20 @@ inline void enumerate_addr_list(nd_provider_t const& provider,
                                 asio::error_code& ec);
 inline auto enumerate_addr_list(nd_provider_t const& provider)
     -> std::vector<nd2_sockaddr_t>;
-inline auto open_adapter(nd2_provider_ptr const& provider,
-                         sockaddr const* addrin, std::size_t addr_size,
-                         asio::error_code& ec) -> nd2_adapter_ptr;
+inline UINT64 resolve_adapter_id(nd2_provider_ptr const& provider,
+                                 sockaddr const* addrin, std::size_t addr_size,
+                                 asio::error_code& ec);
 inline ND2_ADAPTER_INFO query_adapter_info(nd2_adapter_ptr const& adaptor,
                                            asio::error_code& ec);
 inline std::string query_adapter_name(ND2_ADAPTER_INFO const& info,
                                       sockaddr const* addrin, std::size_t addr_size,
                                       asio::error_code& ec);
-inline nd_adapter_ptr create_adapter(nd_provider_ptr const& provider,
-                                     nd2_sockaddr_t const& addr,
-                                     asio::error_code& ec);
-inline nd_adapter_ptr create_adapter(nd_provider_ptr const& provider,
-                                     nd2_sockaddr_t const& addr);
+// Open one physical adapter by its AdapterId (a single OpenAdapter == one PD
+// resource domain). Local v4/v6 addresses are attached afterwards in
+// open_adapters; addr is the triggering address, used only for the display name.
+inline nd_adapter_ptr create_device(nd_provider_ptr const& provider,
+                                    nd2_sockaddr_t const& addr,
+                                    UINT64 adapter_id, asio::error_code& ec);
 inline std::vector<nd_provider_ptr> get_providers(asio::error_code& ec);
 inline std::vector<nd_provider_ptr> get_providers();
 inline void open_adapters(std::vector<nd_provider_ptr>& providers);
@@ -264,6 +267,9 @@ void enumerate_addr_list(nd_provider_t const& provider,
     temp_addr_list->Address + temp_addr_list->iAddressCount}
     | std::views::transform([&](auto const& sock_addr) {
       nd2_sockaddr_t result{};
+      // The union's sockaddr_storage member is the capacity bound for the copy.
+      assert(static_cast<std::size_t>(sock_addr.iSockaddrLength) <=
+             sizeof(result.src_storage_));
       std::memcpy(&result.src_addr_, sock_addr.lpSockaddr,
                   sock_addr.iSockaddrLength);
       result.address_size_ = sock_addr.iSockaddrLength;
@@ -283,26 +289,19 @@ auto enumerate_addr_list(nd_provider_t const& provider)
   return result;
 }
 
-auto open_adapter(nd2_provider_ptr const& provider, sockaddr const* addrin,
-                  std::size_t addr_size, asio::error_code& ec)
-    -> nd2_adapter_ptr {
-  UINT64 adaptor_id = 0;
+// Map a local address to its provider-managed AdapterId. Same physical NIC ->
+// same id for both its v4 and v6 addresses (this is how open_adapters groups
+// v4/v6 of one NIC into a single device). See nd_dual_family_plan.md.
+UINT64 resolve_adapter_id(nd2_provider_ptr const& provider, sockaddr const* addrin,
+                          std::size_t addr_size, asio::error_code& ec) {
+  UINT64 adapter_id = 0;
   HRESULT hr = provider->ResolveAddress(addrin, static_cast<ULONG>(addr_size),
-                                        &adaptor_id);
+                                        &adapter_id);
   if (hr != ND_SUCCESS) {
     ec = make_nd_error_code(hr);
-    return nullptr;
+    return 0;
   }
-
-  nd2_adapter_ptr adapter{};
-  hr = provider->OpenAdapter(IID_IND2Adapter, adaptor_id,
-                             reinterpret_cast<LPVOID*>(adapter.GetAddressOf()));
-  if (hr != ND_SUCCESS) {
-    ec = make_nd_error_code(hr);
-    return nullptr;
-  }
-
-  return adapter;
+  return adapter_id;
 }
 
 ND2_ADAPTER_INFO query_adapter_info(nd2_adapter_ptr const& adaptor,
@@ -379,42 +378,39 @@ std::string query_adapter_name(ND2_ADAPTER_INFO const& info, sockaddr const* add
   return result;
 }
 
-nd_adapter_ptr create_adapter(nd_provider_ptr const& provider,
-                              nd2_sockaddr_t const& addr,
-                              asio::error_code& ec) {
+nd_adapter_ptr create_device(nd_provider_ptr const& provider,
+                             nd2_sockaddr_t const& addr, UINT64 adapter_id,
+                             asio::error_code& ec) {
   auto result = std::make_shared<nd_adapter_t>();
-  auto adapter_ptr =
-      open_adapter(provider->provider_, &addr.src_addr_, addr.address_size_, ec);
-  if (ec) {
-    return result;
+  nd2_adapter_ptr adapter_ptr{};
+  HRESULT hr = provider->provider_->OpenAdapter(
+      IID_IND2Adapter, adapter_id,
+      reinterpret_cast<LPVOID*>(adapter_ptr.GetAddressOf()));
+  if (hr != ND_SUCCESS) {
+    ec = make_nd_error_code(hr);
+    return nullptr;
   }
   auto const adapter_info = query_adapter_info(adapter_ptr, ec);
   if (ec) {
-    return result;
+    return nullptr;
   }
+  // Name is just for display; derive it from the triggering address.
   auto const adapter_name = query_adapter_name(
       adapter_info, &addr.src_addr_, addr.address_size_, ec);
   if (ec) {
-    return result;
+    return nullptr;
   }
   auto pd = std::make_unique<native_pd_t>();
   pd->context_ = adapter_ptr.Get();
   pd->sync_handle_.reset(create_overlapped_file(adapter_ptr.Get(), ec));
   if (ec) {
-    return result;
+    return nullptr;
   }
   result->adapter_ = adapter_ptr;
   result->pd_ = std::move(pd);
+  result->adapter_id_ = adapter_id;
   result->name_ = adapter_name;
   result->info_ = adapter_info;
-  return result;
-}
-
-nd_adapter_ptr create_adapter(nd_provider_ptr const& provider,
-                              nd2_sockaddr_t const& addr) {
-  asio::error_code ec{};
-  auto result = create_adapter(provider, addr, ec);
-  asio::detail::throw_error(ec);
   return result;
 }
 
@@ -468,25 +464,46 @@ std::vector<nd_provider_ptr> get_providers() {
   return result;
 }
 
+// Build one device per physical adapter (per AdapterId), attaching that
+// adapter's v4 and/or v6 local addresses. A NIC carrying both a v4 and a v6
+// address therefore yields ONE device (one OpenAdapter / one PD), not two.
+// See nd_dual_family_plan.md.
 void open_adapters(std::vector<nd_provider_ptr>& providers) {
   std::ranges::for_each(providers, [](auto& provider) {
     auto const addr_list = enumerate_addr_list(*provider);
-    auto v4_adapters = addr_list
-      | std::views::filter([](auto const& sock_addr) {
-          return sock_addr.src_addr_.sa_family == AF_INET; })
-      | std::views::transform([&](auto const& addr) {
-          return create_adapter(provider, addr);
-        });
-    auto v6_adapters = addr_list
-      | std::views::filter([](auto const& sock_addr) {
-          return sock_addr.src_addr_.sa_family == AF_INET6; })
-      | std::views::transform([&](auto const& addr) {
-          return create_adapter(provider, addr);
-        });
-    provider->v4_adapters_ = {std::ranges::begin(v4_adapters),
-                              std::ranges::end(v4_adapters)};
-    provider->v6_adapters_ = {std::ranges::begin(v6_adapters),
-                              std::ranges::end(v6_adapters)};
+    std::vector<nd_adapter_ptr> devices;
+    for (auto const& sock_addr : addr_list) {
+      auto const family = sock_addr.src_addr_.sa_family;
+      if (family != AF_INET && family != AF_INET6) {
+        continue;
+      }
+      asio::error_code ec{};
+      UINT64 const id = resolve_adapter_id(
+          provider->provider_, &sock_addr.src_addr_, sock_addr.address_size_, ec);
+      if (ec) {
+        continue;  // unresolvable address: skip (mirrors old per-adapter filter)
+      }
+      // Find-or-open the device for this AdapterId.
+      auto it = std::ranges::find_if(
+          devices, [id](auto const& d) { return d && d->adapter_id_ == id; });
+      nd_adapter_ptr device;
+      if (it != devices.end()) {
+        device = *it;
+      } else {
+        device = create_device(provider, sock_addr, id, ec);
+        if (ec || !device) {
+          continue;
+        }
+        devices.push_back(device);
+      }
+      // Attach this address to its family slot (first one wins).
+      if (family == AF_INET) {
+        if (!device->v4_addr_) device->v4_addr_ = sock_addr;
+      } else {
+        if (!device->v6_addr_) device->v6_addr_ = sock_addr;
+      }
+    }
+    provider->devices_ = std::move(devices);
   });
 }
 

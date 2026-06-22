@@ -21,6 +21,8 @@ enum class rdma_errc : int {
 
   too_many_sge,
   private_data_too_large,
+
+  address_family_not_supported,
 };
 
 class rdma_error_category : public std::error_category {
@@ -49,6 +51,8 @@ class rdma_error_category : public std::error_category {
         return "RDMA scatter/gather list exceeds device max_sge";
       case rdma_errc::private_data_too_large:
         return "RDMA outgoing private_data exceeds the CM cap";
+      case rdma_errc::address_family_not_supported:
+        return "RDMA device has no local address of the requested family";
       default:
         return "UNKNOWN_RDMA_ERROR";
     }

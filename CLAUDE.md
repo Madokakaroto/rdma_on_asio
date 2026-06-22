@@ -31,7 +31,7 @@ rdma_queue_pair        qp(io);
 rdma_completion_queue  cq(dev);
 rdma_memory_region     mr(dev, p, n);
 rdma_device_ptr        dev = rdma_device_manager_t::instance()
-                                 .get_first_available_device(tcp::v4(), {});
+                                 .get_first_available_device({});  // dual-family (v4+v6)
 use_device(io, dev);   // installs this device's shared CQ on io (config set here)
 
 // control plane — two equivalent spellings:
@@ -127,7 +127,7 @@ Types (detail/):
 
 | Operation | Signature (both backends) |
 |-----------|--------------------------|
-| Discover device | `rdma_device_manager_t::instance().get_first_available_device(port_space, config)` → `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints; `for_each_device(fn)` to iterate) |
+| Discover device | `rdma_device_manager_t::instance().get_first_available_device(config = {})` → `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints; `for_each_device(fn)` to iterate). No port-space arg: a device is family-agnostic and serves both v4/v6 (nd groups a NIC's v4/v6 addresses into one device by AdapterId; family is chosen at the control plane). See `docs/nd_dual_family_plan.md`. |
 | Init device | `use_device(io_ctx, device, config = {})` → `void` — installs the per-`io_context` completion service for `device` and stores the effective (operating) config; reusable across `io_context`s |
 | Queue pair (event) | `queue_pair(io_ctx)` or deferred `bind(io_ctx)` — bound to the io_context's managed CQ |
 | Queue pair (poll) | `queue_pair(cq)` or deferred `bind(cq)` — io_context-free; bound to a user CQ (config read from the holder) |

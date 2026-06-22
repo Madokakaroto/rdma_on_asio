@@ -228,7 +228,7 @@ int main(int argc, char* argv[]) {
   try {
     asio::io_context io_ctx;
     auto device = rdma::nd_device_manager_t::instance()
-                      .get_first_available_device(tcp::v4(), {});
+                      .get_first_available_device({});
     rdma::use_device(io_ctx, device);
 
     if (is_server) {

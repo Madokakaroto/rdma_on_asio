@@ -252,7 +252,7 @@ int main(int argc, char* argv[]) {
 
     asio::io_context io;
     auto device = rdma::rdma_device_manager_t::instance()
-                      .get_first_available_device(tcp::v4(), {});
+                      .get_first_available_device({});
     rdma::use_device(io, device);
 
     // Stage 4 contract: an io_context that binds no event-mode QP must never

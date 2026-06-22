@@ -28,15 +28,16 @@ class nd_device_manager_t {
     return instance;
   }
 
-  template <typename PortSpace>
-  nd_device_ptr get_first_available_device(PortSpace const& ps,
-                                           nd_config_t const& config) const {
+  // Return the first device whose capabilities satisfy the (non-zero) config
+  // constraints. No port-space / family filter: a device is family-agnostic and
+  // carries both its v4/v6 local addresses; the family is selected at the control
+  // plane (connector/listener). See nd_dual_family_plan.md.
+  nd_device_ptr get_first_available_device(nd_config_t const& config = {}) const {
     for (auto const& provider : providers_) {
       assert(provider);
-      auto const& adapters = ps.get_adapters(*provider);
-      for (auto adapter : adapters) {
-        if (detail::is_valid_adapter(adapter, config)) {
-          return adapter;
+      for (auto const& device : provider->devices_) {
+        if (detail::is_valid_adapter(device, config)) {
+          return device;
         }
       }
     }
@@ -47,11 +48,8 @@ class nd_device_manager_t {
   void for_each_device(Func&& func) const {
     for (auto const& provider : providers_) {
       assert(provider);
-      for (auto const& adapter : provider->v4_adapters_) {
-        if (!func(adapter)) return;
-      }
-      for (auto const& adapter : provider->v6_adapters_) {
-        if (!func(adapter)) return;
+      for (auto const& device : provider->devices_) {
+        if (!func(device)) return;
       }
     }
   }

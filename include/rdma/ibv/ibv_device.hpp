@@ -30,13 +30,11 @@ class ibv_device_manager_t {
     return instance;
   }
 
-  // The port space is accepted for signature parity with the nd backend. Verbs
-  // devices are not bound to a v4/v6 address family at this layer (that happens
-  // at rdma_cm connect time), so family is ignored and the first config-compatible
-  // device is returned.
-  template <typename PortSpace>
-  ibv_device_ptr get_first_available_device(PortSpace const& /*ps*/,
-                                            ibv_config_t const& config) const {
+  // Return the first device whose capabilities satisfy the (non-zero) config
+  // constraints. No port-space / family argument: a verbs device is family-
+  // agnostic (family is consumed at rdma_cm connect time via the destination
+  // sockaddr), so it serves both v4 and v6. See docs/nd_dual_family_plan.md.
+  ibv_device_ptr get_first_available_device(ibv_config_t const& config = {}) const {
     for (auto const& device : devices_) {
       if (detail::is_valid_device(device) &&
           detail::is_config_compatible(config, device->attr_)) {

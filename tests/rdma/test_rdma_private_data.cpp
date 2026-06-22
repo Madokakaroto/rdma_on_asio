@@ -348,7 +348,7 @@ int main(int argc, char* argv[]) {
 
   try {
     auto device = rdma::rdma_device_manager_t::instance()
-                      .get_first_available_device(tcp::v4(), {});
+                      .get_first_available_device({});
     bool ok = true;
     ok &= phase_matrix(device, ip, port);
     ok &= phase_request_lifetime(device, ip, static_cast<uint16_t>(port + 10));

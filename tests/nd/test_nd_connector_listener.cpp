@@ -14,8 +14,7 @@ namespace rdma = asio::rdma;
 using tcp = rdma::tcp;
 
 rdma::nd_device_ptr first_device() {
-  return rdma::nd_device_manager_t::instance().get_first_available_device(
-      tcp::v4(), rdma::nd_config_t{});
+  return rdma::nd_device_manager_t::instance().get_first_available_device(rdma::nd_config_t{});
 }
 
 void test_open_without_use_device_fails() {

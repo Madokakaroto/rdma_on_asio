@@ -426,7 +426,7 @@ private:
 int run_event_read_write(rdma_bench::options opt, std::string command_line) {
   asio::io_context io;
   auto device =
-      rdma::rdma_device_manager_t::instance().get_first_available_device(tcp::v4(), {});
+      rdma::rdma_device_manager_t::instance().get_first_available_device({});
   rdma::use_device(io, device);
 
   std::vector<rdma_bench::result> results;
@@ -527,7 +527,7 @@ rdma_bench::result run_poll_server_role(rdma_bench::options opt,
   try {
     asio::io_context io;
     auto device = rdma::rdma_device_manager_t::instance()
-                      .get_first_available_device(tcp::v4(), {});
+                      .get_first_available_device({});
     rdma::use_device(io, device);
 
     auto slots = poll_slot_count(opt);
@@ -610,7 +610,7 @@ rdma_bench::result run_poll_client_role(rdma_bench::options opt,
   try {
     asio::io_context io;
     auto device = rdma::rdma_device_manager_t::instance()
-                      .get_first_available_device(tcp::v4(), {});
+                      .get_first_available_device({});
     rdma::use_device(io, device);
 
     rdma::rdma_completion_queue cq(device);
@@ -769,7 +769,7 @@ rdma_bench::result run_poll_callback_client_role(rdma_bench::options opt,
   try {
     asio::io_context io;
     auto device = rdma::rdma_device_manager_t::instance()
-                      .get_first_available_device(tcp::v4(), {});
+                      .get_first_available_device({});
     rdma::use_device(io, device);
 
     rdma::rdma_completion_queue cq(device);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "rdma/detail/small_sglist.hpp"
 #include "rdma/rdma_commons.hpp"
 
@@ -112,20 +114,38 @@ struct nd_provider_factory_t {
   class_factory_ptr factory_;
 };
 using nd_provider_factory_ptr = std::shared_ptr<nd_provider_factory_t>;
-// adapter type
+// adapter type -- one device == one physical adapter: a single OpenAdapter
+// (one AdapterId, one PD resource domain) carrying that adapter's v4 and/or v6
+// local addresses. v4/v6 are NOT separate devices. See nd_dual_family_plan.md.
 struct nd_adapter_t {
   nd2_adapter_ptr adapter_;
   std::unique_ptr<native_pd_t> pd_;
-  std::string name_;
+  UINT64 adapter_id_ = 0;                   // ResolveAddress id; same HW -> same id
+  std::optional<nd2_sockaddr_t> v4_addr_;   // this adapter's v4 local address
+  std::optional<nd2_sockaddr_t> v6_addr_;   // this adapter's v6 local address
+  std::string name_;                        // display: first bound address string
   native_context_config_t info_;
+
+  // Local address matching the requested family (AF_INET / AF_INET6), or nullptr
+  // if this device has no address of that family -- control plane then reports
+  // rdma_errc::address_family_not_supported.
+  nd2_sockaddr_t const* local_addr_for(int family) const noexcept {
+    if (family == AF_INET) {
+      return v4_addr_ ? &*v4_addr_ : nullptr;
+    }
+    if (family == AF_INET6) {
+      return v6_addr_ ? &*v6_addr_ : nullptr;
+    }
+    return nullptr;
+  }
 };
 using nd_adapter_ptr = std::shared_ptr<nd_adapter_t>;
-// provider types
+// provider types -- adapters grouped by AdapterId (one entry per physical NIC,
+// each carrying its v4/v6 local addresses).
 struct nd_provider_t {
   nd_provider_factory_ptr factory_;
   nd2_provider_ptr provider_;
-  std::vector<nd_adapter_ptr> v4_adapters_;
-  std::vector<nd_adapter_ptr> v6_adapters_;
+  std::vector<nd_adapter_ptr> devices_;
 };
 using nd_provider_ptr = std::shared_ptr<nd_provider_t>;
 

@@ -9,6 +9,7 @@ foreach(rdma_test
         test_rdma_error
         test_rdma_echo
         test_rdma_echo_poll
+        test_rdma_dual_family_echo
         test_rdma_sgl
         test_rdma_private_data
         test_rdma_regression)

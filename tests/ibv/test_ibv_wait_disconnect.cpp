@@ -112,7 +112,7 @@ int main(int argc, char* argv[]) {
   try {
     asio::io_context io;
     auto device = rdma::rdma_device_manager_t::instance()
-                      .get_first_available_device(tcp::v4(), {});
+                      .get_first_available_device({});
     rdma::use_device(io, device);
 
     result_t r;

@@ -10,7 +10,7 @@ namespace asio::rdma {
 
 // Initialize the per-io_context shared-CQ service for an explicit device. The
 // caller discovers the device beforehand via
-// nd_device_manager_t::instance().get_first_available_device(ps, config).
+// nd_device_manager_t::instance().get_first_available_device(config).
 //
 // Returns void: the caller already holds the device_ptr. The same device_ptr may
 // be passed to use_device on multiple io_contexts. Mirrors ibv use_device.

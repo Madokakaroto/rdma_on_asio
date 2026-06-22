@@ -45,16 +45,11 @@ public:
     return endpoint{impl_, port};
   }
 
-#if defined(ASIO_RDMA_BACKEND_ND)
-  auto get_adapters(detail::nd_provider_t const& provider) const noexcept
-      -> std::vector<detail::nd_adapter_ptr> {
-    auto const family = impl_.family();
-    if (family == AF_INET) {
-      return provider.v4_adapters_;
-    }
-    return provider.v6_adapters_;
-  }
-#endif
+  // Address family of this port space value (AF_INET / AF_INET6). The control
+  // plane uses it to pick the device's matching local address (nd) or the
+  // wildcard bind family (ibv). Replaces the old nd-only get_adapters(): device
+  // discovery no longer selects by family (see nd_dual_family_plan.md).
+  int family() const noexcept { return impl_.family(); }
 };
 
 }
