@@ -1,6 +1,16 @@
 #pragma once
 
+#include <algorithm>
 #include <cassert>
+#include <cstring>
+#include <functional>
+#include <iterator>
+#include <optional>
+#include <ranges>
+#include <span>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 #include "rdma/nd/nd_types.hpp"
 #include "rdma/nd/nd_error.hpp"
@@ -8,7 +18,123 @@
 
 namespace asio::rdma::detail {
 
-inline bool is_valid_addr(SOCKADDR const& addr);
+template <template <typename...> typename Container>
+struct to_action {};
+
+template <typename Fn>
+struct filter_map_action {
+  Fn fn;
+};
+
+template <typename KeyFn>
+struct sort_by_action {
+  KeyFn key_fn;
+};
+
+template <typename Pred>
+struct chunk_by_action {
+  Pred pred;
+};
+
+template <template <typename...> typename Container>
+to_action<Container> to() {
+  return {};
+}
+
+template <typename Fn>
+filter_map_action<std::decay_t<Fn>> filter_map(Fn&& fn) {
+  return filter_map_action<std::decay_t<Fn>>{std::forward<Fn>(fn)};
+}
+
+template <typename KeyFn>
+sort_by_action<std::decay_t<KeyFn>> sort_by(KeyFn&& key_fn) {
+  return sort_by_action<std::decay_t<KeyFn>>{std::forward<KeyFn>(key_fn)};
+}
+
+template <typename Pred>
+chunk_by_action<std::decay_t<Pred>> chunk_by(Pred&& pred) {
+  return chunk_by_action<std::decay_t<Pred>>{std::forward<Pred>(pred)};
+}
+
+template <std::ranges::input_range Range,
+          template <typename...> typename Container>
+auto operator|(Range&& range, to_action<Container>) {
+  using value_type = std::ranges::range_value_t<Range>;
+
+  Container<value_type> result;
+  if constexpr (std::ranges::sized_range<Range>) {
+    if constexpr (requires(Container<value_type>& c,
+                           std::ranges::range_size_t<Range> n) {
+                    c.reserve(n);
+                  }) {
+      result.reserve(std::ranges::size(range));
+    }
+  }
+
+  std::ranges::copy(range, std::back_inserter(result));
+  return result;
+}
+
+template <std::ranges::input_range Range, typename Fn>
+auto operator|(Range&& range, filter_map_action<Fn> action) {
+  using input_type = std::ranges::range_value_t<Range>;
+  using optional_type = std::invoke_result_t<Fn&, input_type const&>;
+  using output_type = std::decay_t<decltype(*std::declval<optional_type&>())>;
+
+  std::vector<output_type> result;
+  if constexpr (std::ranges::sized_range<Range>) {
+    result.reserve(std::ranges::size(range));
+  }
+
+  for (input_type const& item : range) {
+    auto value = std::invoke(action.fn, item);
+    if (value) {
+      result.push_back(std::move(*value));
+    }
+  }
+  return result;
+}
+
+template <std::ranges::input_range Range, typename KeyFn>
+auto operator|(Range&& range, sort_by_action<KeyFn> action) {
+  auto result = std::forward<Range>(range) | to<std::vector>();
+  std::ranges::sort(result, [&](auto const& a, auto const& b) {
+    return std::invoke(action.key_fn, a) < std::invoke(action.key_fn, b);
+  });
+  return result;
+}
+
+template <std::ranges::input_range Range, typename Pred>
+auto operator|(Range&& range, chunk_by_action<Pred> action) {
+  using value_type = std::ranges::range_value_t<Range>;
+
+  std::vector<std::vector<value_type>> chunks;
+  if constexpr (std::ranges::sized_range<Range>) {
+    chunks.reserve(std::ranges::size(range));
+  }
+
+  auto it = std::ranges::begin(range);
+  auto const last = std::ranges::end(range);
+  if (it == last) {
+    return chunks;
+  }
+
+  std::vector<value_type> current;
+  current.push_back(*it);
+  auto previous = it++;
+  for (; it != last; previous = it++) {
+    if (std::invoke(action.pred, *previous, *it)) {
+      current.push_back(*it);
+    } else {
+      chunks.push_back(std::move(current));
+      current.clear();
+      current.push_back(*it);
+    }
+  }
+  chunks.push_back(std::move(current));
+  return chunks;
+}
+
 inline bool is_valid_proto(WSAPROTOCOL_INFOW const& proto);
 
 inline void enumerate_protos(std::vector<WSAPROTOCOL_INFOW>& out_protos,
@@ -27,6 +153,11 @@ inline void enumerate_addr_list(nd_provider_t const& provider,
                                 asio::error_code& ec);
 inline auto enumerate_addr_list(nd_provider_t const& provider)
     -> std::vector<nd2_sockaddr_t>;
+inline void query_adapter_addr_list(nd2_adapter_ptr const& adapter,
+                                    std::vector<nd2_sockaddr_t>& addr_list,
+                                    asio::error_code& ec);
+inline auto query_adapter_addr_list(nd2_adapter_ptr const& adapter)
+    -> std::vector<nd2_sockaddr_t>;
 inline UINT64 resolve_adapter_id(nd2_provider_ptr const& provider,
                                  sockaddr const* addrin, std::size_t addr_size,
                                  asio::error_code& ec);
@@ -41,6 +172,11 @@ inline std::string query_adapter_name(ND2_ADAPTER_INFO const& info,
 inline nd_adapter_ptr create_device(nd_provider_ptr const& provider,
                                     nd2_sockaddr_t const& addr,
                                     UINT64 adapter_id, asio::error_code& ec);
+inline nd_adapter_ptr open_device(
+    nd_provider_ptr const& provider, UINT64 adapter_id,
+    std::span<nd2_sockaddr_t const> provider_addresses, asio::error_code& ec);
+inline std::vector<nd_adapter_ptr> discover_provider_devices(
+    nd_provider_ptr const& provider);
 inline std::vector<nd_provider_ptr> get_providers(asio::error_code& ec);
 inline std::vector<nd_provider_ptr> get_providers();
 inline void open_adapters(std::vector<nd_provider_ptr>& providers);
@@ -63,23 +199,32 @@ HANDLE create_overlapped_file(native_context_t* context, asio::error_code& ec) {
   return result;
 }
 
-bool is_valid_addr(SOCKADDR const& addr) {
-  switch (addr.sa_family) {
-    case AF_INET: {
-      sockaddr_in const& addr4 = reinterpret_cast<sockaddr_in const&>(addr);
-      /* HACK-alert: reject local or MS default IPv4 addrs */
-      return !(addr4.sin_addr.S_un.S_un_b.s_b1 == 169 ||
-               addr4.sin_addr.S_un.S_un_b.s_b1 == 127);
-    }
-    case AF_INET6: {
-      sockaddr_in6 const& addr6 = reinterpret_cast<sockaddr_in6 const&>(addr);
-      return !(addr6.sin6_addr.u.Byte[0] == 0xfe &&
-               addr6.sin6_addr.u.Byte[1] == 0x80);
-    }
-    default:
-      break;
-  }
-  return false;
+inline bool is_supported_addr_family(nd2_sockaddr_t const& addr) noexcept {
+  auto const family = addr.src_addr_.sa_family;
+  return family == AF_INET || family == AF_INET6;
+}
+
+inline std::vector<nd2_sockaddr_t> copy_socket_address_list(
+    SOCKET_ADDRESS_LIST const& addr_list) {
+  auto addr_range = std::ranges::subrange{
+    addr_list.Address,
+    addr_list.Address + addr_list.iAddressCount}
+    | std::views::transform([](auto const& sock_addr) {
+      nd2_sockaddr_t result{};
+      if (static_cast<std::size_t>(sock_addr.iSockaddrLength) >
+          sizeof(result.src_storage_)) {
+        return result;
+      }
+      std::memcpy(&result.src_addr_, sock_addr.lpSockaddr,
+                  sock_addr.iSockaddrLength);
+      result.address_size_ = sock_addr.iSockaddrLength;
+      return result;
+    })
+    | std::views::filter([](auto const& addr) {
+      return addr.address_size_ != 0;
+    });
+
+  return addr_range | to<std::vector>();
 }
 
 bool is_valid_proto(WSAPROTOCOL_INFOW const& proto) {
@@ -262,21 +407,7 @@ void enumerate_addr_list(nd_provider_t const& provider,
     return;
   }
 
-  auto addr_range = std::ranges::subrange{
-    temp_addr_list->Address,
-    temp_addr_list->Address + temp_addr_list->iAddressCount}
-    | std::views::transform([&](auto const& sock_addr) {
-      nd2_sockaddr_t result{};
-      // The union's sockaddr_storage member is the capacity bound for the copy.
-      assert(static_cast<std::size_t>(sock_addr.iSockaddrLength) <=
-             sizeof(result.src_storage_));
-      std::memcpy(&result.src_addr_, sock_addr.lpSockaddr,
-                  sock_addr.iSockaddrLength);
-      result.address_size_ = sock_addr.iSockaddrLength;
-      return result;
-    });
-  std::vector<nd2_sockaddr_t> result{addr_range.begin(), addr_range.end()};
-  addr_list = std::move(result);
+  addr_list = copy_socket_address_list(*temp_addr_list);
   ec.clear();
 }
 
@@ -285,6 +416,48 @@ auto enumerate_addr_list(nd_provider_t const& provider)
   std::vector<nd2_sockaddr_t> result{};
   std::error_code ec{};
   enumerate_addr_list(provider, result, ec);
+  throw_error(ec);
+  return result;
+}
+
+void query_adapter_addr_list(nd2_adapter_ptr const& adapter,
+                             std::vector<nd2_sockaddr_t>& addr_list,
+                             asio::error_code& ec) {
+  assert(adapter);
+  ULONG addr_list_buffer_size{0ul};
+  adapter->QueryAddressList(nullptr, &addr_list_buffer_size);
+  if (addr_list_buffer_size == 0) {
+    ec = make_error_code(std::errc::address_not_available);
+    return;
+  }
+
+  scope_buffer buffer{std::malloc(addr_list_buffer_size)};
+  if (!buffer.buffer) {
+    ec = make_error_code(std::errc::not_enough_memory);
+    return;
+  }
+  SOCKET_ADDRESS_LIST* temp_addr_list =
+      static_cast<SOCKET_ADDRESS_LIST*>(buffer.buffer);
+  HRESULT hr = adapter->QueryAddressList(temp_addr_list,
+                                         &addr_list_buffer_size);
+  if (hr != ND_SUCCESS) {
+    ec = make_nd_error_code(hr);
+    return;
+  }
+  if (temp_addr_list->iAddressCount <= 0) {
+    ec = make_error_code(std::errc::address_not_available);
+    return;
+  }
+
+  addr_list = copy_socket_address_list(*temp_addr_list);
+  ec.clear();
+}
+
+auto query_adapter_addr_list(nd2_adapter_ptr const& adapter)
+    -> std::vector<nd2_sockaddr_t> {
+  std::vector<nd2_sockaddr_t> result{};
+  std::error_code ec{};
+  query_adapter_addr_list(adapter, result, ec);
   throw_error(ec);
   return result;
 }
@@ -414,6 +587,112 @@ nd_adapter_ptr create_device(nd_provider_ptr const& provider,
   return result;
 }
 
+inline void attach_device_addresses(
+    nd_adapter_ptr const& device,
+    std::span<nd2_sockaddr_t const> addresses) {
+  assert(device);
+  for (auto const& addr :
+       addresses | std::views::filter(is_supported_addr_family)) {
+    auto const family = addr.src_addr_.sa_family;
+    if (family == AF_INET && !device->v4_addr_) {
+      device->v4_addr_ = addr;
+    } else if (family == AF_INET6 && !device->v6_addr_) {
+      device->v6_addr_ = addr;
+    }
+  }
+}
+
+nd_adapter_ptr open_device(
+    nd_provider_ptr const& provider, UINT64 adapter_id,
+    std::span<nd2_sockaddr_t const> provider_addresses, asio::error_code& ec) {
+  if (provider_addresses.empty()) {
+    ec = make_error_code(std::errc::invalid_argument);
+    return nullptr;
+  }
+
+  auto device = create_device(provider, provider_addresses.front(),
+                              adapter_id, ec);
+  if (ec || !device) {
+    return nullptr;
+  }
+
+  // Best-effort until IND2Adapter::QueryAddressList has been validated on all
+  // target providers. Adapter-owned addresses are preferred; provider seed
+  // addresses remain the fallback for empty/error adapter lists.
+  std::vector<nd2_sockaddr_t> adapter_addresses;
+  asio::error_code query_ec;
+  query_adapter_addr_list(device->adapter_, adapter_addresses, query_ec);
+  if (!query_ec && !adapter_addresses.empty()) {
+    attach_device_addresses(device, adapter_addresses);
+  } else {
+    attach_device_addresses(device, provider_addresses);
+  }
+
+  if (!device->v4_addr_ && !device->v6_addr_) {
+    ec = make_error_code(std::errc::address_not_available);
+    return nullptr;
+  }
+
+  ec.clear();
+  return device;
+}
+
+struct resolved_nd_address {
+  UINT64 adapter_id = 0;
+  nd2_sockaddr_t address;
+};
+
+std::vector<nd_adapter_ptr> discover_provider_devices(
+    nd_provider_ptr const& provider) {
+  std::vector<nd2_sockaddr_t> addr_list;
+  asio::error_code enumerate_ec;
+  enumerate_addr_list(*provider, addr_list, enumerate_ec);
+  if (enumerate_ec) {
+    return {};
+  }
+
+  return addr_list
+         | std::views::filter(is_supported_addr_family)
+         | filter_map([provider](nd2_sockaddr_t const& addr)
+                          -> std::optional<resolved_nd_address> {
+             asio::error_code resolve_ec;
+             auto const id = resolve_adapter_id(
+                 provider->provider_, &addr.src_addr_, addr.address_size_,
+                 resolve_ec);
+             if (resolve_ec) {
+               return std::nullopt;
+             }
+             return resolved_nd_address{
+                 .adapter_id = id,
+                 .address = addr,
+             };
+           })
+         | sort_by([](resolved_nd_address const& item) {
+             return item.adapter_id;
+           })
+         | chunk_by([](resolved_nd_address const& a,
+                       resolved_nd_address const& b) {
+             return a.adapter_id == b.adapter_id;
+           })
+         | std::views::transform([provider](auto const& chunk) {
+             auto const adapter_id = chunk.front().adapter_id;
+             auto provider_addresses =
+                 chunk
+                 | std::views::transform([](resolved_nd_address const& item) {
+                     return item.address;
+                   })
+                 | to<std::vector>();
+
+             asio::error_code open_ec;
+             return open_device(provider, adapter_id, provider_addresses,
+                                open_ec);
+           })
+         | std::views::filter([](nd_adapter_ptr const& device) {
+             return device != nullptr;
+           })
+         | to<std::vector>();
+}
+
 std::vector<nd_provider_ptr> get_providers(asio::error_code& ec) {
   std::vector<nd_provider_ptr> result{};
   std::vector<WSAPROTOCOL_INFOW> protos{};
@@ -469,42 +748,9 @@ std::vector<nd_provider_ptr> get_providers() {
 // address therefore yields ONE device (one OpenAdapter / one PD), not two.
 // See nd_dual_family_plan.md.
 void open_adapters(std::vector<nd_provider_ptr>& providers) {
-  std::ranges::for_each(providers, [](auto& provider) {
-    auto const addr_list = enumerate_addr_list(*provider);
-    std::vector<nd_adapter_ptr> devices;
-    for (auto const& sock_addr : addr_list) {
-      auto const family = sock_addr.src_addr_.sa_family;
-      if (family != AF_INET && family != AF_INET6) {
-        continue;
-      }
-      asio::error_code ec{};
-      UINT64 const id = resolve_adapter_id(
-          provider->provider_, &sock_addr.src_addr_, sock_addr.address_size_, ec);
-      if (ec) {
-        continue;  // unresolvable address: skip (mirrors old per-adapter filter)
-      }
-      // Find-or-open the device for this AdapterId.
-      auto it = std::ranges::find_if(
-          devices, [id](auto const& d) { return d && d->adapter_id_ == id; });
-      nd_adapter_ptr device;
-      if (it != devices.end()) {
-        device = *it;
-      } else {
-        device = create_device(provider, sock_addr, id, ec);
-        if (ec || !device) {
-          continue;
-        }
-        devices.push_back(device);
-      }
-      // Attach this address to its family slot (first one wins).
-      if (family == AF_INET) {
-        if (!device->v4_addr_) device->v4_addr_ = sock_addr;
-      } else {
-        if (!device->v6_addr_) device->v6_addr_ = sock_addr;
-      }
-    }
-    provider->devices_ = std::move(devices);
-  });
+  for (auto& provider : providers) {
+    provider->devices_ = discover_provider_devices(provider);
+  }
 }
 
 bool is_valid_adapter(nd_adapter_ptr const& adapter,
