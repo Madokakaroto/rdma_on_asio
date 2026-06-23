@@ -13,7 +13,12 @@ foreach(rdma_test
         test_rdma_sgl
         test_rdma_private_data
         test_rdma_regression)
-  add_executable(${rdma_test} ${rdma_test}.cpp)
+  set(rdma_test_sources ${rdma_test}.cpp)
+  if(RDMA_BACKEND STREQUAL "nd")
+    list(APPEND rdma_test_sources ${NETWORKDIRECT_SOURCE})
+  endif()
+
+  add_executable(${rdma_test} ${rdma_test_sources})
 
   target_include_directories(${rdma_test} PRIVATE
       ${CMAKE_SOURCE_DIR}/include
@@ -26,8 +31,7 @@ foreach(rdma_test
   if(RDMA_BACKEND STREQUAL "ibv")
     target_link_libraries(${rdma_test} PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
   elseif(RDMA_BACKEND STREQUAL "nd")
-    target_compile_definitions(${rdma_test} PRIVATE _WIN32_WINNT=0x0A00)
-    target_link_libraries(${rdma_test} PRIVATE ndutil)
+    rdma_configure_nd_backend(${rdma_test})
   endif()
 endforeach()
 

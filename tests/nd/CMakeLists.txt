@@ -1,125 +1,152 @@
-add_executable(test_nd_global_init test_nd_global_init.cpp)
+add_executable(test_nd_global_init
+    test_nd_global_init.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_global_init PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_global_init PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_global_init PRIVATE ndutil)
+target_compile_definitions(test_nd_global_init PRIVATE ASIO_STANDALONE)
+rdma_configure_nd_backend(test_nd_global_init)
 
-add_executable(test_nd_device_manager test_nd_device_manager.cpp)
+add_executable(test_nd_device_manager
+    test_nd_device_manager.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_device_manager PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_device_manager PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_device_manager PRIVATE ndutil)
+target_compile_definitions(test_nd_device_manager PRIVATE ASIO_STANDALONE)
+rdma_configure_nd_backend(test_nd_device_manager)
 
-add_executable(test_nd_config_derive test_nd_config_derive.cpp)
+add_executable(test_nd_config_derive
+    test_nd_config_derive.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_config_derive PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_config_derive PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_config_derive PRIVATE ndutil)
+target_compile_definitions(test_nd_config_derive PRIVATE ASIO_STANDALONE)
+rdma_configure_nd_backend(test_nd_config_derive)
 
-add_executable(test_nd_error test_nd_error.cpp)
+add_executable(test_nd_error
+    test_nd_error.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_error PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_error PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_error PRIVATE ndutil)
+target_compile_definitions(test_nd_error PRIVATE ASIO_STANDALONE)
+rdma_configure_nd_backend(test_nd_error)
 
-add_executable(test_nd_use_device test_nd_use_device.cpp)
+add_executable(test_nd_use_device
+    test_nd_use_device.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_use_device PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_use_device PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_use_device PRIVATE ndutil)
+target_compile_definitions(test_nd_use_device PRIVATE ASIO_STANDALONE)
+rdma_configure_nd_backend(test_nd_use_device)
 
-add_executable(test_nd_refactored_compile test_nd_refactored_compile.cpp)
+add_executable(test_nd_refactored_compile
+    test_nd_refactored_compile.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_refactored_compile PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_refactored_compile PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_refactored_compile PRIVATE ndutil)
+target_compile_definitions(test_nd_refactored_compile PRIVATE ASIO_STANDALONE)
+rdma_configure_nd_backend(test_nd_refactored_compile)
 
-add_executable(test_nd_connector_listener test_nd_connector_listener.cpp)
+add_executable(test_nd_connector_listener
+    test_nd_connector_listener.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_connector_listener PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_connector_listener PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_connector_listener PRIVATE ndutil)
+target_compile_definitions(test_nd_connector_listener PRIVATE ASIO_STANDALONE)
+rdma_configure_nd_backend(test_nd_connector_listener)
 
-add_executable(test_nd_echo test_nd_echo.cpp)
+add_executable(test_nd_echo
+    test_nd_echo.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_echo PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_echo PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_echo PRIVATE ndutil)
+target_compile_definitions(test_nd_echo PRIVATE ASIO_STANDALONE)
+rdma_configure_nd_backend(test_nd_echo)
 
 # Poll-mode echo: data plane runs against a user-owned CQ spun on its own thread.
 find_package(Threads REQUIRED)
 
-add_executable(test_nd_echo_poll test_nd_echo_poll.cpp)
+add_executable(test_nd_echo_poll
+    test_nd_echo_poll.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_echo_poll PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_echo_poll PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_echo_poll PRIVATE ndutil Threads::Threads)
+target_compile_definitions(test_nd_echo_poll PRIVATE ASIO_STANDALONE)
+target_link_libraries(test_nd_echo_poll PRIVATE Threads::Threads)
+rdma_configure_nd_backend(test_nd_echo_poll)
 
-add_executable(test_nd_wait_disconnect test_nd_wait_disconnect.cpp)
+add_executable(test_nd_wait_disconnect
+    test_nd_wait_disconnect.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_wait_disconnect PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_wait_disconnect PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_wait_disconnect PRIVATE ndutil)
+target_compile_definitions(test_nd_wait_disconnect PRIVATE ASIO_STANDALONE)
+rdma_configure_nd_backend(test_nd_wait_disconnect)
 
-add_executable(test_nd_disconnect_cancel test_nd_disconnect_cancel.cpp)
+add_executable(test_nd_disconnect_cancel
+    test_nd_disconnect_cancel.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_disconnect_cancel PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_disconnect_cancel PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_disconnect_cancel PRIVATE ndutil Threads::Threads)
+target_compile_definitions(test_nd_disconnect_cancel PRIVATE ASIO_STANDALONE)
+target_link_libraries(test_nd_disconnect_cancel PRIVATE Threads::Threads)
+rdma_configure_nd_backend(test_nd_disconnect_cancel)
 
-add_executable(test_nd_control_cancel test_nd_control_cancel.cpp)
+add_executable(test_nd_control_cancel
+    test_nd_control_cancel.cpp
+    ${NETWORKDIRECT_SOURCE})
 
 target_include_directories(test_nd_control_cancel PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/third_party/asio/include
 )
 
-target_compile_definitions(test_nd_control_cancel PRIVATE ASIO_STANDALONE _WIN32_WINNT=0x0A00)
-target_link_libraries(test_nd_control_cancel PRIVATE ndutil Threads::Threads)
+target_compile_definitions(test_nd_control_cancel PRIVATE ASIO_STANDALONE)
+target_link_libraries(test_nd_control_cancel PRIVATE Threads::Threads)
+rdma_configure_nd_backend(test_nd_control_cancel)
 
 add_test(NAME test_nd_global_init COMMAND test_nd_global_init)
 set_tests_properties(test_nd_global_init PROPERTIES LABELS "unit;nd;legacy")

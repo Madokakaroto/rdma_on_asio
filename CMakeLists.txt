@@ -1,4 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
+if(POLICY CMP0091)
+  cmake_policy(SET CMP0091 NEW)
+endif()
 project(rdma_on_asio VERSION 0.1.0 LANGUAGES CXX)
 enable_testing()
 
@@ -13,6 +16,7 @@ option(RDMA_BUILD_INTEGRATION_TESTS "Build smoke and integration tests" ON)
 option(RDMA_BUILD_STRESS_TESTS "Build opt-in RDMA stress tests" OFF)
 option(RDMA_BUILD_PERFORMANCE_TESTS "Build opt-in RDMA performance and latency tools" OFF)
 option(RDMA_BUILD_NATIVE_BASELINES "Build opt-in native backend baseline tools" OFF)
+option(RDMA_BUILD_ASIO_MACRO_TESTS "Build opt-in ASIO macro mode validation tests" OFF)
 option(RDMA_ENABLE_PERFTEST_BASELINE "Enable optional perftest baseline helpers" OFF)
 option(RDMA_BUILD_PERFTEST "Build/import a project-managed perftest checkout for benchmark use" OFF)
 option(RDMA_ENABLE_HARDWARE_TESTS "Register tests that need RDMA hardware" OFF)
@@ -31,29 +35,11 @@ endif()
 
 # NetworkDirect backend
 if(RDMA_BACKEND STREQUAL "nd")
-  set(ND_DIR ${CMAKE_SOURCE_DIR}/third_party/networkdirect/src/ndutil)
-  set(ND_GENERATED_DIR ${CMAKE_BINARY_DIR}/generated/networkdirect)
-  file(MAKE_DIRECTORY ${ND_GENERATED_DIR})
-
-  find_program(MC_EXE mc.exe
-      HINTS "C:/Program Files (x86)/Windows Kits/10/bin/${CMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION}/x64"
-  )
-
-  add_custom_command(
-      OUTPUT ${ND_GENERATED_DIR}/ndstatus.h
-      COMMAND ${MC_EXE} -h ${ND_GENERATED_DIR} ${ND_DIR}/ndstatus.mc
-      DEPENDS ${ND_DIR}/ndstatus.mc
-      COMMENT "Generating ndstatus.h from ndstatus.mc"
-  )
-
-  add_library(ndutil STATIC
-      ${ND_DIR}/ndaddr.cpp
-      ${ND_DIR}/ndfrmwrk.cpp
-      ${ND_DIR}/ndprov.cpp
-      ${ND_GENERATED_DIR}/ndstatus.h
-  )
-  target_include_directories(ndutil PUBLIC ${ND_DIR} ${ND_GENERATED_DIR})
-  target_link_libraries(ndutil PUBLIC ws2_32)
+  include(cmake/NetworkDirect.cmake)
+  rdma_networkdirect_init(
+      OUT_INCLUDE_DIRS NETWORKDIRECT_INCLUDE_DIRS
+      OUT_LIB_DIR NETWORKDIRECT_LIB_DIR
+      OUT_LIB_NAME NETWORKDIRECT_LIB_NAME)
 endif()
 
 # libibverbs backend (Linux rdma-core: libibverbs + librdmacm)

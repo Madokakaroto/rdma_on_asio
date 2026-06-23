@@ -15,15 +15,19 @@ function(rdma_configure_benchmark_target name)
   target_link_libraries(${name} PRIVATE Threads::Threads)
 
   if(RDMA_BACKEND STREQUAL "nd")
-    target_compile_definitions(${name} PRIVATE _WIN32_WINNT=0x0A00)
-    target_link_libraries(${name} PRIVATE ndutil)
+    rdma_configure_nd_backend(${name})
   elseif(RDMA_BACKEND STREQUAL "ibv")
     target_link_libraries(${name} PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
   endif()
 endfunction()
 
 function(rdma_add_benchmark name source)
-  add_executable(${name} ${source})
+  set(benchmark_sources ${source})
+  if(RDMA_BACKEND STREQUAL "nd")
+    list(APPEND benchmark_sources ${NETWORKDIRECT_SOURCE})
+  endif()
+
+  add_executable(${name} ${benchmark_sources})
   rdma_configure_benchmark_target(${name})
 endfunction()
 
@@ -75,7 +79,12 @@ if(RDMA_BUILD_PERFORMANCE_TESTS)
 
   set(ASIO_PERFTEST_ENTRIES ${CMAKE_SOURCE_DIR}/tests/benchmark/entries)
   function(rdma_add_asio_perftest name entry)
-    add_executable(${name} ${entry} $<TARGET_OBJECTS:asio_perftest_obj>)
+    set(asio_perftest_sources ${entry} $<TARGET_OBJECTS:asio_perftest_obj>)
+    if(RDMA_BACKEND STREQUAL "nd")
+      list(APPEND asio_perftest_sources ${NETWORKDIRECT_SOURCE})
+    endif()
+
+    add_executable(${name} ${asio_perftest_sources})
     rdma_configure_benchmark_target(${name})
   endfunction()
   rdma_add_asio_perftest(asio_perftest  ${ASIO_PERFTEST_ENTRIES}/asio_perftest_main.cpp)
@@ -141,17 +150,20 @@ if(RDMA_BUILD_PERFORMANCE_TESTS)
     set_tests_properties(performance_asio_read_bw_poll_single_host_smoke
         PROPERTIES LABELS "performance;hardware;manual;rdma" TIMEOUT 30)
 
-    # Stage 8 driver smoke: drive one case (send/recv bw, event) lib-vs-perftest
-    # via run_comparison.sh. Manual-labeled like every hardware test here.
-    math(EXPR RDMA_BENCH_COMPARISON_PORT "${RDMA_TEST_BASE_PORT} + 330")
-    add_test(NAME performance_run_comparison_send_bw_smoke
-             COMMAND bash ${CMAKE_CURRENT_BINARY_DIR}/run_comparison.sh
-                     --scenario ${CMAKE_SOURCE_DIR}/tests/benchmark/scenarios/comparison/send_bw_event.json
-                     --local-addr ${RDMA_TEST_ADDR}
-                     --output-dir ${CMAKE_CURRENT_BINARY_DIR}/comparison-run-ctest
-                     --base-port ${RDMA_BENCH_COMPARISON_PORT})
-    set_tests_properties(performance_run_comparison_send_bw_smoke
-        PROPERTIES LABELS "performance;hardware;manual;rdma;comparison" TIMEOUT 120)
+    if(NOT WIN32)
+      # Stage 8 driver smoke: drive one case (send/recv bw, event)
+      # lib-vs-perftest via run_comparison.sh. Manual-labeled like every
+      # hardware test here.
+      math(EXPR RDMA_BENCH_COMPARISON_PORT "${RDMA_TEST_BASE_PORT} + 330")
+      add_test(NAME performance_run_comparison_send_bw_smoke
+               COMMAND bash ${CMAKE_CURRENT_BINARY_DIR}/run_comparison.sh
+                       --scenario ${CMAKE_SOURCE_DIR}/tests/benchmark/scenarios/comparison/send_bw_event.json
+                       --local-addr ${RDMA_TEST_ADDR}
+                       --output-dir ${CMAKE_CURRENT_BINARY_DIR}/comparison-run-ctest
+                       --base-port ${RDMA_BENCH_COMPARISON_PORT})
+      set_tests_properties(performance_run_comparison_send_bw_smoke
+          PROPERTIES LABELS "performance;hardware;manual;rdma;comparison" TIMEOUT 120)
+    endif()
   endif()
 endif()
 
@@ -198,7 +210,9 @@ if(RDMA_BUILD_NATIVE_BASELINES AND RDMA_BACKEND STREQUAL "nd")
       COPYONLY)
 
   function(rdma_add_nd_perftest name)
-    add_executable(${name} ${ND_PERFTEST_SOURCE})
+    add_executable(${name}
+        ${ND_PERFTEST_SOURCE}
+        ${NETWORKDIRECT_SOURCE})
     rdma_configure_benchmark_target(${name})
   endfunction()
 

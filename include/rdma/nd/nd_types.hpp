@@ -16,6 +16,7 @@
 #include <ndstatus.h>
 #include <ndspi.h>
 
+#include "rdma/nd/detail/nd_autolink.hpp"
 #include "rdma/rdma_commons.hpp"
 
 namespace asio::rdma {

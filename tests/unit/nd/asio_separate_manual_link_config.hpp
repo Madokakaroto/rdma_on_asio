@@ -1,0 +1,4 @@
+#pragma once
+
+#define ASIO_SEPARATE_COMPILATION 1
+#define ASIO_NO_DEFAULT_LINKED_LIBS 1
