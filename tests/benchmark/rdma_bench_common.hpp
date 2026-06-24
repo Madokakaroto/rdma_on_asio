@@ -168,7 +168,8 @@ inline void validate_and_normalize_options(options& opt, bool require_role) {
         "--single-process discovers the local RDMA address automatically");
   }
   if ((opt.single_process || opt.server || opt.client) && opt.local_addr.empty()) {
-    opt.local_addr = rdma_test::query_local_rdma_address_string();
+    opt.local_addr =
+        rdma_test::local_device_address_string(asio::rdma::tcp::v4());
   }
   if (opt.message_size == 0) {
     throw std::invalid_argument("--message-size must be greater than zero");

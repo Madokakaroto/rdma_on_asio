@@ -944,7 +944,8 @@ int main(int argc, char* argv[]) {
       return 0;
     }
     if (opt.local_addr.empty()) {
-      opt.local_addr = rdma_test::query_local_rdma_address_string();
+      opt.local_addr =
+          rdma_test::local_device_address_string(asio::rdma::tcp::v4());
     }
     return run_native_baseline(std::move(opt), std::move(cmd));
   } catch (std::runtime_error const& e) {

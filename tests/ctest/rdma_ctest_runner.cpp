@@ -114,13 +114,13 @@ options parse_options(int argc, char* argv[]) {
 std::string query_auto_address(std::string_view token) {
   try {
     if (token == "auto") {
-      return rdma_test::query_local_rdma_address_string();
+      return rdma_test::local_device_address_string(asio::rdma::tcp::v4());
     }
     if (token == "auto-v4") {
-      return rdma_test::query_local_rdma_address_string(asio::rdma::tcp::v4());
+      return rdma_test::local_device_address_string(asio::rdma::tcp::v4());
     }
     if (token == "auto-v6") {
-      return rdma_test::query_local_rdma_address_string(asio::rdma::tcp::v6());
+      return rdma_test::local_device_address_string(asio::rdma::tcp::v6());
     }
   } catch (std::exception const& e) {
     throw skip_test(std::string("RDMA_CTEST_SKIP: ") +

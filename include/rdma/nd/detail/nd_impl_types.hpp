@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include "asio/ip/address.hpp"
 #include "rdma/detail/small_sglist.hpp"
 #include "rdma/rdma_commons.hpp"
 
@@ -120,24 +121,14 @@ using nd_provider_factory_ptr = std::shared_ptr<nd_provider_factory_t>;
 struct nd_adapter_t {
   nd2_adapter_ptr adapter_;
   std::unique_ptr<native_pd_t> pd_;
-  UINT64 adapter_id_ = 0;                   // ResolveAddress id; same HW -> same id
-  std::optional<nd2_sockaddr_t> v4_addr_;   // this adapter's v4 local address
-  std::optional<nd2_sockaddr_t> v6_addr_;   // this adapter's v6 local address
-  std::string name_;                        // display: first bound address string
+  UINT64 adapter_id_ = 0;  // ResolveAddress id; same HW -> same id
+  std::optional<asio::ip::address> v4_address_;
+  std::optional<asio::ip::address> v6_address_;
+  std::string name_;  // display: first bound address string
   native_context_config_t info_;
 
-  // Local address matching the requested family (AF_INET / AF_INET6), or nullptr
-  // if this device has no address of that family -- control plane then reports
-  // rdma_errc::address_family_not_supported.
-  nd2_sockaddr_t const* local_addr_for(int family) const noexcept {
-    if (family == AF_INET) {
-      return v4_addr_ ? &*v4_addr_ : nullptr;
-    }
-    if (family == AF_INET6) {
-      return v6_addr_ ? &*v6_addr_ : nullptr;
-    }
-    return nullptr;
-  }
+  asio::ip::address get_v4_address() const;
+  asio::ip::address get_v6_address() const;
 };
 using nd_adapter_ptr = std::shared_ptr<nd_adapter_t>;
 // provider types -- adapters grouped by AdapterId (one entry per physical NIC,

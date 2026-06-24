@@ -17,7 +17,7 @@ void test_get_first_available_device() {
   auto const& mgr = asio::rdma::ibv_device_manager_t::instance();
   auto device = mgr.get_first_available_device(asio::rdma::ibv_config_t{});
   if (device) {
-    auto address = asio::rdma::query_local_rdma_address(device);
+    auto address = device->get_v4_address();
     assert(!address.is_unspecified());
     std::cout << "[PASS] get_first_available_device: found device with local "
               << address.to_string() << "\n";

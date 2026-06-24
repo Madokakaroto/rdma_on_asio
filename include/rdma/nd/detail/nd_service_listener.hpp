@@ -1,7 +1,6 @@
 #pragma once
 
-#include <cassert>
-#include <cstring>
+#include <system_error>
 
 #include "asio/associated_cancellation_slot.hpp"
 #include "asio/detail/config.hpp"
@@ -30,7 +29,7 @@ public:
     nd2_listener_ptr listener_;
     unique_handle_t listener_handle_;
     nd_adapter_ptr adapter_;
-    int family_ = AF_UNSPEC;  // address family chosen at open(ps); used by bind()
+    endpoint_type bind_endpoint_;
   };
 
   explicit nd_listener_service(asio::execution_context& ctx)
@@ -55,7 +54,7 @@ public:
     impl.listener_.Reset();
     impl.listener_handle_.reset();
     impl.adapter_.reset();
-    impl.family_ = AF_UNSPEC;
+    impl.bind_endpoint_ = endpoint_type{};
   }
 
   void destroy(implementation_type& impl) {
@@ -71,7 +70,7 @@ public:
     impl.listener_ = std::move(other_impl.listener_);
     impl.listener_handle_ = std::move(other_impl.listener_handle_);
     impl.adapter_ = std::move(other_impl.adapter_);
-    impl.family_ = other_impl.family_;
+    impl.bind_endpoint_ = other_impl.bind_endpoint_;
   }
 
   void move_assign(implementation_type& impl,
@@ -84,11 +83,11 @@ public:
     impl.listener_ = std::move(other_impl.listener_);
     impl.listener_handle_ = std::move(other_impl.listener_handle_);
     impl.adapter_ = std::move(other_impl.adapter_);
-    impl.family_ = other_impl.family_;
+    impl.bind_endpoint_ = other_impl.bind_endpoint_;
   }
 
-  // open: create listener + overlapped handle. The port-space value selects the
-  // address family (v4/v6) this listener will bind on the device (see bind()).
+  // open: create listener + overlapped handle. The port-space value selects
+  // which cached device address bind() will use.
   // Requires use_device() on this io_context.
   void open(implementation_type& impl, PortSpace const& ps,
             asio::error_code& ec) {
@@ -130,7 +129,7 @@ public:
     }
 
     impl.adapter_ = adapter;
-    impl.family_ = ps.family();
+    impl.bind_endpoint_ = ps.any_endpoint(0);
   }
 
   bool is_open(implementation_type const& impl) const noexcept {
@@ -144,24 +143,18 @@ public:
       ASIO_ERROR_LOCATION(ec);
       return;
     }
-    // Bind the device's local address of the family chosen at open(ps), with the
-    // requested port applied. The device carries its v4 and/or v6 address (v4/v6
-    // are not separate devices). See docs/nd_dual_family_plan.md.
-    auto const* local = impl.adapter_->local_addr_for(impl.family_);
-    if (!local) {
-      ec = rdma_errc::address_family_not_supported;
+    asio::ip::address address;
+    try {
+      address = impl.bind_endpoint_.address().is_v4()
+                    ? impl.adapter_->get_v4_address()
+                    : impl.adapter_->get_v6_address();
+    } catch (std::system_error const& e) {
+      ec = e.code();
       ASIO_ERROR_LOCATION(ec);
       return;
     }
-    endpoint_type endpoint;
-    // data() points at the endpoint's full-capacity storage; resize() only
-    // records the valid length (asio's own fill idiom: write data() then resize,
-    // e.g. reactive_socket_service::local_endpoint). Guard the precondition.
-    assert(static_cast<std::size_t>(local->address_size_) <= endpoint.capacity());
-    std::memcpy(endpoint.data(), &local->src_addr_,
-                static_cast<std::size_t>(local->address_size_));
-    endpoint.resize(static_cast<std::size_t>(local->address_size_));
-    endpoint.port(port);
+
+    endpoint_type endpoint{address, port};
     bind_addr(impl.listener_.Get(), endpoint.data(), endpoint.size(), ec);
     if (ec) {
       ASIO_ERROR_LOCATION(ec);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <system_error>
 
 #include "asio/associated_cancellation_slot.hpp"
 #include "asio/buffer.hpp"
@@ -430,18 +431,19 @@ private:
       return;
     }
 
-    // Bind the local address matching the destination family. The device carries
-    // its v4 and/or v6 address (v4/v6 are not separate devices); pick the one for
-    // this endpoint's family. See docs/nd_dual_family_plan.md.
-    auto const family = endpoint.data()->sa_family;
-    auto const* local = impl.adapter_->local_addr_for(family);
-    if (!local) {
-      asio::error_code afe = rdma_errc::address_family_not_supported;
-      this->scheduler_.on_completion(op, afe);
+    asio::ip::address address;
+    try {
+      address = endpoint.address().is_v4()
+                    ? impl.adapter_->get_v4_address()
+                    : impl.adapter_->get_v6_address();
+    } catch (std::system_error const& e) {
+      this->scheduler_.on_completion(op, e.code());
       return;
     }
     asio::error_code ec{};
-    bind_addr(impl.connector_.Get(), &local->src_addr_, local->address_size_, ec);
+    endpoint_type local_endpoint{address, 0};
+    bind_addr(impl.connector_.Get(), local_endpoint.data(),
+              local_endpoint.size(), ec);
     if (ec) {
       this->scheduler_.on_completion(op, ec);
       return;

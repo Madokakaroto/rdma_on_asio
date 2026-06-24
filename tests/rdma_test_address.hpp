@@ -27,21 +27,24 @@ struct local_endpoint_args {
   }
 };
 
-inline asio::ip::address query_local_rdma_address() {
-  return asio::rdma::query_local_rdma_address();
+inline asio::rdma::rdma_device_ptr first_available_device() {
+  auto device =
+      asio::rdma::rdma_device_manager_t::instance().get_first_available_device({});
+  if (!device) {
+    throw std::runtime_error("no RDMA device available");
+  }
+  return device;
 }
 
-inline asio::ip::address query_local_rdma_address(asio::rdma::tcp port_space) {
-  return asio::rdma::query_local_rdma_address(port_space);
+inline asio::ip::address local_device_address(asio::rdma::tcp port_space) {
+  auto device = first_available_device();
+  return port_space.any_endpoint(0).address().is_v4()
+             ? device->get_v4_address()
+             : device->get_v6_address();
 }
 
-inline std::string query_local_rdma_address_string() {
-  return query_local_rdma_address().to_string();
-}
-
-inline std::string query_local_rdma_address_string(
-    asio::rdma::tcp port_space) {
-  return rdma_test::query_local_rdma_address(port_space).to_string();
+inline std::string local_device_address_string(asio::rdma::tcp port_space) {
+  return local_device_address(port_space).to_string();
 }
 
 inline asio::rdma::tcp port_space_for(asio::ip::address const& address) {
@@ -104,7 +107,7 @@ inline std::uint16_t parse_port_arg(int argc, char* argv[],
 inline local_endpoint_args query_local_endpoint_with_port_arg(
     int argc, char* argv[], std::uint16_t default_port) {
   return local_endpoint_args{
-      query_local_rdma_address(),
+      local_device_address(asio::rdma::tcp::v4()),
       parse_port_arg(argc, argv, default_port),
   };
 }

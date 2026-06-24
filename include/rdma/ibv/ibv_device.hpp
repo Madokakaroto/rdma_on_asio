@@ -2,6 +2,7 @@
 
 #include <vector>
 
+#include "asio/detail/throw_error.hpp"
 #include "rdma/ibv/ibv_types.hpp"
 #include "rdma/ibv/ibv_error.hpp"
 #include "rdma/ibv/detail/ibv_config_derive.hpp"
@@ -31,9 +32,7 @@ class ibv_device_manager_t {
   }
 
   // Return the first device whose capabilities satisfy the (non-zero) config
-  // constraints. No port-space / family argument: a verbs device is family-
-  // agnostic (family is consumed at rdma_cm connect time via the destination
-  // sockaddr), so it serves both v4 and v6. See docs/nd_dual_family_plan.md.
+  // constraints. Address queries select get_v4_address() / get_v6_address().
   ibv_device_ptr get_first_available_device(ibv_config_t const& config = {}) const {
     for (auto const& device : devices_) {
       if (detail::is_valid_device(device) &&
@@ -57,5 +56,25 @@ class ibv_device_manager_t {
   ibv_device_manager_t(ibv_device_manager_t const&) = delete;
   ibv_device_manager_t& operator=(ibv_device_manager_t const&) = delete;
 };
+
+namespace detail {
+
+inline asio::ip::address ibv_device_t::get_v4_address() const {
+  if (!v4_address_) {
+    asio::detail::throw_error(
+        make_error_code(rdma_errc::address_family_not_supported));
+  }
+  return *v4_address_;
+}
+
+inline asio::ip::address ibv_device_t::get_v6_address() const {
+  if (!v6_address_) {
+    asio::detail::throw_error(
+        make_error_code(rdma_errc::address_family_not_supported));
+  }
+  return *v6_address_;
+}
+
+}  // namespace detail
 
 }

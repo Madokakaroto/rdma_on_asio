@@ -82,9 +82,10 @@ configuration. The project is expected to run in an RDMA-capable environment.
 ## Runtime Address Discovery
 
 Single-host RDMA tests should discover a usable local RDMA-capable address in
-the executable itself. Test code should call the public RDMA-on-Asio helper
-(`asio::rdma::query_local_rdma_address`) via a small shared test helper; it must
-not inspect NetworkDirect/ibverbs objects or call raw backend APIs directly.
+the executable itself. Test code should get a public RDMA-on-Asio device and call
+`device->get_v4_address()` (or `get_v6_address()` for IPv6-specific tests) via
+a small shared test helper; it must not inspect NetworkDirect/ibverbs objects or
+call raw backend APIs directly.
 
 CTest should register local-machine address-using tests unconditionally:
 

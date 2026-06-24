@@ -5,12 +5,14 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
 
 #include "asio/error_code.hpp"
+#include "asio/ip/address.hpp"
 #include "rdma/detail/small_sglist.hpp"
 #include "rdma/rdma_commons.hpp"
 
@@ -73,6 +75,11 @@ struct ibv_device_t {
   unique_ibv_pd_ptr pd_;                  // owned per-device; dealloc'd when this struct dies
   native_device_attr_t attr_{};           // queried device capabilities
   std::string name_;                      // ibv_get_device_name(context_->device)
+  std::optional<asio::ip::address> v4_address_;
+  std::optional<asio::ip::address> v6_address_;
+
+  asio::ip::address get_v4_address() const;
+  asio::ip::address get_v6_address() const;
 };
 using ibv_device_ptr = std::shared_ptr<ibv_device_t>;
 

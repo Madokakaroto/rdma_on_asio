@@ -77,7 +77,8 @@ int main(int argc, char* argv[]) {
   try {
     auto opt = rdma_bench::parse_options_with_scenario(argc, argv, false);
     auto cmd = rdma_bench::command_line(argc, argv);
-    opt.local_addr = rdma_test::query_local_rdma_address_string();
+    opt.local_addr =
+        rdma_test::local_device_address_string(asio::rdma::tcp::v4());
 
     asio::io_context io;
     auto device = rdma::rdma_device_manager_t::instance()

@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "asio/ip/tcp.hpp"
 #include "rdma/nd/nd_types.hpp"
 #include "rdma/nd/nd_error.hpp"
 #include "rdma/nd/detail/nd_impl_types.hpp"
@@ -202,6 +203,20 @@ HANDLE create_overlapped_file(native_context_t* context, asio::error_code& ec) {
 inline bool is_supported_addr_family(nd2_sockaddr_t const& addr) noexcept {
   auto const family = addr.src_addr_.sa_family;
   return family == AF_INET || family == AF_INET6;
+}
+
+inline std::optional<asio::ip::address> to_ip_address(
+    nd2_sockaddr_t const& addr) {
+  if (!is_supported_addr_family(addr)) {
+    return std::nullopt;
+  }
+  asio::ip::tcp::endpoint endpoint;
+  if (addr.address_size_ > endpoint.capacity()) {
+    return std::nullopt;
+  }
+  std::memcpy(endpoint.data(), &addr.src_addr_, addr.address_size_);
+  endpoint.resize(addr.address_size_);
+  return endpoint.address();
 }
 
 inline std::vector<nd2_sockaddr_t> copy_socket_address_list(
@@ -593,11 +608,14 @@ inline void attach_device_addresses(
   assert(device);
   for (auto const& addr :
        addresses | std::views::filter(is_supported_addr_family)) {
-    auto const family = addr.src_addr_.sa_family;
-    if (family == AF_INET && !device->v4_addr_) {
-      device->v4_addr_ = addr;
-    } else if (family == AF_INET6 && !device->v6_addr_) {
-      device->v6_addr_ = addr;
+    auto address = to_ip_address(addr);
+    if (!address) {
+      continue;
+    }
+    if (address->is_v4() && !device->v4_address_) {
+      device->v4_address_ = *address;
+    } else if (address->is_v6() && !device->v6_address_) {
+      device->v6_address_ = *address;
     }
   }
 }
@@ -628,7 +646,7 @@ nd_adapter_ptr open_device(
     attach_device_addresses(device, provider_addresses);
   }
 
-  if (!device->v4_addr_ && !device->v6_addr_) {
+  if (!device->v4_address_ && !device->v6_address_) {
     ec = make_error_code(std::errc::address_not_available);
     return nullptr;
   }

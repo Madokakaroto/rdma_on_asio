@@ -1,6 +1,7 @@
 #pragma once
 
 #include <ranges>
+#include "asio/detail/throw_error.hpp"
 #include "rdma/nd/detail/nd_asio_manual_init.hpp"
 #include "rdma/nd/nd_types.hpp"
 #include "rdma/nd/nd_error.hpp"
@@ -29,9 +30,8 @@ class nd_device_manager_t {
   }
 
   // Return the first device whose capabilities satisfy the (non-zero) config
-  // constraints. No port-space / family filter: a device is family-agnostic and
-  // carries both its v4/v6 local addresses; the family is selected at the control
-  // plane (connector/listener). See nd_dual_family_plan.md.
+  // constraints. A device may carry v4 and/or v6 local addresses; callers select
+  // a concrete address with get_v4_address() / get_v6_address().
   nd_device_ptr get_first_available_device(nd_config_t const& config = {}) const {
     for (auto const& provider : providers_) {
       assert(provider);
@@ -57,5 +57,25 @@ class nd_device_manager_t {
  private:
 
 };
+
+namespace detail {
+
+inline asio::ip::address nd_adapter_t::get_v4_address() const {
+  if (!v4_address_) {
+    asio::detail::throw_error(
+        make_error_code(rdma_errc::address_family_not_supported));
+  }
+  return *v4_address_;
+}
+
+inline asio::ip::address nd_adapter_t::get_v6_address() const {
+  if (!v6_address_) {
+    asio::detail::throw_error(
+        make_error_code(rdma_errc::address_family_not_supported));
+  }
+  return *v6_address_;
+}
+
+}  // namespace detail
 
 }

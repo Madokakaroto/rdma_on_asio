@@ -44,12 +44,6 @@ public:
   endpoint any_endpoint(asio::ip::port_type port) const noexcept {
     return endpoint{impl_, port};
   }
-
-  // Address family of this port space value (AF_INET / AF_INET6). The control
-  // plane uses it to pick the device's matching local address (nd) or the
-  // wildcard bind family (ibv). Replaces the old nd-only get_adapters(): device
-  // discovery no longer selects by family (see nd_dual_family_plan.md).
-  int family() const noexcept { return impl_.family(); }
 };
 
 }
