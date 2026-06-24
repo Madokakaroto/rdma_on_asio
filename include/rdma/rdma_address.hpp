@@ -54,6 +54,22 @@ inline asio::ip::address query_local_rdma_address(rdma_device_ptr const& device)
   throw std::runtime_error("RDMA device has no local address");
 }
 
+inline asio::ip::address query_local_rdma_address(rdma_device_ptr const& device,
+                                                  tcp port_space) {
+  if (!device) {
+    throw std::runtime_error("no RDMA device available");
+  }
+
+  if (port_space.family() == AF_INET && device->v4_addr_) {
+    return detail::make_ip_address(device->v4_addr_->src_addr_);
+  }
+  if (port_space.family() == AF_INET6 && device->v6_addr_) {
+    return detail::make_ip_address(device->v6_addr_->src_addr_);
+  }
+
+  throw std::runtime_error("RDMA device has no local address for requested family");
+}
+
 #elif defined(ASIO_RDMA_BACKEND_VERBS)
 
 namespace detail {
@@ -133,9 +149,22 @@ inline asio::ip::address query_local_rdma_address(rdma_device_ptr const& device)
   }
 }
 
+inline asio::ip::address query_local_rdma_address(rdma_device_ptr const& device,
+                                                  tcp port_space) {
+  if (!device) {
+    throw std::runtime_error("no RDMA device available");
+  }
+  return detail::query_local_rdma_address_by_family(device, port_space.family());
+}
+
 #else
 
 inline asio::ip::address query_local_rdma_address(rdma_device_ptr const&) {
+  throw std::runtime_error("no RDMA backend selected");
+}
+
+inline asio::ip::address query_local_rdma_address(rdma_device_ptr const&,
+                                                  tcp) {
   throw std::runtime_error("no RDMA backend selected");
 }
 
@@ -144,6 +173,11 @@ inline asio::ip::address query_local_rdma_address(rdma_device_ptr const&) {
 inline asio::ip::address query_local_rdma_address() {
   auto device = rdma_device_manager_t::instance().get_first_available_device({});
   return query_local_rdma_address(device);
+}
+
+inline asio::ip::address query_local_rdma_address(tcp port_space) {
+  auto device = rdma_device_manager_t::instance().get_first_available_device({});
+  return query_local_rdma_address(device, port_space);
 }
 
 }  // namespace asio::rdma

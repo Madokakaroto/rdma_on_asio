@@ -75,6 +75,7 @@ void run_server(asio::io_context& io_ctx, rdma::rdma_device_ptr const& device,
   listener.open(tcp::v4());
   listener.bind(port);
   listener.listen();
+  std::cout << "RDMA_CTEST_READY role=server port=" << port << std::endl;
 
   // Standalone CQ declared before the connector so it outlives the QP, which is
   // owned by the connection and torn down when `conn` is destroyed.

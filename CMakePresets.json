@@ -59,6 +59,71 @@
       "output": {
         "outputOnFailure": true
       }
+    },
+    {
+      "name": "echo",
+      "configurePreset": "default",
+      "configuration": "Debug",
+      "filter": {
+        "include": {
+          "label": "echo"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "latency",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "latency"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "native",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "native"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "perftest",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "perftest"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tooling",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "tooling"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

@@ -36,6 +36,7 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   listener.open(tcp::v4());
   listener.bind(port);
   listener.listen();
+  std::cout << "RDMA_CTEST_READY role=server port=" << port << std::endl;
 
   // Get the next connection request as a ready-to-accept connector; the client's
   // request private data is delivered into req_pd_buf.

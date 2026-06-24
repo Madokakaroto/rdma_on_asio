@@ -70,6 +70,7 @@ void run_server(asio::io_context& io_ctx, rdma::nd_device_ptr const& device,
   listener.open(tcp::v4());
   listener.bind(port);
   listener.listen();
+  std::cout << "RDMA_CTEST_READY role=server port=" << port << std::endl;
 
   rdma::nd_completion_queue cq(device);
   rdma::nd_connector<tcp> conn(io_ctx);  // filled by async_get_connection

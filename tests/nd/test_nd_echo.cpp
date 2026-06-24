@@ -35,6 +35,7 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   listener.open(tcp::v4());
   listener.bind(port);
   listener.listen();
+  std::cout << "RDMA_CTEST_READY role=server port=" << port << std::endl;
 
   std::array<char, 256> req_pd_buf{};
   auto [ec_get, conn, req_pd_len] = co_await listener.async_get_connection(

@@ -48,6 +48,42 @@ function(rdma_add_ctest test_name target_name labels)
   set_tests_properties(${test_name} PROPERTIES LABELS "${labels}")
 endfunction()
 
+function(rdma_set_hardware_ctest_properties test_name timeout)
+  set_tests_properties(${test_name} PROPERTIES
+      TIMEOUT ${timeout}
+      RESOURCE_LOCK rdma_device
+      SKIP_RETURN_CODE 77)
+endfunction()
+
+function(rdma_add_process_pair_ctest test_name labels server_target client_target)
+  cmake_parse_arguments(ARG "" "TIMEOUT" "SERVER_ARGS;CLIENT_ARGS" ${ARGN})
+  if(NOT ARG_TIMEOUT)
+    set(ARG_TIMEOUT 45)
+  endif()
+
+  set(command
+      rdma_ctest_runner
+      --name ${test_name}
+      --timeout-sec ${ARG_TIMEOUT}
+      --work-dir ${CMAKE_CURRENT_BINARY_DIR}/ctest/${test_name}
+      --server $<TARGET_FILE:${server_target}>
+      --server-ready-regex "RDMA_CTEST_READY|RDMA_BENCH_READY")
+  foreach(arg IN LISTS ARG_SERVER_ARGS)
+    list(APPEND command --server-arg ${arg})
+  endforeach()
+  list(APPEND command --client $<TARGET_FILE:${client_target}>)
+  foreach(arg IN LISTS ARG_CLIENT_ARGS)
+    list(APPEND command --client-arg ${arg})
+  endforeach()
+
+  add_test(NAME ${test_name} COMMAND ${command})
+  set_tests_properties(${test_name} PROPERTIES LABELS "${labels}")
+  rdma_set_hardware_ctest_properties(${test_name} ${ARG_TIMEOUT})
+endfunction()
+
+rdma_add_backend_executable(rdma_ctest_runner
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/ctest/rdma_ctest_runner.cpp)
+
 function(rdma_add_unit_test name source)
   rdma_add_backend_executable(${name}
       SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/${source})
@@ -112,6 +148,8 @@ endif()
 math(EXPR RDMA_TEST_WAIT_DISCONNECT_PORT "${RDMA_TEST_BASE_PORT} + 7")
 math(EXPR RDMA_TEST_DISCONNECT_CANCEL_PORT "${RDMA_TEST_BASE_PORT} + 12")
 math(EXPR RDMA_TEST_CONTROL_CANCEL_PORT "${RDMA_TEST_BASE_PORT} + 40")
+math(EXPR RDMA_NATIVE_ECHO_PORT "${RDMA_TEST_BASE_PORT} + 150")
+math(EXPR RDMA_NATIVE_ECHO_POLL_PORT "${RDMA_TEST_BASE_PORT} + 151")
 
 if(RDMA_BACKEND STREQUAL "nd")
   foreach(nd_test
@@ -148,6 +186,18 @@ if(RDMA_BACKEND STREQUAL "nd")
   rdma_add_ctest(integration_nd_control_cancel
                  test_nd_control_cancel "unit;nd;race"
                  ${RDMA_TEST_CONTROL_CANCEL_PORT})
+  rdma_add_process_pair_ctest(native_nd_echo_event_two_process
+                              "native;echo;nd"
+                              test_nd_echo test_nd_echo
+                              TIMEOUT 45
+                              SERVER_ARGS --server --port ${RDMA_NATIVE_ECHO_PORT}
+                              CLIENT_ARGS --client auto-v4 --port ${RDMA_NATIVE_ECHO_PORT})
+  rdma_add_process_pair_ctest(native_nd_echo_poll_two_process
+                              "native;echo;nd"
+                              test_nd_echo_poll test_nd_echo_poll
+                              TIMEOUT 45
+                              SERVER_ARGS --server --port ${RDMA_NATIVE_ECHO_POLL_PORT}
+                              CLIENT_ARGS --client auto-v4 --port ${RDMA_NATIVE_ECHO_POLL_PORT})
 elseif(RDMA_BACKEND STREQUAL "ibv")
   foreach(ibv_test
           test_ibv_link
@@ -175,6 +225,18 @@ elseif(RDMA_BACKEND STREQUAL "ibv")
   rdma_add_ctest(integration_ibv_control_cancel
                  test_ibv_control_cancel "unit;ibv;race"
                  ${RDMA_TEST_CONTROL_CANCEL_PORT})
+  rdma_add_process_pair_ctest(native_ibv_echo_event_two_process
+                              "native;echo;ibv"
+                              test_ibv_echo test_ibv_echo
+                              TIMEOUT 45
+                              SERVER_ARGS --server --port ${RDMA_NATIVE_ECHO_PORT}
+                              CLIENT_ARGS --client auto-v4 --port ${RDMA_NATIVE_ECHO_PORT})
+  rdma_add_process_pair_ctest(native_ibv_echo_poll_two_process
+                              "native;echo;ibv"
+                              test_ibv_echo_poll test_ibv_echo_poll
+                              TIMEOUT 45
+                              SERVER_ARGS --server --port ${RDMA_NATIVE_ECHO_POLL_PORT}
+                              CLIENT_ARGS --client auto-v4 --port ${RDMA_NATIVE_ECHO_POLL_PORT})
 endif()
 
 # Backend-agnostic rdma_* API tests.
@@ -195,6 +257,9 @@ rdma_add_ctest(test_rdma_error test_rdma_error "unit;rdma")
 math(EXPR RDMA_TEST_SGL_PORT "${RDMA_TEST_BASE_PORT} + 60")
 math(EXPR RDMA_TEST_PRIVATE_DATA_PORT "${RDMA_TEST_BASE_PORT} + 80")
 math(EXPR RDMA_TEST_REGRESSION_PORT "${RDMA_TEST_BASE_PORT} + 120")
+math(EXPR RDMA_TEST_ECHO_PORT "${RDMA_TEST_BASE_PORT} + 170")
+math(EXPR RDMA_TEST_ECHO_POLL_PORT "${RDMA_TEST_BASE_PORT} + 171")
+math(EXPR RDMA_TEST_DUAL_FAMILY_ECHO_PORT "${RDMA_TEST_BASE_PORT} + 172")
 
 rdma_add_ctest(integration_rdma_sgl
                test_rdma_sgl "unit;rdma"
@@ -205,6 +270,25 @@ rdma_add_ctest(integration_rdma_private_data
 rdma_add_ctest(integration_rdma_regression
                test_rdma_regression "unit;rdma"
                ${RDMA_TEST_REGRESSION_PORT})
+rdma_add_process_pair_ctest(integration_rdma_echo_event_two_process
+                            "unit;integration;echo;rdma"
+                            test_rdma_echo test_rdma_echo
+                            TIMEOUT 45
+                            SERVER_ARGS --server --port ${RDMA_TEST_ECHO_PORT}
+                            CLIENT_ARGS --client auto-v4 --port ${RDMA_TEST_ECHO_PORT})
+rdma_add_process_pair_ctest(integration_rdma_echo_poll_two_process
+                            "unit;integration;echo;rdma"
+                            test_rdma_echo_poll test_rdma_echo_poll
+                            TIMEOUT 45
+                            SERVER_ARGS --server --port ${RDMA_TEST_ECHO_POLL_PORT}
+                            CLIENT_ARGS --client auto-v4 --port ${RDMA_TEST_ECHO_POLL_PORT})
+rdma_add_process_pair_ctest(integration_rdma_dual_family_echo_two_process
+                            "unit;integration;echo;rdma"
+                            test_rdma_dual_family_echo
+                            test_rdma_dual_family_echo
+                            TIMEOUT 60
+                            SERVER_ARGS --server --port ${RDMA_TEST_DUAL_FAMILY_ECHO_PORT}
+                            CLIENT_ARGS --client-v4 auto-v4 --client-v6 auto-v6 --port ${RDMA_TEST_DUAL_FAMILY_ECHO_PORT})
 
 # Benchmark and stress helpers.
 function(rdma_configure_benchmark_target name)
@@ -238,6 +322,50 @@ rdma_add_benchmark_tool(rdma_benchmark_parse_perftest
 rdma_add_benchmark_tool(rdma_benchmark_run_scenario
                         ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/tools/run_scenario.cpp)
 
+set(RDMA_TOOLING_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/ctest/tooling)
+set(RDMA_BENCHMARK_SAMPLE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/samples)
+
+rdma_add_ctest(tooling_capability_probe_smoke
+               rdma_benchmark_capability_probe "tooling;performance"
+               --json-out ${RDMA_TOOLING_OUTPUT_DIR}/capability_probe.json)
+set_tests_properties(tooling_capability_probe_smoke
+    PROPERTIES TIMEOUT 30 RESOURCE_LOCK rdma_device)
+
+rdma_add_ctest(tooling_perftest_commands_smoke
+               rdma_benchmark_perftest_commands "tooling;performance;perftest"
+               --operation send_recv
+               --metric bandwidth
+               --mode event
+               --message-size 64
+               --iterations 32
+               --queue-depth 4
+               --port ${RDMA_TEST_BASE_PORT}
+               --json-out ${RDMA_TOOLING_OUTPUT_DIR}/perftest_commands.json)
+set_tests_properties(tooling_perftest_commands_smoke PROPERTIES TIMEOUT 30)
+
+rdma_add_ctest(tooling_parse_perftest_smoke
+               rdma_benchmark_parse_perftest "tooling;performance;perftest"
+               --operation send_recv
+               --metric bandwidth
+               --message-size 64
+               --iterations 32
+               --queue-depth 4
+               --raw-stdout ${RDMA_BENCHMARK_SAMPLE_DIR}/perftest_send_bw_stdout.txt
+               --json-out ${RDMA_TOOLING_OUTPUT_DIR}/parsed_perftest.json)
+set_tests_properties(tooling_parse_perftest_smoke PROPERTIES TIMEOUT 30)
+
+rdma_add_ctest(tooling_compare_results_smoke
+               rdma_benchmark_compare_results "tooling;performance"
+               ${RDMA_BENCHMARK_SAMPLE_DIR}/rdma_bench_result.json)
+set_tests_properties(tooling_compare_results_smoke PROPERTIES TIMEOUT 30)
+
+rdma_add_ctest(tooling_run_scenario_dry_run
+               rdma_benchmark_run_scenario "tooling;performance;scenario"
+               --scenario ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/scenarios/smoke.json
+               --json-out ${RDMA_TOOLING_OUTPUT_DIR}/scenario_dry_run.json
+               --output-dir ${RDMA_TOOLING_OUTPUT_DIR}/scenario_dry_run)
+set_tests_properties(tooling_run_scenario_dry_run PROPERTIES TIMEOUT 30)
+
 if(NOT WIN32)
   configure_file(
       ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/tools/run_comparison.sh
@@ -270,59 +398,126 @@ rdma_add_asio_perftest(asio_write_lat ${ASIO_PERFTEST_ENTRIES}/asio_write_lat.cp
 rdma_add_asio_perftest(asio_read_bw   ${ASIO_PERFTEST_ENTRIES}/asio_read_bw.cpp)
 rdma_add_asio_perftest(asio_read_lat  ${ASIO_PERFTEST_ENTRIES}/asio_read_lat.cpp)
 
+rdma_add_ctest(tooling_run_scenario_execute_smoke
+               rdma_benchmark_run_scenario "tooling;performance;scenario"
+               --scenario ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/scenarios/smoke.json
+               --execute
+               --json-out ${RDMA_TOOLING_OUTPUT_DIR}/scenario_execute.json
+               --output-dir ${RDMA_TOOLING_OUTPUT_DIR}/scenario_execute)
+rdma_set_hardware_ctest_properties(tooling_run_scenario_execute_smoke 45)
+
 math(EXPR RDMA_BENCH_SEND_RECV_PORT "${RDMA_TEST_BASE_PORT} + 300")
 math(EXPR RDMA_BENCH_WRITE_PORT "${RDMA_TEST_BASE_PORT} + 310")
 math(EXPR RDMA_BENCH_READ_PORT "${RDMA_TEST_BASE_PORT} + 320")
+math(EXPR RDMA_BENCH_SEND_RECV_POLL_PORT "${RDMA_TEST_BASE_PORT} + 301")
+math(EXPR RDMA_BENCH_SEND_LAT_EVENT_PORT "${RDMA_TEST_BASE_PORT} + 330")
+math(EXPR RDMA_BENCH_SEND_LAT_POLL_PORT "${RDMA_TEST_BASE_PORT} + 331")
+math(EXPR RDMA_BENCH_WRITE_LAT_EVENT_PORT "${RDMA_TEST_BASE_PORT} + 340")
+math(EXPR RDMA_BENCH_WRITE_LAT_POLL_PORT "${RDMA_TEST_BASE_PORT} + 341")
+math(EXPR RDMA_BENCH_READ_LAT_EVENT_PORT "${RDMA_TEST_BASE_PORT} + 350")
+math(EXPR RDMA_BENCH_READ_LAT_POLL_PORT "${RDMA_TEST_BASE_PORT} + 351")
+
+function(rdma_add_asio_perftest_smoke test_name target labels port mode token_type iterations queue_depth)
+  rdma_add_ctest(${test_name}
+                 ${target} "${labels}"
+                 --single-process
+                 --port ${port}
+                 --mode ${mode}
+                 --token-type ${token_type}
+                 --topology single_host_same_process
+                 --message-size 64
+                 --iterations ${iterations}
+                 --queue-depth ${queue_depth}
+                 --timeout-sec 30)
+  rdma_set_hardware_ctest_properties(${test_name} 30)
+endfunction()
 
 rdma_add_ctest(performance_asio_send_bw_single_host_smoke
-               asio_send_bw "performance;rdma"
+               asio_send_bw "performance;rdma;bandwidth"
                --single-process
                --port ${RDMA_BENCH_SEND_RECV_PORT}
                --mode event --token-type callback
                --topology single_host_same_process
                --message-size 64 --iterations 32 --queue-depth 4)
 set_tests_properties(performance_asio_send_bw_single_host_smoke
-    PROPERTIES TIMEOUT 30)
+    PROPERTIES TIMEOUT 30 RESOURCE_LOCK rdma_device)
+
+rdma_add_asio_perftest_smoke(performance_asio_send_bw_poll_single_host_smoke
+                             asio_send_bw
+                             "performance;rdma;bandwidth"
+                             ${RDMA_BENCH_SEND_RECV_POLL_PORT}
+                             poll use_future 32 4)
 
 rdma_add_ctest(performance_asio_write_bw_single_host_smoke
-               asio_write_bw "performance;rdma"
+               asio_write_bw "performance;rdma;bandwidth"
                --single-process
                --port ${RDMA_BENCH_WRITE_PORT}
                --mode event --token-type callback
                --topology single_host_same_process
                --message-size 64 --iterations 32 --queue-depth 4)
 set_tests_properties(performance_asio_write_bw_single_host_smoke
-    PROPERTIES TIMEOUT 30)
+    PROPERTIES TIMEOUT 30 RESOURCE_LOCK rdma_device)
 
 rdma_add_ctest(performance_asio_write_bw_poll_single_host_smoke
-               asio_write_bw "performance;rdma"
+               asio_write_bw "performance;rdma;bandwidth"
                --single-process
                --port ${RDMA_BENCH_WRITE_PORT}
                --mode poll --token-type use_future
                --topology single_host_same_process
                --message-size 64 --iterations 32 --queue-depth 4)
 set_tests_properties(performance_asio_write_bw_poll_single_host_smoke
-    PROPERTIES TIMEOUT 30)
+    PROPERTIES TIMEOUT 30 RESOURCE_LOCK rdma_device)
 
 rdma_add_ctest(performance_asio_read_bw_single_host_smoke
-               asio_read_bw "performance;rdma"
+               asio_read_bw "performance;rdma;bandwidth"
                --single-process
                --port ${RDMA_BENCH_READ_PORT}
                --mode event --token-type callback
                --topology single_host_same_process
                --message-size 64 --iterations 32 --queue-depth 4)
 set_tests_properties(performance_asio_read_bw_single_host_smoke
-    PROPERTIES TIMEOUT 30)
+    PROPERTIES TIMEOUT 30 RESOURCE_LOCK rdma_device)
 
 rdma_add_ctest(performance_asio_read_bw_poll_single_host_smoke
-               asio_read_bw "performance;rdma"
+               asio_read_bw "performance;rdma;bandwidth"
                --single-process
                --port ${RDMA_BENCH_READ_PORT}
                --mode poll --token-type use_future
                --topology single_host_same_process
                --message-size 64 --iterations 32 --queue-depth 4)
 set_tests_properties(performance_asio_read_bw_poll_single_host_smoke
-    PROPERTIES TIMEOUT 30)
+    PROPERTIES TIMEOUT 30 RESOURCE_LOCK rdma_device)
+
+rdma_add_asio_perftest_smoke(performance_asio_send_lat_event_single_host_smoke
+                             asio_send_lat
+                             "performance;rdma;latency"
+                             ${RDMA_BENCH_SEND_LAT_EVENT_PORT}
+                             event callback 64 1)
+rdma_add_asio_perftest_smoke(performance_asio_send_lat_poll_single_host_smoke
+                             asio_send_lat
+                             "performance;rdma;latency"
+                             ${RDMA_BENCH_SEND_LAT_POLL_PORT}
+                             poll use_future 64 1)
+rdma_add_asio_perftest_smoke(performance_asio_write_lat_event_single_host_smoke
+                             asio_write_lat
+                             "performance;rdma;latency"
+                             ${RDMA_BENCH_WRITE_LAT_EVENT_PORT}
+                             event callback 64 1)
+rdma_add_asio_perftest_smoke(performance_asio_write_lat_poll_single_host_smoke
+                             asio_write_lat
+                             "performance;rdma;latency"
+                             ${RDMA_BENCH_WRITE_LAT_POLL_PORT}
+                             poll use_future 64 1)
+rdma_add_asio_perftest_smoke(performance_asio_read_lat_event_single_host_smoke
+                             asio_read_lat
+                             "performance;rdma;latency"
+                             ${RDMA_BENCH_READ_LAT_EVENT_PORT}
+                             event callback 64 1)
+rdma_add_asio_perftest_smoke(performance_asio_read_lat_poll_single_host_smoke
+                             asio_read_lat
+                             "performance;rdma;latency"
+                             ${RDMA_BENCH_READ_LAT_POLL_PORT}
+                             poll use_future 64 1)
 
 rdma_add_benchmark(rdma_shared_cq_stress
                    ${CMAKE_CURRENT_SOURCE_DIR}/stress/rdma/shared_cq.cpp)
@@ -342,7 +537,7 @@ rdma_add_ctest(stress_rdma_shared_cq_smoke
                --threads 2
                --timeout-sec 30)
 set_tests_properties(stress_rdma_shared_cq_smoke
-    PROPERTIES TIMEOUT 45)
+    PROPERTIES TIMEOUT 45 RESOURCE_LOCK rdma_device)
 
 rdma_add_ctest(stress_rdma_connect_disconnect_soak_smoke
                rdma_connect_disconnect_soak "stress;rdma"
@@ -351,7 +546,7 @@ rdma_add_ctest(stress_rdma_connect_disconnect_soak_smoke
                --threads 2
                --timeout-sec 30)
 set_tests_properties(stress_rdma_connect_disconnect_soak_smoke
-    PROPERTIES TIMEOUT 45)
+    PROPERTIES TIMEOUT 45 RESOURCE_LOCK rdma_device)
 
 if(RDMA_BACKEND STREQUAL "nd")
   set(ND_PERFTEST_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/native/nd/nd_perftest.cpp)
@@ -388,9 +583,15 @@ if(RDMA_BACKEND STREQUAL "nd")
   math(EXPR RDMA_NATIVE_ND_PORT "${RDMA_TEST_BASE_PORT} + 500")
   math(EXPR RDMA_NATIVE_ND_WRITE_PORT "${RDMA_TEST_BASE_PORT} + 510")
   math(EXPR RDMA_NATIVE_ND_READ_PORT "${RDMA_TEST_BASE_PORT} + 520")
+  math(EXPR RDMA_NATIVE_ND_SEND_LAT_PORT "${RDMA_TEST_BASE_PORT} + 530")
+  math(EXPR RDMA_NATIVE_ND_WRITE_LAT_PORT "${RDMA_TEST_BASE_PORT} + 540")
+  math(EXPR RDMA_NATIVE_ND_READ_LAT_PORT "${RDMA_TEST_BASE_PORT} + 550")
+  math(EXPR RDMA_NATIVE_ND_GENERIC_PORT "${RDMA_TEST_BASE_PORT} + 560")
+  math(EXPR RDMA_NATIVE_ND_GENERIC_WRITE_PORT "${RDMA_TEST_BASE_PORT} + 570")
+  math(EXPR RDMA_NATIVE_ND_GENERIC_READ_PORT "${RDMA_TEST_BASE_PORT} + 580")
 
   rdma_add_ctest(baseline_native_nd_send_recv_smoke
-                 nd_send_bw "baseline;native_nd;nd"
+                 nd_send_bw "baseline;native;native_nd;nd;bandwidth"
                  --single-process
                  --port ${RDMA_NATIVE_ND_PORT}
                  --mode poll
@@ -399,10 +600,10 @@ if(RDMA_BACKEND STREQUAL "nd")
                  --iterations 32
                  --queue-depth 4)
   set_tests_properties(baseline_native_nd_send_recv_smoke
-      PROPERTIES TIMEOUT 30)
+      PROPERTIES TIMEOUT 30 RESOURCE_LOCK rdma_device)
 
   rdma_add_ctest(baseline_native_nd_write_smoke
-                 nd_write_bw "baseline;native_nd;nd"
+                 nd_write_bw "baseline;native;native_nd;nd;bandwidth"
                  --single-process
                  --port ${RDMA_NATIVE_ND_WRITE_PORT}
                  --mode poll
@@ -411,10 +612,10 @@ if(RDMA_BACKEND STREQUAL "nd")
                  --iterations 32
                  --queue-depth 4)
   set_tests_properties(baseline_native_nd_write_smoke
-      PROPERTIES TIMEOUT 30)
+      PROPERTIES TIMEOUT 30 RESOURCE_LOCK rdma_device)
 
   rdma_add_ctest(baseline_native_nd_read_smoke
-                 nd_read_bw "baseline;native_nd;nd"
+                 nd_read_bw "baseline;native;native_nd;nd;bandwidth"
                  --single-process
                  --port ${RDMA_NATIVE_ND_READ_PORT}
                  --mode poll
@@ -423,5 +624,60 @@ if(RDMA_BACKEND STREQUAL "nd")
                  --iterations 32
                  --queue-depth 4)
   set_tests_properties(baseline_native_nd_read_smoke
-      PROPERTIES TIMEOUT 30)
+      PROPERTIES TIMEOUT 30 RESOURCE_LOCK rdma_device)
+
+  rdma_add_asio_perftest_smoke(baseline_native_nd_send_lat_smoke
+                               nd_send_lat
+                               "baseline;native;native_nd;nd;latency"
+                               ${RDMA_NATIVE_ND_SEND_LAT_PORT}
+                               poll use_future 64 1)
+  rdma_add_asio_perftest_smoke(baseline_native_nd_write_lat_smoke
+                               nd_write_lat
+                               "baseline;native;native_nd;nd;latency"
+                               ${RDMA_NATIVE_ND_WRITE_LAT_PORT}
+                               poll use_future 64 1)
+  rdma_add_asio_perftest_smoke(baseline_native_nd_read_lat_smoke
+                               nd_read_lat
+                               "baseline;native;native_nd;nd;latency"
+                               ${RDMA_NATIVE_ND_READ_LAT_PORT}
+                               poll use_future 64 1)
+
+  rdma_add_ctest(baseline_native_nd_perftest_generic_smoke
+                 nd_perftest "baseline;native;native_nd;nd;tooling"
+                 --single-process
+                 --port ${RDMA_NATIVE_ND_GENERIC_PORT}
+                 --operation send_recv
+                 --metric bandwidth
+                 --mode poll
+                 --topology single_host_same_process
+                 --message-size 64
+                 --iterations 32
+                 --queue-depth 4)
+  rdma_set_hardware_ctest_properties(baseline_native_nd_perftest_generic_smoke 30)
+
+  rdma_add_ctest(baseline_native_nd_send_recv_bench_compat_smoke
+                 native_nd_send_recv_bench "baseline;native;native_nd;nd;tooling"
+                 --single-process
+                 --port ${RDMA_NATIVE_ND_GENERIC_WRITE_PORT}
+                 --operation send_recv
+                 --metric bandwidth
+                 --mode poll
+                 --topology single_host_same_process
+                 --message-size 64
+                 --iterations 32
+                 --queue-depth 4)
+  rdma_set_hardware_ctest_properties(baseline_native_nd_send_recv_bench_compat_smoke 30)
+
+  rdma_add_ctest(baseline_native_nd_read_write_bench_compat_smoke
+                 native_nd_read_write_bench "baseline;native;native_nd;nd;tooling"
+                 --single-process
+                 --port ${RDMA_NATIVE_ND_GENERIC_READ_PORT}
+                 --operation write
+                 --metric bandwidth
+                 --mode poll
+                 --topology single_host_same_process
+                 --message-size 64
+                 --iterations 32
+                 --queue-depth 4)
+  rdma_set_hardware_ctest_properties(baseline_native_nd_read_write_bench_compat_smoke 30)
 endif()

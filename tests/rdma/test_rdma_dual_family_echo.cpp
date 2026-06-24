@@ -61,6 +61,8 @@ asio::awaitable<bool> server_round(asio::io_context& io_ctx,
     std::cerr << "[server " << tag << "] listen: " << ec.message() << "\n";
     co_return false;
   }
+  std::cout << "RDMA_CTEST_READY role=server family=" << tag
+            << " port=" << port << std::endl;
   std::cout << "[server " << tag << "] listening on port " << port << "\n";
 
   std::array<char, 256> req_pd_buf{};

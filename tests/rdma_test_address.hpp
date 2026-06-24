@@ -31,8 +31,17 @@ inline asio::ip::address query_local_rdma_address() {
   return asio::rdma::query_local_rdma_address();
 }
 
+inline asio::ip::address query_local_rdma_address(asio::rdma::tcp port_space) {
+  return asio::rdma::query_local_rdma_address(port_space);
+}
+
 inline std::string query_local_rdma_address_string() {
   return query_local_rdma_address().to_string();
+}
+
+inline std::string query_local_rdma_address_string(
+    asio::rdma::tcp port_space) {
+  return rdma_test::query_local_rdma_address(port_space).to_string();
 }
 
 inline asio::rdma::tcp port_space_for(asio::ip::address const& address) {

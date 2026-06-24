@@ -71,6 +71,7 @@ void run_server(asio::io_context& io_ctx, rdma::ibv_device_ptr const& device,
   listener.open(tcp::v4());
   listener.bind(port);
   listener.listen();
+  std::cout << "RDMA_CTEST_READY role=server port=" << port << std::endl;
 
   rdma::ibv_completion_queue cq(device);
   rdma::ibv_connector<tcp> conn(io_ctx);  // filled by async_get_connection
