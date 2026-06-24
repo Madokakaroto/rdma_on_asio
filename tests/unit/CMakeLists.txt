@@ -17,9 +17,7 @@ function(rdma_add_unit_test name source)
   target_compile_definitions(${name} PRIVATE ASIO_STANDALONE)
   target_link_libraries(${name} PRIVATE Threads::Threads)
 
-  if(RDMA_BACKEND STREQUAL "nd")
-    rdma_configure_nd_backend(${name})
-  elseif(RDMA_BACKEND STREQUAL "ibv")
+  if(RDMA_BACKEND STREQUAL "ibv")
     target_link_libraries(${name} PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
   endif()
 
@@ -60,7 +58,6 @@ if(RDMA_BACKEND STREQUAL "nd")
       )
       target_compile_definitions(${name} PRIVATE ASIO_STANDALONE)
       target_link_libraries(${name} PRIVATE Threads::Threads)
-      rdma_configure_nd_backend(${name})
       if(MSVC)
         set_property(TARGET ${name} PROPERTY
             MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

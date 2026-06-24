@@ -30,8 +30,6 @@ foreach(rdma_test
 
   if(RDMA_BACKEND STREQUAL "ibv")
     target_link_libraries(${rdma_test} PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
-  elseif(RDMA_BACKEND STREQUAL "nd")
-    rdma_configure_nd_backend(${rdma_test})
   endif()
 endforeach()
 

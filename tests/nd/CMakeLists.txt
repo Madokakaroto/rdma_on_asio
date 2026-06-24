@@ -8,7 +8,6 @@ target_include_directories(test_nd_global_init PRIVATE
 )
 
 target_compile_definitions(test_nd_global_init PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(test_nd_global_init)
 
 add_executable(test_nd_device_manager
     test_nd_device_manager.cpp
@@ -20,7 +19,6 @@ target_include_directories(test_nd_device_manager PRIVATE
 )
 
 target_compile_definitions(test_nd_device_manager PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(test_nd_device_manager)
 
 add_executable(test_nd_config_derive
     test_nd_config_derive.cpp
@@ -32,7 +30,6 @@ target_include_directories(test_nd_config_derive PRIVATE
 )
 
 target_compile_definitions(test_nd_config_derive PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(test_nd_config_derive)
 
 add_executable(test_nd_error
     test_nd_error.cpp
@@ -44,7 +41,6 @@ target_include_directories(test_nd_error PRIVATE
 )
 
 target_compile_definitions(test_nd_error PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(test_nd_error)
 
 add_executable(test_nd_use_device
     test_nd_use_device.cpp
@@ -56,7 +52,6 @@ target_include_directories(test_nd_use_device PRIVATE
 )
 
 target_compile_definitions(test_nd_use_device PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(test_nd_use_device)
 
 add_executable(test_nd_refactored_compile
     test_nd_refactored_compile.cpp
@@ -68,7 +63,6 @@ target_include_directories(test_nd_refactored_compile PRIVATE
 )
 
 target_compile_definitions(test_nd_refactored_compile PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(test_nd_refactored_compile)
 
 add_executable(test_nd_connector_listener
     test_nd_connector_listener.cpp
@@ -80,7 +74,6 @@ target_include_directories(test_nd_connector_listener PRIVATE
 )
 
 target_compile_definitions(test_nd_connector_listener PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(test_nd_connector_listener)
 
 add_executable(test_nd_echo
     test_nd_echo.cpp
@@ -92,7 +85,6 @@ target_include_directories(test_nd_echo PRIVATE
 )
 
 target_compile_definitions(test_nd_echo PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(test_nd_echo)
 
 # Poll-mode echo: data plane runs against a user-owned CQ spun on its own thread.
 find_package(Threads REQUIRED)
@@ -108,7 +100,6 @@ target_include_directories(test_nd_echo_poll PRIVATE
 
 target_compile_definitions(test_nd_echo_poll PRIVATE ASIO_STANDALONE)
 target_link_libraries(test_nd_echo_poll PRIVATE Threads::Threads)
-rdma_configure_nd_backend(test_nd_echo_poll)
 
 add_executable(test_nd_wait_disconnect
     test_nd_wait_disconnect.cpp
@@ -120,7 +111,6 @@ target_include_directories(test_nd_wait_disconnect PRIVATE
 )
 
 target_compile_definitions(test_nd_wait_disconnect PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(test_nd_wait_disconnect)
 
 add_executable(test_nd_disconnect_cancel
     test_nd_disconnect_cancel.cpp
@@ -133,7 +123,6 @@ target_include_directories(test_nd_disconnect_cancel PRIVATE
 
 target_compile_definitions(test_nd_disconnect_cancel PRIVATE ASIO_STANDALONE)
 target_link_libraries(test_nd_disconnect_cancel PRIVATE Threads::Threads)
-rdma_configure_nd_backend(test_nd_disconnect_cancel)
 
 add_executable(test_nd_control_cancel
     test_nd_control_cancel.cpp
@@ -146,7 +135,6 @@ target_include_directories(test_nd_control_cancel PRIVATE
 
 target_compile_definitions(test_nd_control_cancel PRIVATE ASIO_STANDALONE)
 target_link_libraries(test_nd_control_cancel PRIVATE Threads::Threads)
-rdma_configure_nd_backend(test_nd_control_cancel)
 
 add_test(NAME test_nd_global_init COMMAND test_nd_global_init)
 set_tests_properties(test_nd_global_init PROPERTIES LABELS "unit;nd;legacy")

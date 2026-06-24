@@ -36,10 +36,7 @@ endif()
 # NetworkDirect backend
 if(RDMA_BACKEND STREQUAL "nd")
   include(cmake/NetworkDirect.cmake)
-  rdma_networkdirect_init(
-      OUT_INCLUDE_DIRS NETWORKDIRECT_INCLUDE_DIRS
-      OUT_LIB_DIR NETWORKDIRECT_LIB_DIR
-      OUT_LIB_NAME NETWORKDIRECT_LIB_NAME)
+  init_networdirect()
 endif()
 
 # libibverbs backend (Linux rdma-core: libibverbs + librdmacm)

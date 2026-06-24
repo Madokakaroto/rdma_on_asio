@@ -50,24 +50,14 @@ cmake/NetworkDirect.cmake
 公开入口：
 
 ```cmake
-rdma_networkdirect_init(
-  OUT_INCLUDE_DIRS <include-dirs-var>
-  OUT_LIB_DIR <lib-dir-var>
-  OUT_LIB_NAME <lib-name-var>
-)
-
-rdma_configure_nd_backend(<target>)
+init_networdirect()
 ```
 
-返回值：
+Exported variables:
 
 ```cmake
-NETWORKDIRECT_INCLUDE_DIRS
-  third_party/networkdirect/src/ndutil
-  generated/networkdirect
-
-NETWORKDIRECT_LIB_DIR
-  networkdirect-native/<config>-<platform>/ndutil
+NETWORKDIRECT_SOURCE
+  src/networkdirect.cpp
 
 NETWORKDIRECT_LIB_NAME
   ndutil.lib
@@ -85,6 +75,10 @@ rdma_networkdirect_headers
 rdma_networkdirect_native_ndutil
   depends on generated headers
   produces networkdirect-native/<config>-<platform>/ndutil/ndutil.lib
+
+rdma_networkdirect_backend
+  interface target applied by init_networdirect()
+  provides _WIN32_WINNT, include paths, lib search path, and build-order deps
 ```
 
 ### Module Rules
@@ -97,9 +91,11 @@ rdma_networkdirect_native_ndutil
   `src/networkdirect.cpp`.
 - `NetworkDirect.cmake` does not decide whether an executable should manually link
   `ndutil.lib`.
-- `rdma_configure_nd_backend()` lives in this module and only applies common ND
-  backend configuration: `_WIN32_WINNT`, include paths, lib search path, and
-  dependencies on generated headers/native `ndutil.lib`.
+- `rdma_networkdirect_backend` is an interface target, not a normal link library
+  for `ndutil.lib`.
+- `init_networdirect()` applies `rdma_networkdirect_backend` to targets
+  created after initialization, so individual executable targets do not need a
+  per-target ND helper call.
 
 ## Root CMake Shape
 
@@ -108,17 +104,16 @@ Root `CMakeLists.txt` owns only backend selection and module initialization:
 ```cmake
 if(RDMA_BACKEND STREQUAL "nd")
   include(cmake/NetworkDirect.cmake)
-  rdma_networkdirect_init(
-      OUT_INCLUDE_DIRS NETWORKDIRECT_INCLUDE_DIRS
-      OUT_LIB_DIR NETWORKDIRECT_LIB_DIR
-      OUT_LIB_NAME NETWORKDIRECT_LIB_NAME)
+  init_networdirect()
 endif()
 ```
 
-`rdma_networkdirect_init()` exports `NETWORKDIRECT_SOURCE` for executable source
-lists and installs `rdma_configure_nd_backend()` as the shared ND target helper.
+`init_networdirect()` exports `NETWORKDIRECT_SOURCE` for executable source lists,
+exports `NETWORKDIRECT_LIB_NAME` for manual-link targets, and applies
+`rdma_networkdirect_backend` as a directory-level usage requirement for later
+targets.
 
-`rdma_configure_nd_backend()` is intentionally thin. It must not:
+`rdma_networkdirect_backend` is intentionally thin. It must not:
 
 - add `src/networkdirect.cpp`;
 - add `asio/impl/src.hpp`;
@@ -141,7 +136,6 @@ add_executable(my_embedded_test
     ${NETWORKDIRECT_SOURCE})
 
 target_compile_definitions(my_embedded_test PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(my_embedded_test)
 ```
 
 Rules:
@@ -163,7 +157,6 @@ add_executable(unit_nd_asio_separate_autolink
     asio_separate_autolink_src.cpp)
 
 target_compile_definitions(unit_nd_asio_separate_autolink PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(unit_nd_asio_separate_autolink)
 ```
 
 Rules:
@@ -187,7 +180,6 @@ add_executable(unit_nd_asio_separate_manual_link
     asio_separate_manual_link_src.cpp)
 
 target_compile_definitions(unit_nd_asio_separate_manual_link PRIVATE ASIO_STANDALONE)
-rdma_configure_nd_backend(unit_nd_asio_separate_manual_link)
 target_link_libraries(unit_nd_asio_separate_manual_link PRIVATE
     ${NETWORKDIRECT_LIB_NAME}
     ws2_32
@@ -303,7 +295,8 @@ Additional checks:
   `ASIO_NO_DEFAULT_LINKED_LIBS`.
 - Do not define those two macros with `target_compile_definitions`; use source
   configuration headers.
-- Do not make `rdma_configure_nd_backend()` add implementation source files.
+- Do not make `rdma_networkdirect_backend` add implementation source files or
+  directly link `ndutil.lib`.
 - Do not make `NetworkDirect.cmake` choose embedded vs separate behavior.
 - If a new Windows executable is added, it must explicitly choose:
   - whether to compile `src/networkdirect.cpp`;
@@ -316,7 +309,8 @@ Additional checks:
 - The current ND CMake behavior is documented in this single file.
 - Root CMake no longer contains raw `mc.exe`, `ndutil.vcxproj`, or ND target-helper
   logic.
-- `NetworkDirect.cmake` returns include path, lib path, lib name, and
-  `NETWORKDIRECT_SOURCE`.
+- `NetworkDirect.cmake` applies include path and lib path through
+  `rdma_networkdirect_backend`.
+- `NetworkDirect.cmake` exports `NETWORKDIRECT_SOURCE` and `NETWORKDIRECT_LIB_NAME`.
 - Executable CMakeLists make source/link choices locally.
 - ibv backend remains untouched.

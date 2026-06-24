@@ -139,24 +139,7 @@ function(_rdma_networkdirect_add_native_ndutil)
       ${NETWORKDIRECT_NDUTIL_GENERATED_HEADERS_TARGET})
 endfunction()
 
-function(rdma_networkdirect_init)
-  cmake_parse_arguments(
-      NETWORKDIRECT_INIT
-      ""
-      "OUT_INCLUDE_DIRS;OUT_LIB_DIR;OUT_LIB_NAME"
-      ""
-      ${ARGN})
-
-  if(NOT NETWORKDIRECT_INIT_OUT_INCLUDE_DIRS)
-    message(FATAL_ERROR "rdma_networkdirect_init requires OUT_INCLUDE_DIRS")
-  endif()
-  if(NOT NETWORKDIRECT_INIT_OUT_LIB_DIR)
-    message(FATAL_ERROR "rdma_networkdirect_init requires OUT_LIB_DIR")
-  endif()
-  if(NOT NETWORKDIRECT_INIT_OUT_LIB_NAME)
-    message(FATAL_ERROR "rdma_networkdirect_init requires OUT_LIB_NAME")
-  endif()
-
+function(init_networdirect)
   set(NETWORKDIRECT_NDUTIL_DIR
       "${CMAKE_SOURCE_DIR}/third_party/networkdirect/src/ndutil")
   set(NETWORKDIRECT_GENERATED_DIR
@@ -191,45 +174,23 @@ function(rdma_networkdirect_init)
       GENERATED_HEADERS_TARGET rdma_networkdirect_generated_headers
       GENERATED_INCLUDE_DIR "${NETWORKDIRECT_NATIVE_INCLUDE_DIR}")
 
-  set(${NETWORKDIRECT_INIT_OUT_INCLUDE_DIRS}
-      "${NETWORKDIRECT_INCLUDE_DIRS}"
-      PARENT_SCOPE)
-  set(${NETWORKDIRECT_INIT_OUT_LIB_DIR}
-      "${NETWORKDIRECT_LIB_DIR}"
-      PARENT_SCOPE)
-  set(${NETWORKDIRECT_INIT_OUT_LIB_NAME}
-      "${NETWORKDIRECT_LIB_NAME}"
-      PARENT_SCOPE)
+  add_library(rdma_networkdirect_backend INTERFACE)
+  target_compile_definitions(rdma_networkdirect_backend INTERFACE
+      _WIN32_WINNT=0x0A00)
+  target_include_directories(rdma_networkdirect_backend INTERFACE
+      ${NETWORKDIRECT_INCLUDE_DIRS})
+  target_link_directories(rdma_networkdirect_backend INTERFACE
+      "${NETWORKDIRECT_LIB_DIR}")
+  add_dependencies(rdma_networkdirect_backend
+      rdma_networkdirect_generated_headers
+      rdma_networkdirect_native_ndutil)
+
+  link_libraries(rdma_networkdirect_backend)
 
   set(NETWORKDIRECT_SOURCE
       "${CMAKE_SOURCE_DIR}/src/networkdirect.cpp"
       PARENT_SCOPE)
-  set(NETWORKDIRECT_INCLUDE_DIRS
-      "${NETWORKDIRECT_INCLUDE_DIRS}"
-      PARENT_SCOPE)
-  set(NETWORKDIRECT_LIB_DIR
-      "${NETWORKDIRECT_LIB_DIR}"
-      PARENT_SCOPE)
   set(NETWORKDIRECT_LIB_NAME
       "${NETWORKDIRECT_LIB_NAME}"
       PARENT_SCOPE)
-endfunction()
-
-function(rdma_configure_nd_backend target)
-  if(NOT TARGET ${target})
-    message(FATAL_ERROR "rdma_configure_nd_backend target does not exist: ${target}")
-  endif()
-  if(NOT TARGET rdma_networkdirect_generated_headers)
-    message(FATAL_ERROR "rdma_networkdirect_init must be called before rdma_configure_nd_backend")
-  endif()
-  if(NOT TARGET rdma_networkdirect_native_ndutil)
-    message(FATAL_ERROR "rdma_networkdirect_init must be called before rdma_configure_nd_backend")
-  endif()
-
-  target_compile_definitions(${target} PRIVATE _WIN32_WINNT=0x0A00)
-  target_include_directories(${target} PRIVATE ${NETWORKDIRECT_INCLUDE_DIRS})
-  target_link_directories(${target} PRIVATE ${NETWORKDIRECT_LIB_DIR})
-  add_dependencies(${target}
-      rdma_networkdirect_generated_headers
-      rdma_networkdirect_native_ndutil)
 endfunction()
