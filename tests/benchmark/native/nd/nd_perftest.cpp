@@ -944,7 +944,7 @@ int main(int argc, char* argv[]) {
       return 0;
     }
     if (opt.local_addr.empty()) {
-      throw std::invalid_argument("--local-addr is required");
+      opt.local_addr = rdma_test::query_local_rdma_address_string();
     }
     return run_native_baseline(std::move(opt), std::move(cmd));
   } catch (std::runtime_error const& e) {

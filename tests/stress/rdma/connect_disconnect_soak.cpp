@@ -25,7 +25,7 @@ asio::awaitable<void> server_loop(rdma_bench::options opt,
   auto ex = co_await asio::this_coro::executor;
   auto& io = static_cast<asio::io_context&>(ex.context());
   rdma::rdma_listener<tcp> listener(io);
-  listener.open(tcp::v4());
+  listener.open(rdma_test::port_space_for(opt.local_addr));
   listener.bind(opt.port);
   listener.listen();
   std::cout << "RDMA_BENCH_READY role=server stress=connect_disconnect port="
@@ -58,9 +58,9 @@ asio::awaitable<void> client_loop(rdma_bench::options opt,
   auto& io = static_cast<asio::io_context&>(ex.context());
   for (std::uint64_t i = 0; i < opt.iterations; ++i) {
     rdma::rdma_connector<tcp> conn(io);
-    conn.open(tcp::v4());
+    conn.open(rdma_test::port_space_for(opt.local_addr));
     rdma::rdma_queue_pair qp(io);
-    tcp::endpoint ep(asio::ip::make_address(opt.local_addr), opt.port);
+    auto ep = rdma_test::endpoint_for(opt.local_addr, opt.port);
     auto [ecc, reply_len] = co_await conn.async_connect(
         qp, ep, asio::const_buffer{}, asio::mutable_buffer{}, nothrow);
     (void)reply_len;
@@ -77,9 +77,7 @@ int main(int argc, char* argv[]) {
   try {
     auto opt = rdma_bench::parse_options_with_scenario(argc, argv, false);
     auto cmd = rdma_bench::command_line(argc, argv);
-    if (opt.local_addr.empty()) {
-      throw std::invalid_argument("--local-addr is required");
-    }
+    opt.local_addr = rdma_test::query_local_rdma_address_string();
 
     asio::io_context io;
     auto device = rdma::rdma_device_manager_t::instance()

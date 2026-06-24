@@ -5,8 +5,8 @@
 // rdma_errc::disconnected, and that arming it again afterwards completes
 // immediately (level-triggered).
 //
-// Usage: test_ibv_wait_disconnect <roce-ip> [port]
-// (Needs a working RDMA device + an IP bound to it; skips if no arg given.)
+// Usage: test_ibv_wait_disconnect [port].
+// The test queries a local RDMA-capable address at runtime.
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -20,6 +20,7 @@
 #include "asio/use_awaitable.hpp"
 
 #include "rdma/rdma.hpp"
+#include "rdma_test_address.hpp"
 
 namespace rdma = asio::rdma;
 using tcp = rdma::tcp;
@@ -36,9 +37,10 @@ struct result_t {
 
 asio::awaitable<void> run_server(asio::io_context& io,
                                  rdma::rdma_device_ptr const& device,
-                                 uint16_t port, result_t& out) {
+                                 std::string host, uint16_t port,
+                                 result_t& out) {
   rdma::rdma_listener<tcp> listener(io);
-  listener.open(tcp::v4());
+  listener.open(rdma_test::port_space_for(host));
   listener.bind(port);
   listener.listen();
 
@@ -78,9 +80,9 @@ asio::awaitable<void> run_client(asio::io_context& io,
                                  rdma::rdma_device_ptr const& device,
                                  std::string host, uint16_t port) {
   rdma::rdma_connector<tcp> conn(io);
-  conn.open(tcp::v4());
+  conn.open(rdma_test::port_space_for(host));
   rdma::rdma_queue_pair qp(io);
-  tcp::endpoint ep(asio::ip::make_address(host), port);
+  auto ep = rdma_test::endpoint_for(host, port);
   std::string req = "cli";
   auto [ec, rpn] = co_await conn.async_connect(qp, ep, asio::buffer(req),
                                                asio::mutable_buffer{}, nothrow);
@@ -101,22 +103,18 @@ asio::awaitable<void> run_client(asio::io_context& io,
 }
 
 int main(int argc, char* argv[]) {
-  if (argc < 2) {
-    std::cout << "[SKIP] usage: " << argv[0] << " <roce-ip> [port] "
-              << "(needs a working RDMA device + IP)\n";
-    return 0;
-  }
-  std::string host = argv[1];
-  uint16_t port = (argc > 2) ? static_cast<uint16_t>(std::stoi(argv[2])) : 5007;
-
   try {
+    auto endpoint =
+        rdma_test::query_local_endpoint_with_port_arg(argc, argv, 5007);
+    auto host = endpoint.address_string();
+    auto port = endpoint.port;
     asio::io_context io;
     auto device = rdma::rdma_device_manager_t::instance()
                       .get_first_available_device({});
     rdma::use_device(io, device);
 
     result_t r;
-    asio::co_spawn(io, run_server(io, device, port, r), asio::detached);
+    asio::co_spawn(io, run_server(io, device, host, port, r), asio::detached);
     asio::co_spawn(io, run_client(io, device, host, port), asio::detached);
     io.run();
 

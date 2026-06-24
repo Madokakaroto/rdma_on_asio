@@ -2,8 +2,7 @@
 #include <iostream>
 #include <system_error>
 
-#include "rdma/ibv/ibv_device.hpp"
-#include "rdma/tcp.hpp"
+#include "rdma/rdma.hpp"
 
 void test_singleton() {
   auto const& mgr1 = asio::rdma::ibv_device_manager_t::instance();
@@ -18,10 +17,10 @@ void test_get_first_available_device() {
   auto const& mgr = asio::rdma::ibv_device_manager_t::instance();
   auto device = mgr.get_first_available_device(asio::rdma::ibv_config_t{});
   if (device) {
-    assert(device->context_ != nullptr);
-    assert(!device->name_.empty());
-    std::cout << "[PASS] get_first_available_device: found device \""
-              << device->name_ << "\" (dual-family)\n";
+    auto address = asio::rdma::query_local_rdma_address(device);
+    assert(!address.is_unspecified());
+    std::cout << "[PASS] get_first_available_device: found device with local "
+              << address.to_string() << "\n";
   }
   else {
     std::cout << "[SKIP] get_first_available_device: no RDMA device available\n";

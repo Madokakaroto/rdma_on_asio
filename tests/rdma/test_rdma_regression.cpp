@@ -6,7 +6,8 @@
 //   - Multi-message send/recv ordering.
 //   - Negative connect to a port with no listener.
 //
-// Usage: test_rdma_regression <roce-ip> [port]   (skips if no arg).
+// Usage: test_rdma_regression [port].
+// The test queries a local RDMA-capable address at runtime.
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -31,6 +32,7 @@
 #include "asio/use_awaitable.hpp"
 
 #include "rdma/rdma.hpp"
+#include "rdma_test_address.hpp"
 
 namespace rdma = asio::rdma;
 using tcp = rdma::tcp;
@@ -238,7 +240,7 @@ bool phase_read_write(rdma::rdma_device_ptr const& device,
   rdma::use_device(io, device);
 
   rdma::rdma_listener<tcp> listener(io);
-  listener.open(tcp::v4());
+  listener.open(rdma_test::port_space_for(ip));
   listener.bind(port);
   listener.listen();
 
@@ -303,9 +305,9 @@ bool phase_read_write(rdma::rdma_device_ptr const& device,
       io,
       [&]() -> asio::awaitable<void> {
         rdma::rdma_connector<tcp> conn(io);
-        conn.open(tcp::v4());
+        conn.open(rdma_test::port_space_for(ip));
         rdma::rdma_queue_pair qp(io);
-        tcp::endpoint endpoint(asio::ip::make_address(ip), port);
+        auto endpoint = rdma_test::endpoint_for(ip, port);
         auto [ec_connect, reply_len] = co_await conn.async_connect(
             qp, endpoint, asio::const_buffer{}, asio::mutable_buffer{},
             nothrow);
@@ -367,7 +369,7 @@ bool phase_zero_length(rdma::rdma_device_ptr const& device,
   rdma::use_device(io, device);
 
   rdma::rdma_listener<tcp> listener(io);
-  listener.open(tcp::v4());
+  listener.open(rdma_test::port_space_for(ip));
   listener.bind(port);
   listener.listen();
 
@@ -417,9 +419,9 @@ bool phase_zero_length(rdma::rdma_device_ptr const& device,
       io,
       [&]() -> asio::awaitable<void> {
         rdma::rdma_connector<tcp> conn(io);
-        conn.open(tcp::v4());
+        conn.open(rdma_test::port_space_for(ip));
         rdma::rdma_queue_pair qp(io);
-        tcp::endpoint endpoint(asio::ip::make_address(ip), port);
+        auto endpoint = rdma_test::endpoint_for(ip, port);
         auto [ec_connect, reply_len] = co_await conn.async_connect(
             qp, endpoint, asio::const_buffer{}, asio::mutable_buffer{},
             nothrow);
@@ -578,9 +580,9 @@ public:
       , done_(std::move(done)) {}
 
   void start() {
-    conn_.open(tcp::v4());
+    conn_.open(rdma_test::port_space_for(ip_));
     auto self = shared_from_this();
-    tcp::endpoint ep(asio::ip::make_address(ip_), port_);
+    auto ep = rdma_test::endpoint_for(ip_, port_);
     conn_.async_connect(qp_, ep, asio::const_buffer{},
                         [self](asio::error_code ec) {
                           if (ec) { self->finish(); return; }
@@ -664,7 +666,7 @@ bool phase_multi_message_order(rdma::rdma_device_ptr const& device,
   rdma::use_device(io, device);
 
   rdma::rdma_listener<tcp> listener(io);
-  listener.open(tcp::v4());
+  listener.open(rdma_test::port_space_for(ip));
   listener.bind(port);
   listener.listen();
 
@@ -707,7 +709,7 @@ bool phase_negative_connect(rdma::rdma_device_ptr const& device,
 
   rdma::rdma_connector<tcp> conn(io);
   rdma::rdma_queue_pair qp(io);
-  tcp::endpoint endpoint(asio::ip::make_address(ip), port);
+  auto endpoint = rdma_test::endpoint_for(ip, port);
   conn.async_connect(qp, endpoint, asio::const_buffer{},
                      asio::mutable_buffer{},
                      [&](asio::error_code ec, std::size_t) {
@@ -731,18 +733,11 @@ bool phase_negative_connect(rdma::rdma_device_ptr const& device,
 }
 
 int main(int argc, char* argv[]) {
-  if (argc < 2) {
-    std::cout << "[SKIP] usage: " << argv[0] << " <roce-ip> [port] "
-              << "(needs a working RDMA device + IP)\n";
-    return 0;
-  }
-
-  std::string ip = argv[1];
-  auto const base_port =
-      argc > 2 ? static_cast<std::uint16_t>(std::stoi(argv[2]))
-               : static_cast<std::uint16_t>(5100);
-
   try {
+    auto endpoint =
+        rdma_test::query_local_endpoint_with_port_arg(argc, argv, 5100);
+    auto ip = endpoint.address_string();
+    auto const base_port = endpoint.port;
     auto device = rdma::rdma_device_manager_t::instance()
                       .get_first_available_device({});
     if (!device) {

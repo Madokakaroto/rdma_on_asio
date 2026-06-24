@@ -19,7 +19,8 @@
 //     still receives the intended bytes -- proving lifetime is library-managed,
 //     not caller-managed.
 //
-// Usage: test_rdma_private_data <roce-ip> [port]   (skips if no arg).
+// Usage: test_rdma_private_data [port].
+// The test queries a local RDMA-capable address at runtime.
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -38,6 +39,7 @@
 #include "asio/use_awaitable.hpp"
 
 #include "rdma/rdma.hpp"
+#include "rdma_test_address.hpp"
 
 namespace rdma = asio::rdma;
 using tcp = rdma::tcp;
@@ -67,7 +69,7 @@ outcome run_once(rdma::rdma_device_ptr const& device, std::string const& ip,
   asio::io_context io;
   rdma::use_device(io, device);
   rdma::rdma_listener<tcp> lis(io);
-  lis.open(tcp::v4());
+  lis.open(rdma_test::port_space_for(ip));
   lis.bind(port);
   lis.listen();
 
@@ -97,9 +99,9 @@ outcome run_once(rdma::rdma_device_ptr const& device, std::string const& ip,
       io,
       [&]() -> asio::awaitable<void> {
         rdma::rdma_connector<tcp> conn(io);
-        conn.open(tcp::v4());
+        conn.open(rdma_test::port_space_for(ip));
         rdma::rdma_queue_pair qp(io);
-        tcp::endpoint ep(asio::ip::make_address(ip), port);
+        auto ep = rdma_test::endpoint_for(ip, port);
         std::array<char, 256> reply_buf{};
         auto [ecc, reply_len] = co_await conn.async_connect(
             qp, ep, asio::buffer(client_request), asio::buffer(reply_buf),
@@ -155,7 +157,7 @@ bool phase_request_lifetime(rdma::rdma_device_ptr const& device,
   asio::io_context io;
   rdma::use_device(io, device);
   rdma::rdma_listener<tcp> lis(io);
-  lis.open(tcp::v4());
+  lis.open(rdma_test::port_space_for(ip));
   lis.bind(port);
   lis.listen();
 
@@ -178,9 +180,9 @@ bool phase_request_lifetime(rdma::rdma_device_ptr const& device,
       asio::detached);
 
   rdma::rdma_connector<tcp> conn(io);
-  conn.open(tcp::v4());
+  conn.open(rdma_test::port_space_for(ip));
   rdma::rdma_queue_pair qp(io);
-  tcp::endpoint ep(asio::ip::make_address(ip), port);
+  auto ep = rdma_test::endpoint_for(ip, port);
   std::array<char, 256> reply_buf{};
 
   // The request buffer is a TEMPORARY destroyed at the end of this block --
@@ -218,7 +220,7 @@ bool phase_no_reply(rdma::rdma_device_ptr const& device, std::string const& ip,
   asio::io_context io;
   rdma::use_device(io, device);
   rdma::rdma_listener<tcp> lis(io);
-  lis.open(tcp::v4());
+  lis.open(rdma_test::port_space_for(ip));
   lis.bind(port);
   lis.listen();
 
@@ -248,9 +250,9 @@ bool phase_no_reply(rdma::rdma_device_ptr const& device, std::string const& ip,
       io,
       [&]() -> asio::awaitable<void> {
         rdma::rdma_connector<tcp> conn(io);
-        conn.open(tcp::v4());
+        conn.open(rdma_test::port_space_for(ip));
         rdma::rdma_queue_pair qp(io);
-        tcp::endpoint ep(asio::ip::make_address(ip), port);
+        auto ep = rdma_test::endpoint_for(ip, port);
         std::string req = "REQ-no-reply";
         // No-reply connect overload: completion is void(ec), no reply_len.
         auto [ecc] = co_await conn.async_connect(qp, ep, asio::buffer(req),
@@ -288,7 +290,7 @@ bool phase_no_reply_cancel(rdma::rdma_device_ptr const& device,
   asio::io_context io;
   rdma::use_device(io, device);
   rdma::rdma_listener<tcp> lis(io);
-  lis.open(tcp::v4());
+  lis.open(rdma_test::port_space_for(ip));
   lis.bind(port);
   lis.listen();
 
@@ -311,9 +313,9 @@ bool phase_no_reply_cancel(rdma::rdma_device_ptr const& device,
       io,
       [&]() -> asio::awaitable<void> {
         rdma::rdma_connector<tcp> conn(io);
-        conn.open(tcp::v4());
+        conn.open(rdma_test::port_space_for(ip));
         rdma::rdma_queue_pair qp(io);
-        tcp::endpoint ep(asio::ip::make_address(ip), port);
+        auto ep = rdma_test::endpoint_for(ip, port);
         std::string req = "c";
         asio::steady_timer t(io);
         t.expires_after(500ms);
@@ -338,15 +340,11 @@ bool phase_no_reply_cancel(rdma::rdma_device_ptr const& device,
 }
 
 int main(int argc, char* argv[]) {
-  if (argc < 2) {
-    std::cout << "[SKIP] usage: " << argv[0] << " <roce-ip> [port] "
-              << "(needs a working RDMA device + IP)\n";
-    return 0;
-  }
-  std::string ip = argv[1];
-  uint16_t port = (argc > 2) ? static_cast<uint16_t>(std::stoi(argv[2])) : 5080;
-
   try {
+    auto endpoint =
+        rdma_test::query_local_endpoint_with_port_arg(argc, argv, 5080);
+    auto ip = endpoint.address_string();
+    auto port = endpoint.port;
     auto device = rdma::rdma_device_manager_t::instance()
                       .get_first_available_device({});
     bool ok = true;

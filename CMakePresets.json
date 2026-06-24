@@ -1,0 +1,64 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default",
+      "binaryDir": "${sourceDir}/build"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "unit",
+      "configurePreset": "default",
+      "configuration": "Debug",
+      "filter": {
+        "include": {
+          "label": "unit"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "performance",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "performance"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "stress",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "stress"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "baseline",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "filter": {
+        "include": {
+          "label": "baseline"
+        }
+      },
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

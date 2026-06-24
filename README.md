@@ -469,10 +469,10 @@ completes them as `operation_aborted`.
   [`docs/rdma_stress_performance_plan.md`](docs/rdma_stress_performance_plan.md) and
   [`docs/rdma_read_write_performance_optimization_plan.md`](docs/rdma_read_write_performance_optimization_plan.md).
 
-**Done:** a deterministic, no-hardware unit-test suite (Asio-style harness,
-`RDMA_BUILD_UNIT_TESTS`, default `ctest`) plus opt-in hardware integration/regression
-tests (`RDMA_ENABLE_HARDWARE_TESTS` + `RDMA_TEST_ADDR`) now cover the public API,
-buffer/op/config/error logic, and service-state guards -- see
-[`docs/unit_test_plan.md`](docs/unit_test_plan.md).
+**Done:** CMake uses the standard `BUILD_TESTING` switch to add the unified
+`tests/` graph. CTest labels cover `unit`, `performance`, `stress`, and
+`baseline`; local-machine RDMA tests query a usable local address at runtime
+rather than taking one from CMake -- see
+[`docs/cmake_test_unification_plan.md`](docs/cmake_test_unification_plan.md).
 
 See [`CLAUDE.md`](CLAUDE.md) for the detailed architecture and design notes.

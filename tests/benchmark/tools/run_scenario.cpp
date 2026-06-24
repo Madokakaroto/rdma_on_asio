@@ -87,10 +87,8 @@ int main(int argc, char* argv[]) {
 
     std::ostringstream single;
     single << rdma_bench::quote_arg(tool)
-           << " --single-process --local-addr "
-           << rdma_bench::quote_arg(opt.local_addr.empty() ? "<local-rdma-ip>"
-                                                        : opt.local_addr)
-           << args << " --json-out " << rdma_bench::quote_arg(result_json.string());
+           << " --single-process" << args
+           << " --json-out " << rdma_bench::quote_arg(result_json.string());
 
     std::ostringstream server;
     server << rdma_bench::quote_arg(tool) << " --server";
@@ -109,9 +107,6 @@ int main(int argc, char* argv[]) {
     bool executed = false;
     auto begin = std::chrono::steady_clock::now();
     if (opt.execute) {
-      if (opt.local_addr.empty()) {
-        throw std::invalid_argument("--execute requires --local-addr");
-      }
       if (opt.topology != "single_host_same_process") {
         throw std::invalid_argument(
             "--execute currently runs single_host_same_process only; use the "

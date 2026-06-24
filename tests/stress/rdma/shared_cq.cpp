@@ -160,9 +160,9 @@ public:
       , done_(std::move(done)) {}
 
   void start() {
-    conn_.open(tcp::v4());
+    conn_.open(rdma_test::port_space_for(addr_));
     auto self = shared_from_this();
-    tcp::endpoint ep(asio::ip::make_address(addr_), port_);
+    auto ep = rdma_test::endpoint_for(addr_, port_);
     conn_.async_connect(qp_, ep, asio::const_buffer{},
                         [self](asio::error_code ec) {
                           if (ec) { self->fail(); return; }
@@ -239,9 +239,7 @@ int main(int argc, char* argv[]) {
   try {
     auto opt = rdma_bench::parse_options_with_scenario(argc, argv, false);
     auto cmd = rdma_bench::command_line(argc, argv);
-    if (opt.local_addr.empty()) {
-      throw std::invalid_argument("--local-addr is required");
-    }
+    opt.local_addr = rdma_test::query_local_rdma_address_string();
     if (opt.mode != "event") {
       auto r = rdma_bench::make_skip_result(
           opt, cmd, "shared-CQ stress targets event-mode QPs",
@@ -264,7 +262,7 @@ int main(int argc, char* argv[]) {
       asio::io_context idle_io;
       rdma::use_device(idle_io, device);
       rdma::rdma_listener<tcp> idle_listener(idle_io);
-      idle_listener.open(tcp::v4());  // control-plane only; no event-mode QP
+      idle_listener.open(rdma_test::port_space_for(opt.local_addr));
       std::atomic<bool> returned{false};
       std::thread idle_thread([&] {
         idle_io.run();
@@ -284,7 +282,7 @@ int main(int argc, char* argv[]) {
     listeners.reserve(opt.qps);
     for (std::uint32_t i = 0; i < opt.qps; ++i) {
       auto listener = std::make_unique<rdma::rdma_listener<tcp>>(io);
-      listener->open(tcp::v4());
+      listener->open(rdma_test::port_space_for(opt.local_addr));
       listener->bind(static_cast<std::uint16_t>(opt.port + i));
       listener->listen();
       listeners.push_back(std::move(listener));

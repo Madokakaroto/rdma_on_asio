@@ -2,8 +2,7 @@
 #include <iostream>
 #include <system_error>
 
-#include "rdma/nd/nd_device.hpp"
-#include "rdma/tcp.hpp"
+#include "rdma/rdma.hpp"
 
 void test_singleton() {
   auto const& mgr1 = asio::rdma::nd_device_manager_t::instance();
@@ -19,15 +18,10 @@ void test_get_first_available_device() {
   auto const& mgr = asio::rdma::nd_device_manager_t::instance();
   auto device = mgr.get_first_available_device(asio::rdma::nd_config_t{});
   if (device) {
-    assert(device->adapter_ != nullptr);
-    assert(!device->name_.empty());
-    // A device must carry at least one local address (v4 and/or v6).
-    assert(device->v4_addr_.has_value() || device->v6_addr_.has_value());
-    std::cout << "[PASS] get_first_available_device: found device \""
-              << device->name_ << "\" (v4="
-              << (device->v4_addr_.has_value() ? "yes" : "no")
-              << " v6=" << (device->v6_addr_.has_value() ? "yes" : "no")
-              << ")\n";
+    auto address = asio::rdma::query_local_rdma_address(device);
+    assert(!address.is_unspecified());
+    std::cout << "[PASS] get_first_available_device: found device with local "
+              << address.to_string() << "\n";
   }
   else {
     std::cout << "[SKIP] get_first_available_device: no RDMA device available\n";

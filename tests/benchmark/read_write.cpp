@@ -76,7 +76,7 @@ public:
   void start() {
     try {
       setup_buffers();
-      listener_.open(tcp::v4());
+      listener_.open(rdma_test::port_space_for(opt_.local_addr));
       listener_.bind(opt_.port);
       listener_.listen();
       std::cout << "RDMA_BENCH_READY role=server operation="
@@ -202,8 +202,8 @@ public:
 
   void start() {
     try {
-      conn_.open(tcp::v4());
-      tcp::endpoint endpoint(asio::ip::make_address(opt_.peer_addr), opt_.port);
+      conn_.open(rdma_test::port_space_for(opt_.peer_addr));
+      auto endpoint = rdma_test::endpoint_for(opt_.peer_addr, opt_.port);
       conn_.async_connect(
           qp_, endpoint, asio::const_buffer{},
           asio::buffer(&remote_base_, sizeof(remote_base_)),
@@ -542,7 +542,7 @@ rdma_bench::result run_poll_server_role(rdma_bench::options opt,
     auto remote_base = mr.remote_addr(std::size_t{0}, storage.size());
 
     rdma::rdma_listener<tcp> listener(io);
-    listener.open(tcp::v4());
+    listener.open(rdma_test::port_space_for(opt.local_addr));
     listener.bind(opt.port);
     listener.listen();
     std::cout << "RDMA_BENCH_READY role=server mode=poll operation="
@@ -615,10 +615,10 @@ rdma_bench::result run_poll_client_role(rdma_bench::options opt,
 
     rdma::rdma_completion_queue cq(device);
     rdma::rdma_connector<tcp> conn(io);
-    conn.open(tcp::v4());
+    conn.open(rdma_test::port_space_for(opt.peer_addr));
     rdma::rdma_queue_pair qp(cq);
     rdma::rdma_remote_addr_t remote_base{};
-    tcp::endpoint endpoint(asio::ip::make_address(opt.peer_addr), opt.port);
+    auto endpoint = rdma_test::endpoint_for(opt.peer_addr, opt.port);
     asio::error_code connect_ec;
     std::size_t reply_len = 0;
     conn.async_connect(qp, endpoint, asio::const_buffer{},
@@ -774,10 +774,10 @@ rdma_bench::result run_poll_callback_client_role(rdma_bench::options opt,
 
     rdma::rdma_completion_queue cq(device);
     rdma::rdma_connector<tcp> conn(io);
-    conn.open(tcp::v4());
+    conn.open(rdma_test::port_space_for(opt.peer_addr));
     rdma::rdma_queue_pair qp(cq);
     rdma::rdma_remote_addr_t remote_base{};
-    tcp::endpoint endpoint(asio::ip::make_address(opt.peer_addr), opt.port);
+    auto endpoint = rdma_test::endpoint_for(opt.peer_addr, opt.port);
     asio::error_code connect_ec;
     std::size_t reply_len = 0;
     conn.async_connect(qp, endpoint, asio::const_buffer{},

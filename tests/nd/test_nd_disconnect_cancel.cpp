@@ -1,7 +1,7 @@
 // NetworkDirect coverage for state-adaptive connector::disconnect().
 //
-// Usage: test_nd_disconnect_cancel <nd-ip> [port]
-// Skips when no IP is provided because it needs a working ND-capable address.
+// Usage: test_nd_disconnect_cancel [port].
+// The test queries a local RDMA-capable address at runtime.
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -19,6 +19,7 @@
 #include "asio/use_awaitable.hpp"
 
 #include "rdma/rdma.hpp"
+#include "rdma_test_address.hpp"
 
 namespace rdma = asio::rdma;
 using tcp = rdma::tcp;
@@ -62,12 +63,12 @@ bool phase_pending_connect_abort(rdma::rdma_device_ptr const& device,
   rdma::use_device(io, device);
 
   rdma::rdma_listener<tcp> listener(io);
-  listener.open(tcp::v4());
+  listener.open(rdma_test::port_space_for(ip));
   listener.bind(port);
   listener.listen();
 
   rdma::rdma_connector<tcp> conn(io);
-  conn.open(tcp::v4());
+  conn.open(rdma_test::port_space_for(ip));
   rdma::rdma_queue_pair qp(io);
 
   std::atomic<bool> got_req{false};
@@ -93,7 +94,7 @@ bool phase_pending_connect_abort(rdma::rdma_device_ptr const& device,
       asio::detached);
 
   std::string req = "x";
-  tcp::endpoint ep(asio::ip::make_address(ip), port);
+  auto ep = rdma_test::endpoint_for(ip, port);
   conn.async_connect(qp, ep, asio::buffer(req), asio::mutable_buffer{},
                      [&](asio::error_code ec, std::size_t) {
     connect_ec = ec;
@@ -132,12 +133,12 @@ bool phase_established_recv_abort(rdma::rdma_device_ptr const& device,
   rdma::use_device(io, device);
 
   rdma::rdma_listener<tcp> listener(io);
-  listener.open(tcp::v4());
+  listener.open(rdma_test::port_space_for(ip));
   listener.bind(port);
   listener.listen();
 
   rdma::rdma_connector<tcp> client(io);
-  client.open(tcp::v4());
+  client.open(rdma_test::port_space_for(ip));
   rdma::rdma_queue_pair client_qp(io);
 
   std::atomic<bool> recv_armed{false};
@@ -172,7 +173,7 @@ bool phase_established_recv_abort(rdma::rdma_device_ptr const& device,
   asio::co_spawn(
       io,
       [&]() -> asio::awaitable<void> {
-        tcp::endpoint ep(asio::ip::make_address(ip), port);
+        auto ep = rdma_test::endpoint_for(ip, port);
         std::string req = "c";
         auto [ecc, rpn] = co_await client.async_connect(
             client_qp, ep, asio::buffer(req), asio::mutable_buffer{}, nothrow);
@@ -225,7 +226,7 @@ bool phase_terminal_reconnect(rdma::rdma_device_ptr const& device,
   rdma::use_device(io, device);
 
   rdma::rdma_connector<tcp> conn(io);
-  conn.open(tcp::v4());
+  conn.open(rdma_test::port_space_for(ip));
   conn.disconnect();
 
   rdma::rdma_queue_pair qp(io);
@@ -234,7 +235,7 @@ bool phase_terminal_reconnect(rdma::rdma_device_ptr const& device,
   bool timed_out = false;
   asio::steady_timer watchdog(io);
   arm_watchdog(io, watchdog, "terminal_reconnect", timed_out);
-  tcp::endpoint ep(asio::ip::make_address(ip), port);
+  auto ep = rdma_test::endpoint_for(ip, port);
   std::string req = "x";
   conn.async_connect(qp, ep, asio::buffer(req), asio::mutable_buffer{},
                      [&](asio::error_code ec, std::size_t) {
@@ -262,16 +263,11 @@ bool phase_terminal_reconnect(rdma::rdma_device_ptr const& device,
 }
 
 int main(int argc, char* argv[]) {
-  if (argc < 2) {
-    std::cout << "[SKIP] usage: " << argv[0] << " <nd-ip> [port] "
-              << "(needs a working NetworkDirect device + IP)\n";
-    return 0;
-  }
-
-  std::string ip = argv[1];
-  uint16_t port = (argc > 2) ? static_cast<uint16_t>(std::stoi(argv[2])) : 5012;
-
   try {
+    auto endpoint =
+        rdma_test::query_local_endpoint_with_port_arg(argc, argv, 5012);
+    auto ip = endpoint.address_string();
+    auto port = endpoint.port;
     auto device = rdma::rdma_device_manager_t::instance()
                       .get_first_available_device({});
 

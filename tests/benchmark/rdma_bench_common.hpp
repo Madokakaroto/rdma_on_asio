@@ -31,6 +31,7 @@
 #endif
 
 #include "asio_perftest_clock.hpp"
+#include "rdma_test_address.hpp"
 
 namespace rdma_bench {
 
@@ -162,8 +163,12 @@ inline void validate_and_normalize_options(options& opt, bool require_role) {
   if (require_role && opt.client && opt.peer_addr.empty()) {
     throw std::invalid_argument("--client requires HOST or --peer-addr");
   }
-  if (require_role && opt.single_process && opt.local_addr.empty()) {
-    throw std::invalid_argument("--single-process requires --local-addr");
+  if (opt.single_process && !opt.local_addr.empty()) {
+    throw std::invalid_argument(
+        "--single-process discovers the local RDMA address automatically");
+  }
+  if ((opt.single_process || opt.server || opt.client) && opt.local_addr.empty()) {
+    opt.local_addr = rdma_test::query_local_rdma_address_string();
   }
   if (opt.message_size == 0) {
     throw std::invalid_argument("--message-size must be greater than zero");
@@ -1151,7 +1156,7 @@ inline options parse_options_with_scenario(int argc, char* argv[],
 inline void print_usage(char const* argv0) {
   std::cerr
       << "Usage:\n"
-      << "  " << argv0 << " --single-process --local-addr IP [options]\n"
+      << "  " << argv0 << " --single-process [options]\n"
       << "  " << argv0 << " --server [--local-addr IP] [options]\n"
       << "  " << argv0 << " --client HOST [options]\n"
       << "  " << argv0 << " --client --peer-addr HOST [options]\n\n"
