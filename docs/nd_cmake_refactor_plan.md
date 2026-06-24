@@ -258,10 +258,9 @@ manual system library links.
 - `include/rdma/nd/impl/networkdirect.hpp`
 - `include/rdma/nd/nd_types.hpp`
 - `src/networkdirect.cpp`
-- `tests/unit/CMakeLists.txt`
-- `tests/nd/CMakeLists.txt`
-- `tests/rdma/CMakeLists.txt`
-- `tests/benchmark/CMakeLists.txt`
+- `tests/CMakeLists.txt` (the unified test graph; the former per-subdir
+  `tests/{unit,nd,rdma,benchmark}/CMakeLists.txt` are now source-layout-only stubs
+  after the CTest unification -- see `cmake_test_unification_plan.md`)
 - macro verification test sources under `tests/unit/nd`
 
 ## Verification
@@ -269,12 +268,16 @@ manual system library links.
 Completed after implementation:
 
 - Default clean configure/build: passed.
-- Default CTest: `16/16` passed.
-- `RDMA_BUILD_ASIO_MACRO_TESTS=ON` clean configure/build: passed.
-- Macro CTest: `18/18` passed.
-- `RDMA_BUILD_PERFORMANCE_TESTS=ON` and `RDMA_BUILD_NATIVE_BASELINES=ON` clean build:
-  passed.
-- Benchmark/native-baseline profile CTest: `16/16` passed.
+- Default CTest: passed.
+
+> NOTE: the original per-option build/CTest matrix here predates the CTest
+> unification (`cmake_test_unification_plan.md` / `ctest_all_tests_plan.md`), which
+> **removed** the per-suite build options (`RDMA_BUILD_ASIO_MACRO_TESTS`,
+> `RDMA_BUILD_PERFORMANCE_TESTS`, `RDMA_BUILD_NATIVE_BASELINES`, ...). Tests now build
+> under the standard `BUILD_TESTING` switch and are selected via CTest labels
+> (unit / performance / stress / baseline); the macro and native-baseline variants are
+> covered there. The old fixed counts (16/16, 18/18) are not reproducible against the
+> current unified graph.
 
 Additional checks:
 

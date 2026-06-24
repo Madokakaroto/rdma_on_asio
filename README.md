@@ -158,7 +158,7 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 
 | Type / call | Purpose |
 |-------------|---------|
-| `rdma_device_manager_t::instance()` | Process-wide device registry; `get_first_available_device(port_space, config)` -- `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints) |
+| `rdma_device_manager_t::instance()` | Process-wide device registry; `get_first_available_device(config = {})` -- `rdma_device_ptr` (first device whose caps satisfy the non-zero `config` constraints). No port-space arg: a device is family-agnostic and serves both v4/v6; the family is chosen at the control plane. |
 | `use_device(io, device, config = {})` | Install the per-`io_context` completion service for `device`; sets the operating config. Returns `void`; share one `device` across multiple `io_context`s by calling it on each |
 | `rdma_device_ptr` | Handle to a device (from `get_first_available_device`) |
 | `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` (or `asio::rdma::buffer(mr[, off, n])`) produce value-semantic `const_buffer` / `mutable_buffer` (`{addr, len, lkey}`); `remote_addr(off, n)` -- `{addr, rkey}` to advertise a sub-range to a peer |

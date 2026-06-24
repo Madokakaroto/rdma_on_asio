@@ -84,6 +84,47 @@ endfunction()
 rdma_add_backend_executable(rdma_ctest_runner
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/ctest/rdma_ctest_runner.cpp)
 
+# External ibverbs perftest baseline (upstream perftest tools: ib_send_bw, ...).
+# This is a NATIVE ibv baseline, not an RDMA-on-Asio test. Single-host loopback
+# smoke driven by rdma_ctest_runner: the server binds, then after a fixed readiness
+# delay the client connects to the runtime-discovered local address (auto-v4 -- no
+# cached address in CMake). The canonical parity command shape is produced by
+# rdma_benchmark_perftest_commands; here we use a minimal smoke flag set
+# (--connection RC --rdma_cm --size --iters --port). If the perftest binary is not
+# installed, the case skips cleanly (RDMA_CTEST_SKIP / SKIP_RETURN_CODE 77).
+function(rdma_add_external_perftest_smoke test_name tool size iters port)
+  find_program(RDMA_PERFTEST_${tool} ${tool})
+  if(RDMA_PERFTEST_${tool})
+    add_test(NAME ${test_name}
+        COMMAND rdma_ctest_runner
+            --name ${test_name}
+            --timeout-sec 30
+            --work-dir ${CMAKE_CURRENT_BINARY_DIR}/ctest/${test_name}
+            --server-ready-delay-ms 2000
+            --server ${RDMA_PERFTEST_${tool}}
+            --server-arg --connection --server-arg RC
+            --server-arg --size --server-arg ${size}
+            --server-arg --iters --server-arg ${iters}
+            --server-arg --port --server-arg ${port}
+            --server-arg --rdma_cm
+            --client ${RDMA_PERFTEST_${tool}}
+            --client-arg auto-v4
+            --client-arg --connection --client-arg RC
+            --client-arg --size --client-arg ${size}
+            --client-arg --iters --client-arg ${iters}
+            --client-arg --port --client-arg ${port}
+            --client-arg --rdma_cm)
+  else()
+    add_test(NAME ${test_name}
+        COMMAND ${CMAKE_COMMAND} -E echo
+            "RDMA_CTEST_SKIP: ${tool} not found (install perftest for native ibv baselines)")
+  endif()
+  set_tests_properties(${test_name} PROPERTIES
+      LABELS "baseline;native;perftest;ibv"
+      SKIP_REGULAR_EXPRESSION "RDMA_CTEST_SKIP")
+  rdma_set_hardware_ctest_properties(${test_name} 30)
+endfunction()
+
 function(rdma_add_unit_test name source)
   rdma_add_backend_executable(${name}
       SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/${source})
@@ -237,6 +278,21 @@ elseif(RDMA_BACKEND STREQUAL "ibv")
                               TIMEOUT 45
                               SERVER_ARGS --server --port ${RDMA_NATIVE_ECHO_POLL_PORT}
                               CLIENT_ARGS --client auto-v4 --port ${RDMA_NATIVE_ECHO_POLL_PORT})
+
+  # External ibverbs perftest baselines (skip cleanly if perftest is not installed).
+  # bw smoke: 4096B; lat smoke: 64B. Distinct ports (base+180..185).
+  math(EXPR RDMA_PERFTEST_SEND_BW_PORT  "${RDMA_TEST_BASE_PORT} + 180")
+  math(EXPR RDMA_PERFTEST_SEND_LAT_PORT "${RDMA_TEST_BASE_PORT} + 181")
+  math(EXPR RDMA_PERFTEST_WRITE_BW_PORT "${RDMA_TEST_BASE_PORT} + 182")
+  math(EXPR RDMA_PERFTEST_WRITE_LAT_PORT "${RDMA_TEST_BASE_PORT} + 183")
+  math(EXPR RDMA_PERFTEST_READ_BW_PORT  "${RDMA_TEST_BASE_PORT} + 184")
+  math(EXPR RDMA_PERFTEST_READ_LAT_PORT "${RDMA_TEST_BASE_PORT} + 185")
+  rdma_add_external_perftest_smoke(perftest_ib_send_bw_smoke  ib_send_bw  4096 1000 ${RDMA_PERFTEST_SEND_BW_PORT})
+  rdma_add_external_perftest_smoke(perftest_ib_send_lat_smoke ib_send_lat 64   1000 ${RDMA_PERFTEST_SEND_LAT_PORT})
+  rdma_add_external_perftest_smoke(perftest_ib_write_bw_smoke ib_write_bw 4096 1000 ${RDMA_PERFTEST_WRITE_BW_PORT})
+  rdma_add_external_perftest_smoke(perftest_ib_write_lat_smoke ib_write_lat 64  1000 ${RDMA_PERFTEST_WRITE_LAT_PORT})
+  rdma_add_external_perftest_smoke(perftest_ib_read_bw_smoke  ib_read_bw  4096 1000 ${RDMA_PERFTEST_READ_BW_PORT})
+  rdma_add_external_perftest_smoke(perftest_ib_read_lat_smoke ib_read_lat 64   1000 ${RDMA_PERFTEST_READ_LAT_PORT})
 endif()
 
 # Backend-agnostic rdma_* API tests.
