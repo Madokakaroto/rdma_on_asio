@@ -745,11 +745,15 @@ endif()
 # TU); running it is the smoke. The whole target is compiled with
 # ASIO_SEPARATE_COMPILATION (whole-program single-mode). See
 # docs/separate_compilation_usage.md / docs/plans/separate_compilation_plan.md.
-rdma_add_backend_executable(unit_rdma_separate_compilation
+rdma_add_plain_executable(unit_rdma_separate_compilation
     SOURCES
         ${CMAKE_CURRENT_SOURCE_DIR}/sepcomp/src_rdma.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/sepcomp/tu_a.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/sepcomp/tu_b.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/sepcomp/main.cpp)
 target_compile_definitions(unit_rdma_separate_compilation PRIVATE ASIO_SEPARATE_COMPILATION)
+if(MSVC AND RDMA_BACKEND STREQUAL "nd")
+  set_property(TARGET unit_rdma_separate_compilation PROPERTY
+      MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 rdma_add_ctest(unit_rdma_separate_compilation unit_rdma_separate_compilation "unit;sepcomp")

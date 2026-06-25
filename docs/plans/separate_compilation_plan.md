@@ -7,7 +7,9 @@
 > **模板(类模板 / 函数模板 / 成员模板)不拆**,仍全部留在头里。
 > 默认(header-only)行为不变。
 >
-> 状态:**计划态(未实现)**。先落基础设施 + shared 试点,再 ibv,再 nd(nd 已有部分 separate-compilation 先例,需对齐)。
+> 状态:**已落地并持续补齐**。基础设施、shared 层、ibv 主要非模板实现、nd 主要非模板实现均已拆入 `.ipp`;
+> 本轮补齐了 nd 的 `nd_memory_region` 拆分,并让统一 separate smoke 在 nd 上走真实消费者路径
+> (`rdma/impl/src.hpp` + `ndutil.lib` 链接,不编译 `src/networkdirect.cpp`)。
 > 相关:`nd_cmake_refactor_plan.md`(已有的 `src/networkdirect.cpp` / `impl/networkdirect.hpp` / `nd_autolink.hpp` 先例)、
 > `cmake_test_unification_plan.md`(统一 CTest 图,新增的 separate-compilation 测试挂进去)。
 

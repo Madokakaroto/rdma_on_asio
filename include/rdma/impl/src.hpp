@@ -66,6 +66,7 @@
 #  include "rdma/nd/impl/nd_error.ipp"
 #  include "rdma/nd/impl/nd_device.ipp"
 #  include "rdma/nd/impl/nd_completion_queue.ipp"
+#  include "rdma/nd/impl/nd_mr.ipp"
 #  include "rdma/nd/impl/nd_use_device.ipp"
 #endif
 
