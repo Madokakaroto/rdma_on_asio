@@ -7,7 +7,6 @@
 #  include "rdma/nd/nd_listener.hpp"
 #  define ASIO_RDMA_BACKEND_ND 1
 #elif defined(__linux__)
-#  include <rdma/rdma_cma.h>
 #  include "rdma/ibv/ibv_connector.hpp"
 #  include "rdma/ibv/ibv_listener.hpp"
 #  define ASIO_RDMA_BACKEND_VERBS 1
