@@ -484,3 +484,13 @@ rather than taking one from CMake -- see
 [`docs/plans/cmake_test_unification_plan.md`](docs/plans/cmake_test_unification_plan.md).
 
 See [`CLAUDE.md`](CLAUDE.md) for the detailed architecture and design notes.
+
+## License
+
+Distributed under the **Boost Software License, Version 1.0** -- the same license as
+[Asio](https://think-async.com/Asio/). See [`LICENSE_1_0.txt`](LICENSE_1_0.txt) or
+<https://www.boost.org/LICENSE_1_0.txt>.
+
+Third-party components keep their own licenses: the bundled Asio
+(`third_party/asio/`) is likewise Boost Software License 1.0, and the vendored
+NetworkDirect SPI (`third_party/networkdirect/`) is under the MIT License.
