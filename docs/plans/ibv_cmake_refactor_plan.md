@@ -20,7 +20,7 @@ ibv 后端的库处理维持当前形态:
 
 ## 现状(就是目标态)
 
-root `CMakeLists.txt` 的 ibv 分支([CMakeLists.txt:46-51](../CMakeLists.txt#L46-L51)):
+root `CMakeLists.txt` 的 ibv 分支([CMakeLists.txt:46-51](../../CMakeLists.txt#L46-L51)):
 
 ```cmake
 if(RDMA_BACKEND STREQUAL "ibv")
@@ -48,8 +48,8 @@ ibv 后端是 header-only(无 `src/ibverbs.cpp` wrapper),系统头 `<infiniband/
 
 2. **asio 自己在 POSIX 上就不做源码 autolink。** asio 的全部 autolink 被
    `ASIO_WINDOWS || __CYGWIN__` + `_MSC_VER || __BORLANDC__` 包住
-   ([socket_types.hpp:47-56](../third_party/asio/include/asio/detail/socket_types.hpp#L47-L56),
-   另 [connect_pipe.ipp:30-34](../third_party/asio/include/asio/impl/connect_pipe.ipp#L30-L34) 的
+   ([socket_types.hpp:47-56](../../third_party/asio/include/asio/detail/socket_types.hpp#L47-L56),
+   另 [connect_pipe.ipp:30-34](../../third_party/asio/include/asio/impl/connect_pipe.ipp#L30-L34) 的
    `bcrypt.lib`);POSIX `#else` 分支**一条 pragma 都没有** —— Linux socket 在 libc,库链接交给
    构建系统。**"对齐 asio"在 Linux 上的正解,恰恰是"不在源码里 autolink"。** 注意 asio 的守卫里
    **没有 `__clang__`**,即 asio 从不信任 clang 的 dependent-libraries —— 我们若用它就是超出 asio。
@@ -92,7 +92,7 @@ ibv 后端是 header-only(无 `src/ibverbs.cpp` wrapper),系统头 `<infiniband/
 
 - gcc 忽略 `#pragma comment(lib)`:本机 `gcc 13.3` 实测 `-Wunknown-pragmas`,无链接效果。
 - asio autolink 仅 Windows+MSVC/Borland:
-  [socket_types.hpp:47-56](../third_party/asio/include/asio/detail/socket_types.hpp#L47-L56)、
-  [connect_pipe.ipp:30-34](../third_party/asio/include/asio/impl/connect_pipe.ipp#L30-L34)。
+  [socket_types.hpp:47-56](../../third_party/asio/include/asio/detail/socket_types.hpp#L47-L56)、
+  [connect_pipe.ipp:30-34](../../third_party/asio/include/asio/impl/connect_pipe.ipp#L30-L34)。
 - nd 是 build-from-vendored-source:`cmake/NetworkDirect.cmake`(`find_program(mc.exe)` + 生成
   `ndstatus.h` + `MSBuild ndutil.vcxproj`),见 `docs/nd_cmake_refactor_plan.md`。

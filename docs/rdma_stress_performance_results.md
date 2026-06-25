@@ -1,7 +1,7 @@
 # RDMA Stress/Performance Results
 
 This file records the 2026-06-15 benchmark results generated while implementing
-and tuning `rdma_stress_performance_plan.md`.
+and tuning `plans/rdma_stress_performance_plan.md`.
 
 These numbers are **not** final performance claims. They were collected from a
 single Windows host using NetworkDirect and same-process loopback. Older

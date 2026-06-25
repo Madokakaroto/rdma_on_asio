@@ -19,16 +19,16 @@ asio 的一个 `io_context` 上,v4 与 v6 是 socket/endpoint 的运行期属性
 但在本库的封装下:
 
 - **nd(Windows NetworkDirect):** 一个 device(`nd_device_t = nd_adapter_t`)只携带**一个本地地址**
-  (`name_`,见 [nd_device_impl.hpp:408](../include/rdma/nd/detail/nd_device_impl.hpp#L408)),
+  (`name_`,见 [nd_device_impl.hpp:408](../../include/rdma/nd/detail/nd_device_impl.hpp#L408)),
   发现层对每个地址各 `OpenAdapter` 一次,把同一块网卡的 v4/v6 拆成 `v4_adapters_` / `v6_adapters_`
-  两个列表(见 [nd_impl_types.hpp:127-128](../include/rdma/nd/detail/nd_impl_types.hpp#L127-L128)、
-  [nd_device_impl.hpp:471-491](../include/rdma/nd/detail/nd_device_impl.hpp#L471-L491))。
+  两个列表(见 [nd_impl_types.hpp:127-128](../../include/rdma/nd/detail/nd_impl_types.hpp#L127-L128)、
+  [nd_device_impl.hpp:471-491](../../include/rdma/nd/detail/nd_device_impl.hpp#L471-L491))。
   于是 `use_device` 注册一个 device 就锁定了一个地址族 -- v4 与 v6 互斥。
 - **ibv(Linux libibverbs):** device 只是 `{context, pd}`,与地址族**无关**;族在 rdma_cm connect 时由目标
   sockaddr 决定(`resolve_addr` 源地址传 `nullptr`,见
-  [ibv_service_connector.hpp:396-398](../include/rdma/ibv/detail/ibv_service_connector.hpp#L396-L398))。
+  [ibv_service_connector.hpp:396-398](../../include/rdma/ibv/detail/ibv_service_connector.hpp#L396-L398))。
   **ibv 的 device 早已双族**;唯一的族绑定在 listener 的 `bind_endpoint_ = ps.any_endpoint(0)`
-  ([ibv_service_listener.hpp:110](../include/rdma/ibv/detail/ibv_service_listener.hpp#L110)),
+  ([ibv_service_listener.hpp:110](../../include/rdma/ibv/detail/ibv_service_listener.hpp#L110)),
   这与 asio acceptor 一致(绑 `0.0.0.0` 的 acceptor 本就不收 v6),不是 device 的限制。
 
 **结论:** 问题只在 nd;ibv 已满足目标,仅需验证 + API 对齐。
@@ -40,40 +40,40 @@ asio 的一个 `io_context` 上,v4 与 v6 是 socket/endpoint 的运行期属性
 ND2 SPI **本身就支持**"一块网卡 open 一次、双地址共享 CQ/MR/PD",当前的两个 adapter 完全是本库发现层的产物。
 
 1. **`AdapterId` 是物理网卡身份。** `ND2_ADAPTER_INFO.AdapterId`(UINT64,
-   [nddef.h:57-80](../third_party/networkdirect/src/ndutil/nddef.h#L57-L80))文档定义为
+   [nddef.h:57-80](../../third_party/networkdirect/src/ndutil/nddef.h#L57-L80))文档定义为
    "Vendor defined unique ID of the adapter (**similar to a MAC address**)"
-   ([docs/IND2Adapter.md:111-113](../third_party/networkdirect/docs/IND2Adapter.md#L111-L113))。
+   ([docs/IND2Adapter.md:111-113](../../third_party/networkdirect/docs/IND2Adapter.md#L111-L113))。
    `IND2Provider::ResolveAddress(local_addr, &adapterId)`
-   ([ndspi.h:720-725](../third_party/networkdirect/src/ndutil/ndspi.h#L720-L725))对同一网卡的 v4/v6 地址返回
+   ([ndspi.h:720-725](../../third_party/networkdirect/src/ndutil/ndspi.h#L720-L725))对同一网卡的 v4/v6 地址返回
    **同一个 `AdapterId`** -- 文档明言其目的就是"sharing common resources such as completion queues and
    memory regions between connections that are active on **different IP addresses of the same adapter**"
-   ([docs/IND2Provider.md:98](../third_party/networkdirect/docs/IND2Provider.md#L98));内核按
+   ([docs/IND2Provider.md:98](../../third_party/networkdirect/docs/IND2Provider.md#L98));内核按
    `IF_PHYSICAL_ADDRESS HwAddress`(MAC)解析 adapter id(`NDV_RESOLVE_ADAPTER_ID`,
-   [ndioctl.h:273-276](../third_party/networkdirect/src/ndutil/ndioctl.h#L273-L276))。
+   [ndioctl.h:273-276](../../third_party/networkdirect/src/ndutil/ndioctl.h#L273-L276))。
 
 2. **两次 `OpenAdapter` = 两个资源域(不可互通)。** `ND_OPEN_ADAPTER` 以 `AdapterId` 为**输入**、返回一个
-   per-open 的 `AdapterHandle`([ndioctl.h:114-120](../third_party/networkdirect/src/ndutil/ndioctl.h#L114-L120));
-   CQ 建在 `AdapterHandle` 上([ndioctl.h:128-135](../third_party/networkdirect/src/ndutil/ndioctl.h#L128-L135)),
+   per-open 的 `AdapterHandle`([ndioctl.h:114-120](../../third_party/networkdirect/src/ndutil/ndioctl.h#L114-L120));
+   CQ 建在 `AdapterHandle` 上([ndioctl.h:128-135](../../third_party/networkdirect/src/ndutil/ndioctl.h#L128-L135)),
    QP 引用 `ReceiveCqHandle`+`InitiatorCqHandle`+`PdHandle`
-   ([ndioctl.h:148-158](../third_party/networkdirect/src/ndutil/ndioctl.h#L148-L158))。
+   ([ndioctl.h:148-158](../../third_party/networkdirect/src/ndutil/ndioctl.h#L148-L158))。
    每次 `OpenAdapter` 铸造**新的** `AdapterHandle`,故 v4 open 与 v6 open 是两个独立资源域:跨域的 CQ/PD/MR/QP
    会被驱动拒绝(等价于 Linux 上 `ibv_open_device` 两次 -> 两个 `ibv_context`)。
    **这排除了"双 adapter"方案(会让 MR 变成 family-scoped、shared CQ 按族拆、QP 延迟创建)。**
 
 3. **一个 `IND2Adapter` 实例天然支持双族。** `IND2Adapter::QueryAddressList`
-   ([docs/IND2Adapter.md:9](../third_party/networkdirect/docs/IND2Adapter.md#L9)、
-   [:262-263](../third_party/networkdirect/docs/IND2Adapter.md#L262-L263))
+   ([docs/IND2Adapter.md:9](../../third_party/networkdirect/docs/IND2Adapter.md#L9)、
+   [:262-263](../../third_party/networkdirect/docs/IND2Adapter.md#L262-L263))
    "Returns the **IPv4 and IPv6** addresses that are supported by the adapter instance";
    adapter 上的 `CreateCompletionQueue` / `CreateMemoryRegion` / `CreateQueuePair` / `CreateConnector` /
    `CreateListener` **全部与地址族无关**;族只在 `IND2Connector::Bind(sockaddr*)` /
    `IND2Listener::Bind(sockaddr*)` 进入(我方调用点
-   [nd_ops_cm.hpp:26](../include/rdma/nd/detail/nd_ops_cm.hpp#L26)、
-   [:137](../include/rdma/nd/detail/nd_ops_cm.hpp#L137))。
+   [nd_ops_cm.hpp:26](../../include/rdma/nd/detail/nd_ops_cm.hpp#L26)、
+   [:137](../../include/rdma/nd/detail/nd_ops_cm.hpp#L137))。
 
 4. **不要走 ndutil 框架的 `NdOpenAdapter`。** 它是按**地址**做 key 的
-   ([ndsupport.h:73-79](../third_party/networkdirect/src/ndutil/ndsupport.h#L73-L79)),会把 `AdapterId` 藏起来、
+   ([ndsupport.h:73-79](../../third_party/networkdirect/src/ndutil/ndsupport.h#L73-L79)),会把 `AdapterId` 藏起来、
    重新引入逐地址模型。我方发现层目前正确地直接用 `IND2Provider` SPI
-   ([nd_device_impl.hpp:290-298](../include/rdma/nd/detail/nd_device_impl.hpp#L290-L298)),保持不变。
+   ([nd_device_impl.hpp:290-298](../../include/rdma/nd/detail/nd_device_impl.hpp#L290-L298)),保持不变。
 
 > **唯一需上机确认的假设:** 同一网卡 `ResolveAddress(v4)` 与 `ResolveAddress(v6)` 返回相同 `AdapterId`
 > (文档保证 + 内核按 MAC 解析,但厂商 user-mode 实现需实测一次,见 Phase 5)。
@@ -91,9 +91,9 @@ ND2 SPI **本身就支持**"一块网卡 open 一次、双地址共享 CQ/MR/PD"
 | 风险 | 低(贴合 SPI 设计意图) | 高(且需验证跨域资源是否可共享) |
 
 数据面不变是方案 A 的关键收益:shared CQ 仍建在单个 `device->adapter_`
-([nd_service_io_completion.hpp:71-82](../include/rdma/nd/detail/nd_service_io_completion.hpp#L71-L82)),
-QP 仍在 `device->pd_`+cq 上创建([nd_service_verbs.hpp:60-86](../include/rdma/nd/detail/nd_service_verbs.hpp#L60-L86)),
-MR 仍注册在 `device->pd_`([nd_mr.hpp:113](../include/rdma/nd/nd_mr.hpp#L113)),
+([nd_service_io_completion.hpp:71-82](../../include/rdma/nd/detail/nd_service_io_completion.hpp#L71-L82)),
+QP 仍在 `device->pd_`+cq 上创建([nd_service_verbs.hpp:60-86](../../include/rdma/nd/detail/nd_service_verbs.hpp#L60-L86)),
+MR 仍注册在 `device->pd_`([nd_mr.hpp:113](../../include/rdma/nd/nd_mr.hpp#L113)),
 shared-CQ poller 的单 poller / lock-free 语义不受影响。
 
 ---
@@ -123,10 +123,10 @@ co_await conn.async_connect(qp, v4_or_v6_endpoint, ...);  // 按 endpoint 族选
   的 endpoint 族(实践中二者一致)。这与 ibv 现状同构(ibv listener 已用 `ps.any_endpoint(0)` 选族)。
 
 > **核心不变量:一个 `io_context` 绑定且仅绑定一个 device。** `use_device` 第二次调用即返回
-> `already_registered`([ibv_use_device.hpp:23-24](../include/rdma/ibv/ibv_use_device.hpp#L23-L24)、
-> [nd_use_device.hpp:20-21](../include/rdma/nd/nd_use_device.hpp#L20-L21)),`device_service` 只持有一个
-> `device_`([ibv_service_device.hpp:47](../include/rdma/ibv/detail/ibv_service_device.hpp#L47)、
-> [nd_service_device.hpp:43](../include/rdma/nd/detail/nd_service_device.hpp#L43))。
+> `already_registered`([ibv_use_device.hpp:23-24](../../include/rdma/ibv/ibv_use_device.hpp#L23-L24)、
+> [nd_use_device.hpp:20-21](../../include/rdma/nd/nd_use_device.hpp#L20-L21)),`device_service` 只持有一个
+> `device_`([ibv_service_device.hpp:47](../../include/rdma/ibv/detail/ibv_service_device.hpp#L47)、
+> [nd_service_device.hpp:43](../../include/rdma/nd/detail/nd_service_device.hpp#L43))。
 > **这正是本 plan 成立的前提**:既然一个 io_context 只能有一个 device,要让它同时服务 v4/v6,这个 device
 > 就**必须**是双族的(否则只能换 io_context)。也因此 connector/listener 用的 device 永远无歧义 ==
 > `device_svc_.get_device()`,族选择就是从这唯一一个 device 上挑本地地址(nd)或让 sockaddr 穿透(ibv)。
@@ -169,37 +169,37 @@ struct nd_provider_t {
 - 验收:本文档评审通过。
 
 ### Phase 1 -- nd 发现层按 AdapterId 归并(核心)
-改动文件:[nd_impl_types.hpp](../include/rdma/nd/detail/nd_impl_types.hpp)、
-[nd_device_impl.hpp](../include/rdma/nd/detail/nd_device_impl.hpp)、
-[nd_device.hpp](../include/rdma/nd/nd_device.hpp)。
+改动文件:[nd_impl_types.hpp](../../include/rdma/nd/detail/nd_impl_types.hpp)、
+[nd_device_impl.hpp](../../include/rdma/nd/detail/nd_device_impl.hpp)、
+[nd_device.hpp](../../include/rdma/nd/nd_device.hpp)。
 - `nd_adapter_t`/`nd_provider_t` 按 §5 改。
-- `open_adapter`([:286-306](../include/rdma/nd/detail/nd_device_impl.hpp#L286-L306)):拆出"按 `AdapterId`
+- `open_adapter`([:286-306](../../include/rdma/nd/detail/nd_device_impl.hpp#L286-L306)):拆出"按 `AdapterId`
   open 一次"与"按族挂地址"两步;`adaptor_id` 不再丢弃,存入 `adapter_id_`。
-- `open_adapters`([:471-491](../include/rdma/nd/detail/nd_device_impl.hpp#L471-L491)):
+- `open_adapters`([:471-491](../../include/rdma/nd/detail/nd_device_impl.hpp#L471-L491)):
   对 `enumerate_addr_list` 的每个(经 `is_valid_addr` 过滤的)地址 `ResolveAddress -> adapterId`,
   **按 adapterId 分组**,每组 `OpenAdapter` 一次构造 `nd_device_t`,把组内 v4/v6 地址填入 `v4_addr_`/`v6_addr_`,
   写入 `provider->devices_`。(可选实现 B:open 后用 `adapter->QueryAddressList()` 自取地址。)
 - `nd_device_manager_t::get_first_available_device`
-  ([:31-44](../include/rdma/nd/nd_device.hpp#L31-L44)):去 `ps`,遍历所有 provider 的 `devices_`,
-  返回首个满足 config 的 device;`for_each_device`([:46-57](../include/rdma/nd/nd_device.hpp#L46-L57))每 device 迭代一次。
+  ([:31-44](../../include/rdma/nd/nd_device.hpp#L31-L44)):去 `ps`,遍历所有 provider 的 `devices_`,
+  返回首个满足 config 的 device;`for_each_device`([:46-57](../../include/rdma/nd/nd_device.hpp#L46-L57))每 device 迭代一次。
 - 验收:`tests/nd/test_nd_device_manager.cpp` 改造后,同一网卡只出现一个 device、且 `v4_addr_`/`v6_addr_` 至少一个非空。
 
 ### Phase 2 -- nd 控制面按族选本地地址
-改动文件:[tcp.hpp](../include/rdma/tcp.hpp)、
-[nd_service_connector.hpp](../include/rdma/nd/detail/nd_service_connector.hpp)、
-[nd_service_listener.hpp](../include/rdma/nd/detail/nd_service_listener.hpp)。
+改动文件:[tcp.hpp](../../include/rdma/tcp.hpp)、
+[nd_service_connector.hpp](../../include/rdma/nd/detail/nd_service_connector.hpp)、
+[nd_service_listener.hpp](../../include/rdma/nd/detail/nd_service_listener.hpp)。
 - `tcp` 暴露族:新增 `int family() const noexcept { return impl_.family(); }`;**删除 `get_adapters`**
-  ([tcp.hpp:49-56](../include/rdma/tcp.hpp#L49-L56),发现层不再需要它)。
-- connector `start_connect_op`([:419-459](../include/rdma/nd/detail/nd_service_connector.hpp#L419-L459)):
-  把 `local_ep = make_address(adapter_->name_)`([:433](../include/rdma/nd/detail/nd_service_connector.hpp#L433))
+  ([tcp.hpp:49-56](../../include/rdma/tcp.hpp#L49-L56),发现层不再需要它)。
+- connector `start_connect_op`([:419-459](../../include/rdma/nd/detail/nd_service_connector.hpp#L419-L459)):
+  把 `local_ep = make_address(adapter_->name_)`([:433](../../include/rdma/nd/detail/nd_service_connector.hpp#L433))
   改为按 `endpoint` 族从 `device->local_addr_for(family)` 取本地地址 bind;无则 `address_family_not_supported`。
-- listener:`open(ps)` 记下端口空间族;`bind`([:132-140](../include/rdma/nd/detail/nd_service_listener.hpp#L132-L140))
+- listener:`open(ps)` 记下端口空间族;`bind`([:132-140](../../include/rdma/nd/detail/nd_service_listener.hpp#L132-L140))
   按该族选 `device->local_addr_for(family)` 替代 `make_address(adapter_->name_)`
-  ([:139](../include/rdma/nd/detail/nd_service_listener.hpp#L139))。
+  ([:139](../../include/rdma/nd/detail/nd_service_listener.hpp#L139))。
 - 验收:nd echo 在 v4 与 v6 各跑通(需硬件)。
 
 ### Phase 3 -- `get_first_available_device` 去 `ps`(两后端)+ 迁移调用点
-- ibv 侧同步去 `ps`([ibv_device.hpp:37-47](../include/rdma/ibv/ibv_device.hpp#L37-L47))。
+- ibv 侧同步去 `ps`([ibv_device.hpp:37-47](../../include/rdma/ibv/ibv_device.hpp#L37-L47))。
 - **不保留过渡重载**(决策 §9.1):直接把签名改为 `(config = {})`,**一次性迁移全部调用点**(见 §7),
   靠编译失败兜住遗漏。
 - 更新 `CLAUDE.md` 示例(`get_first_available_device(tcp::v4(), {})` -> `({})`)。
@@ -215,14 +215,14 @@ struct nd_provider_t {
 ### Phase 5 -- 测试 + 硬件假设验证
 
 **现状(零覆盖):** 没有任何 v6 数据面往返测试,所有 echo/connect/send-recv 都写死 `tcp::v4()`
-(如 [tests/ibv/test_ibv_echo.cpp:35](../tests/ibv/test_ibv_echo.cpp#L35) / [:93](../tests/ibv/test_ibv_echo.cpp#L93));
-仅有的 v6 出现是 endpoint 构造([tests/unit/rdma/tcp.cpp:19-21](../tests/unit/rdma/tcp.cpp#L19-L21))
+(如 [tests/ibv/test_ibv_echo.cpp:35](../../tests/ibv/test_ibv_echo.cpp#L35) / [:93](../../tests/ibv/test_ibv_echo.cpp#L93));
+仅有的 v6 出现是 endpoint 构造([tests/unit/rdma/tcp.cpp:19-21](../../tests/unit/rdma/tcp.cpp#L19-L21))
 和将被删除的 per-family `get_first_available_device(tcp::v6(), ...)`
-([test_nd_device_manager.cpp:32-36](../tests/nd/test_nd_device_manager.cpp#L32-L36)、
-[test_ibv_device_manager.cpp:32-36](../tests/ibv/test_ibv_device_manager.cpp#L32-L36))。本阶段补齐这个核心缺口。
+([test_nd_device_manager.cpp:32-36](../../tests/nd/test_nd_device_manager.cpp#L32-L36)、
+[test_ibv_device_manager.cpp:32-36](../../tests/ibv/test_ibv_device_manager.cpp#L32-L36))。本阶段补齐这个核心缺口。
 
 **新增 `tests/rdma/test_rdma_dual_family_echo.cpp`(可移植,两后端共用一份源码,`--server`/`--client` 形态,
-对齐 [test_rdma_echo.cpp](../tests/rdma/test_rdma_echo.cpp) 的结构):**
+对齐 [test_rdma_echo.cpp](../../tests/rdma/test_rdma_echo.cpp) 的结构):**
 
 核心用例 = **同一个 device、同一次 `use_device`,先用 v4 地址完成一次 echo,再用 v6 地址完成一次 echo**:
 
@@ -264,21 +264,21 @@ co_await echo_once(io_ctx, dev, v6_endpoint);        // v4 完成后再连 v6,�
 
 - **去 `ps` 的 `get_first_available_device` 调用点**(约 40+ 处,遍布
   `tests/{ibv,nd,rdma,benchmark,stress,unit}`):统一 `get_first_available_device(tcp::v4(), {})` -> `({})`。
-  典型:[tests/rdma/test_rdma_echo.cpp:174](../tests/rdma/test_rdma_echo.cpp#L174)、
-  [tests/benchmark/send_recv.cpp](../tests/benchmark/send_recv.cpp)(8 处)、
-  [tests/benchmark/read_write.cpp](../tests/benchmark/read_write.cpp)(4 处)、
+  典型:[tests/rdma/test_rdma_echo.cpp:174](../../tests/rdma/test_rdma_echo.cpp#L174)、
+  [tests/benchmark/send_recv.cpp](../../tests/benchmark/send_recv.cpp)(8 处)、
+  [tests/benchmark/read_write.cpp](../../tests/benchmark/read_write.cpp)(4 处)、
   device_manager 测试的 v4/v6 双用例需合并。
 - **`name_`(单地址)使用点**:
-  - nd 控制面 [nd_service_connector.hpp:433](../include/rdma/nd/detail/nd_service_connector.hpp#L433)、
-    [nd_service_listener.hpp:139](../include/rdma/nd/detail/nd_service_listener.hpp#L139) -> 改为 `local_addr_for(family)`。
-  - 写入点 [nd_device_impl.hpp:408](../include/rdma/nd/detail/nd_device_impl.hpp#L408) -> 保留 `name_` 作展示。
+  - nd 控制面 [nd_service_connector.hpp:433](../../include/rdma/nd/detail/nd_service_connector.hpp#L433)、
+    [nd_service_listener.hpp:139](../../include/rdma/nd/detail/nd_service_listener.hpp#L139) -> 改为 `local_addr_for(family)`。
+  - 写入点 [nd_device_impl.hpp:408](../../include/rdma/nd/detail/nd_device_impl.hpp#L408) -> 保留 `name_` 作展示。
   - 测试断言 `tests/{nd,ibv}/test_*_device_manager.cpp` -> `name_` 仍非空,保持。
-  - ibv 的 `name_`([ibv_device_impl.hpp:39](../include/rdma/ibv/detail/ibv_device_impl.hpp#L39))是设备名(mlx5_0),语义不同,**不动**。
-- **`v4_adapters_`/`v6_adapters_`**:[nd_impl_types.hpp:127-128](../include/rdma/nd/detail/nd_impl_types.hpp#L127-L128)、
-  [nd_device.hpp:50-53](../include/rdma/nd/nd_device.hpp#L50-L53)、
-  [tcp.hpp:53-55](../include/rdma/tcp.hpp#L53-L55)、
-  [nd_device_impl.hpp:486-488](../include/rdma/nd/detail/nd_device_impl.hpp#L486-L488) -> 全部改用 `devices_`。
-- **`tcp::get_adapters`**:仅 [nd_device.hpp:36](../include/rdma/nd/nd_device.hpp#L36) 使用 -> 删除该方法,改 `family()`。
+  - ibv 的 `name_`([ibv_device_impl.hpp:39](../../include/rdma/ibv/detail/ibv_device_impl.hpp#L39))是设备名(mlx5_0),语义不同,**不动**。
+- **`v4_adapters_`/`v6_adapters_`**:[nd_impl_types.hpp:127-128](../../include/rdma/nd/detail/nd_impl_types.hpp#L127-L128)、
+  [nd_device.hpp:50-53](../../include/rdma/nd/nd_device.hpp#L50-L53)、
+  [tcp.hpp:53-55](../../include/rdma/tcp.hpp#L53-L55)、
+  [nd_device_impl.hpp:486-488](../../include/rdma/nd/detail/nd_device_impl.hpp#L486-L488) -> 全部改用 `devices_`。
+- **`tcp::get_adapters`**:仅 [nd_device.hpp:36](../../include/rdma/nd/nd_device.hpp#L36) 使用 -> 删除该方法,改 `family()`。
 - **`open(tcp::v4())` 等控制面调用**:语义不变(端口空间仍传),但现在会真正用于选族(此前 nd 侧被忽略)。
 - **新增文件**:`tests/rdma/test_rdma_dual_family_echo.cpp`(v4-then-v6 同 device 顺序往返,见 Phase 5)+
   对应 `tests/rdma/CMakeLists.txt` 注册;`tests/{nd,ibv}/test_*_device_manager.cpp` 的 v4/v6 双用例合并为单次断言双族。
@@ -293,21 +293,21 @@ co_await echo_once(io_ctx, dev, v6_endpoint);        // v4 完成后再连 v6,�
 ### 8.1 family 在 ibv 是"穿透",不是"选 adapter" -- 大部分 nd 改动不适用
 - nd 要给 device 加 `v4_addr_/v6_addr_` 并显式 `Bind` 本地地址;**ibv 不需要**:
   - connector:族由 `async_connect` 目标 endpoint 的 sockaddr 携带,`resolve_addr(cm_id, nullptr, dst)`
-    ([ibv_service_connector.hpp:396-398](../include/rdma/ibv/detail/ibv_service_connector.hpp#L396-L398)、
-    [ibv_ops_cm.hpp:105-111](../include/rdma/ibv/detail/ibv_ops_cm.hpp#L105-L111))。
+    ([ibv_service_connector.hpp:396-398](../../include/rdma/ibv/detail/ibv_service_connector.hpp#L396-L398)、
+    [ibv_ops_cm.hpp:105-111](../../include/rdma/ibv/detail/ibv_ops_cm.hpp#L105-L111))。
   - listener:族由 `open(ps)` 的 `ps.any_endpoint(0)` 决定(绑 `0.0.0.0` 或 `::`)
-    ([ibv_service_listener.hpp:110](../include/rdma/ibv/detail/ibv_service_listener.hpp#L110))
+    ([ibv_service_listener.hpp:110](../../include/rdma/ibv/detail/ibv_service_listener.hpp#L110))
     -- 这正是本 plan 想让 nd 模仿的"按 port space 选族",ibv 已同构。
 - ibv device 结构只有 `{context_, pd_, name_}`,`name_` 是设备名(mlx5_0)**不是 IP**
-  ([ibv_impl_types.hpp:71-75](../include/rdma/ibv/detail/ibv_impl_types.hpp#L71-L75));ibv **不存、也不需要**本地 IP。
+  ([ibv_impl_types.hpp:71-75](../../include/rdma/ibv/detail/ibv_impl_types.hpp#L71-L75));ibv **不存、也不需要**本地 IP。
 - 故 **§5 数据结构改动、§6 Phase 1/2 基本是 nd-only**;ibv 侧只剩"去 ps(Phase 3)+ 验证(Phase 4)+(可选)多网卡设备绑定"。
 
 ### 8.2 多网卡设备绑定歧义(ibv 真正的缺口,单网卡 v4/v6 不触发)
 - 前提:**一个 io_context 只绑一个 device**(见 §4 核心不变量),故 io_context 内**没有第二个 device 可回退**。
   风险不是"在多个 device 间选错",而是"内核把某条连接路由到了**这唯一 device 之外**的网卡 -> create_qp 必然失败"。
 - QP 在 **device_service 注册的那个 PD** 上、于 cm_id 上创建
-  ([ibv_queue_pair.hpp:91](../include/rdma/ibv/ibv_queue_pair.hpp#L91)、
-  [ibv_service_verbs.hpp:64,83](../include/rdma/ibv/detail/ibv_service_verbs.hpp#L64-L83));
+  ([ibv_queue_pair.hpp:91](../../include/rdma/ibv/ibv_queue_pair.hpp#L91)、
+  [ibv_service_verbs.hpp:64,83](../../include/rdma/ibv/detail/ibv_service_verbs.hpp#L64-L83));
   ibv 要求 **cm_id 的 verbs context 必须与该 PD 同属一块 device**,否则 `rdma_create_qp` 失败。
 - connector 现在 `resolve_addr(src=nullptr)`,内核**按路由挑本地 device** -- 可能不是 `use_device` 的那个;
   listener 绑 wildcard,连接可能从**另一块网卡**进来(child cm_id 的 context != 注册 PD)。两者都会让
@@ -322,7 +322,7 @@ co_await echo_once(io_ctx, dev, v6_endpoint);        // v4 完成后再连 v6,�
 
 ### 8.4 dual-family echo 测试在 ibv 的生命周期注意(对 nd 同样成立)
 - connector 是**一次性**的(连过/断过即 `connector_terminal`,见
-  [ibv_service_connector.hpp:224-234](../include/rdma/ibv/detail/ibv_service_connector.hpp#L224-L234));listener `open` 每次建新 cm_id。
+  [ibv_service_connector.hpp:224-234](../../include/rdma/ibv/detail/ibv_service_connector.hpp#L224-L234));listener `open` 每次建新 cm_id。
 - 故 `v4_then_v6` 测试第二轮(v6)必须**新建 connector**(以及新建/重开 listener),不能复用第一轮对象。
   这条需在 Phase 5 测试设计里写明。
 
@@ -334,7 +334,7 @@ co_await echo_once(io_ctx, dev, v6_endpoint);        // v4 完成后再连 v6,�
   -> **单个 listening cm_id** 在**同一条 event channel** 上同时收到 v4(-mapped) 与 v6 的 CONNECT_REQUEST,
   现有 `async_get_connection` 一条循环即可处理,**无需多路复用**。
 - **nd:原生不支持。** `IND2Listener::Bind` 是**单族**的;`IN6ADDR_ANY` 只在 v6 内 multi-homed
-  ("cannot span multiple adapters",[IND2Listener.md:45-46](../third_party/networkdirect/docs/IND2Listener.md#L45-L46)),
+  ("cannot span multiple adapters",[IND2Listener.md:45-46](../../third_party/networkdirect/docs/IND2Listener.md#L45-L46)),
   没有 AFONLY/V6ONLY 旋钮。要同收两族,必须 `rdma_listener` **内部持两个 IND2Listener**(各绑该 adapter 的 v4/v6 地址),
   并把 `async_get_connection` **多路复用**两个源(竞争等待、先到先返回、取消/重新 arm)、teardown 管两个。
 - **结论(不对称):** 单实例双栈在 **ibv 近乎免费**(绑 `::` + 设 AFONLY),在 **nd 是重活**(双 IND2Listener + 多路复用)。

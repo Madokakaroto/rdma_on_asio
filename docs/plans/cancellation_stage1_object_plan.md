@@ -1,8 +1,8 @@
 # 取消计划 Stage 1 —— 对象级取消(控制面 + 数据面)
 
 > 三篇分期计划之一。Stage 1 = **对象级**取消,同时覆盖控制面与数据面。
-> 相关:`cancellation_stage2_control_single_op.md`(控制面单操作)、
-> `cancellation_stage3_data_single_op.md`(数据面单操作)、`asio_cancellation_analysis.md`(asio 机制详解)。
+> 相关:`cancellation_stage2_control_single_op_plan.md`(控制面单操作)、
+> `cancellation_stage3_data_single_op_plan.md`(数据面单操作)、`../asio_cancellation_analysis.md`(asio 机制详解)。
 >
 > **依赖关系**:Stage 1 是基础。Stage 2 独立;Stage 3 依赖本阶段对"数据面 teardown = disconnect"的结论。
 > 建议先做 Stage 1。

@@ -1,13 +1,13 @@
 # 取消计划 Stage 2 —— 控制面单操作取消
 
 > 三篇分期计划之一。Stage 2 = **控制面**的**单操作级**(cancellation_slot)取消。
-> 相关:`cancellation_stage1_object.md`(对象级)、`cancellation_stage3_data_single_op.md`(数据面单操作)、
-> `asio_cancellation_analysis.md`(asio 机制详解,§7 是本阶段的蓝本)。
+> 相关:`cancellation_stage1_object_plan.md`(对象级)、`cancellation_stage3_data_single_op_plan.md`(数据面单操作)、
+> `../asio_cancellation_analysis.md`(asio 机制详解,§7 是本阶段的蓝本)。
 >
 > **依赖关系**:与 Stage 1 独立(可并行或先后),但本阶段的若干结论**建立在 Stage 1 已落地的事实之上**
 > (`connect_state_` 状态机、`peer_closed_` latch、`disconnect()` 统一 teardown、`connector::cancel()` 已删)。
 >
-> **更新(Stage 1 已落地,见 `cancellation_stage1_object.md` / commit 440543e)**:
+> **更新(Stage 1 已落地,见 `cancellation_stage1_object_plan.md` / commit 440543e)**:
 > - `async_disconnect` 早已被**同步** `disconnect()` 取代(本阶段与它无关);`ibv_disconnect_op` 已删。
 > - **`connector::cancel()` 已删除**,对象级 teardown 统一为 `disconnect()`(自适应 `connect_state_`,MT-safe);
 >   `listener::cancel()` 保留。这直接改变了本阶段的两个论点(见下):

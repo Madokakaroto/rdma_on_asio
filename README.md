@@ -225,7 +225,7 @@ Notes:
 Benchmark history is tracked in
 [`docs/rdma_stress_performance_results.md`](docs/rdma_stress_performance_results.md), with the
 read/write optimization follow-up in
-[`docs/rdma_read_write_performance_optimization_plan.md`](docs/rdma_read_write_performance_optimization_plan.md).
+[`docs/plans/rdma_read_write_performance_optimization_plan.md`](docs/plans/rdma_read_write_performance_optimization_plan.md).
 
 RDMA-on-Asio is benchmarked with `asio_perftest` (`tests/benchmark/`), whose CLI and
 verb-driving loop deliberately mirror [linux-rdma/perftest](https://github.com/linux-rdma/perftest)
@@ -410,6 +410,14 @@ cmake --build build
 
 `RDMA_BACKEND` defaults to `ibv` on Linux and `nd` on Windows.
 
+### Compilation modes (header-only vs separate compilation)
+
+Like asio, rdma_on_asio is header-first: it works header-only by default, and **you (the consumer)**
+opt into separate compilation by defining `ASIO_SEPARATE_COMPILATION` for all TUs and `#include
+<rdma/impl/src.hpp>` in one `.cpp` (that single include also compiles asio's implementation). See
+[`docs/separate_compilation_usage.md`](docs/separate_compilation_usage.md) for the four
+header-only/separate × default/manual-link combinations with copy-pasteable examples.
+
 ## Layout
 
 ```
@@ -466,13 +474,13 @@ completes them as `operation_aborted`.
 
 - **Performance follow-up** -- continue validation-mode controls, allocator measurements, event
   scheduler tuning, and multi-host `perftest` comparison. This work is tracked in
-  [`docs/rdma_stress_performance_plan.md`](docs/rdma_stress_performance_plan.md) and
-  [`docs/rdma_read_write_performance_optimization_plan.md`](docs/rdma_read_write_performance_optimization_plan.md).
+  [`docs/plans/rdma_stress_performance_plan.md`](docs/plans/rdma_stress_performance_plan.md) and
+  [`docs/plans/rdma_read_write_performance_optimization_plan.md`](docs/plans/rdma_read_write_performance_optimization_plan.md).
 
 **Done:** CMake uses the standard `BUILD_TESTING` switch to add the unified
 `tests/` graph. CTest labels cover `unit`, `performance`, `stress`, and
 `baseline`; local-machine RDMA tests query a usable local address at runtime
 rather than taking one from CMake -- see
-[`docs/cmake_test_unification_plan.md`](docs/cmake_test_unification_plan.md).
+[`docs/plans/cmake_test_unification_plan.md`](docs/plans/cmake_test_unification_plan.md).
 
 See [`CLAUDE.md`](CLAUDE.md) for the detailed architecture and design notes.

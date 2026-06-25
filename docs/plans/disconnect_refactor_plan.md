@@ -1,8 +1,8 @@
 # 重构计划 -- connector 断开语义厘清 + 新增 `async_wait_disconnect`
 
 > 厘清 connector 的"断开"语义,并补上当前**完全缺失**的"断开通知"能力。
-> 相关:`cancellation_stage1_object.md`(数据面 teardown = disconnect 的结论由此细化)、
-> `asio_cancellation_analysis.md`。
+> 相关:`cancellation_stage1_object_plan.md`(数据面 teardown = disconnect 的结论由此细化)、
+> `../asio_cancellation_analysis.md`。
 > 状态:**已实现并验证**。Phase 1(同步 disconnect + 死代码清理 + teardown drain/ack + 迁移)与 Phase 2
 > (`async_wait_disconnect` + `ext_disconnected`/`ext_device_removed`)均已落地;ibv 侧在 RoCE(mlx5_0)上
 > 端到端验证通过(echo / poll-echo / 新增 `test_ibv_wait_disconnect`:对端断开 -> `ext_disconnected`,电平触发
