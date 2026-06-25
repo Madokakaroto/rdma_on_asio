@@ -13,6 +13,7 @@ inline asio::detail::winsock_init<>::manual manual_winsock_init
 #endif
 
 #include "asio/detail/config.hpp"  // ASIO_DECL / ASIO_HEADER_ONLY
+#include "rdma/nd/detail/nd_autolink.hpp"
 
 #include <ndsupport.h>
 #include <iostream>

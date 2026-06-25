@@ -16,7 +16,8 @@
 ```cpp
 #include "rdma/rdma.hpp"   // 直接用,无需任何宏、无需 src TU
 ```
-Linux/ibv 链接 `ibverbs` + `rdmacm`(CMake:`PkgConfig::IBVERBS PkgConfig::RDMACM`);Windows/nd 见 `plans/nd_cmake_refactor_plan.md`。
+Linux/ibv 链接 `ibverbs` + `rdmacm`(CMake:`PkgConfig::IBVERBS PkgConfig::RDMACM`);
+Windows/nd 链接 native `ndutil.lib`(默认由 autolink 完成),见 `plans/nd_cmake_refactor_plan.md`。
 
 ## 关键不变量
 
@@ -44,7 +45,7 @@ Linux/ibv 链接 `ibverbs` + `rdmacm`(CMake:`PkgConfig::IBVERBS PkgConfig::RDMAC
 ```
 ```cmake
 target_link_libraries(app PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)   # Linux/ibv
-# Windows/nd: 见 nd_cmake_refactor_plan.md(asio 自动链 ws2_32 等;ndutil 按该计划)
+# Windows/nd: asio 自动链 ws2_32 等;rdma_on_asio 自动链 ndutil.lib
 ```
 
 ### 例 2 — header-only + 手动链接
@@ -52,7 +53,7 @@ target_link_libraries(app PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)   # Linu
 target_compile_definitions(app PRIVATE ASIO_NO_DEFAULT_LINKED_LIBS)
 # Linux/ibv: 与例 1 链接相同(本就手动链 ibverbs/rdmacm)
 target_link_libraries(app PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
-# Windows: 自行链 ws2_32 mswsock bcrypt (+ 按需 ndutil)
+# Windows/nd: 自行链 ws2_32 mswsock bcrypt + ndutil.lib
 ```
 
 ### 例 3 — separate compilation + 默认链接
@@ -65,7 +66,7 @@ target_link_libraries(app PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
 add_library(app_obj OBJECT main.cpp ... src_rdma.cpp)
 target_compile_definitions(app_obj PRIVATE ASIO_SEPARATE_COMPILATION)
 target_link_libraries(app PRIVATE app_obj PkgConfig::IBVERBS PkgConfig::RDMACM)  # Linux/ibv
-# Windows/nd: ws2_32 等 + ndutil 由 autolink 解决(separate + 默认链接)
+# Windows/nd: ws2_32 等 + ndutil.lib 由 autolink 解决
 ```
 
 ### 例 4 — separate compilation + 手动链接

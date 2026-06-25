@@ -187,9 +187,6 @@ function(init_networdirect)
 
   link_libraries(rdma_networkdirect_backend)
 
-  set(NETWORKDIRECT_SOURCE
-      "${CMAKE_SOURCE_DIR}/src/networkdirect.cpp"
-      PARENT_SCOPE)
   set(NETWORKDIRECT_LIB_NAME
       "${NETWORKDIRECT_LIB_NAME}"
       PARENT_SCOPE)

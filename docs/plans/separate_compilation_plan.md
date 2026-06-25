@@ -9,8 +9,8 @@
 >
 > 状态:**已落地并持续补齐**。基础设施、shared 层、ibv 主要非模板实现、nd 主要非模板实现均已拆入 `.ipp`;
 > 本轮补齐了 nd 的 `nd_memory_region` 拆分,并让统一 separate smoke 在 nd 上走真实消费者路径
-> (`rdma/impl/src.hpp` + `ndutil.lib` 链接,不编译 `src/networkdirect.cpp`)。
-> 相关:`nd_cmake_refactor_plan.md`(已有的 `src/networkdirect.cpp` / `impl/networkdirect.hpp` / `nd_autolink.hpp` 先例)、
+> (`rdma/impl/src.hpp` + `ndutil.lib` 链接,不编译 NetworkDirect 源码)。
+> 相关:`nd_cmake_refactor_plan.md`(native `ndutil.lib` / `nd_autolink.hpp`)、
 > `cmake_test_unification_plan.md`(统一 CTest 图,新增的 separate-compilation 测试挂进去)。
 
 ---
@@ -66,13 +66,15 @@ asio 的 optional separate compilation 由三件套构成,全部在 vendored asi
 
 ## 2. 仓库已有的先例(必须对齐,不要另起炉灶)
 
-nd 后端已经有一套 separate-compilation 机制(见 `nd_cmake_refactor_plan.md`):
-- `src/networkdirect.cpp` 是 nd 的源 TU(`#define ASIO_RDMA_NETWORKDIRECT_SOURCE_FILE` + include `rdma/nd/impl/networkdirect.hpp`)。
-- `include/rdma/nd/impl/networkdirect.hpp` 是"impl 伞":`#error` 守卫(separate 模式下被非源 TU 直接包含即报错)+ 文本包含 ndutil 实现源。
-- `include/rdma/nd/detail/nd_autolink.hpp` 在 `ASIO_SEPARATE_COMPILATION && !ASIO_NO_DEFAULT_LINKED_LIBS && _MSC_VER` 下 `#pragma comment(lib, "ndutil.lib")`,由 `nd_types.hpp` 引入。
+nd 后端的 NetworkDirect 第三方实现不参与 rdma_on_asio 的 `.ipp` 拆分(见
+`nd_cmake_refactor_plan.md`):
+- vendored NetworkDirect ndutil 通过 native `ndutil.lib` 提供。
+- header-only 和 separate-compilation 两种模式都链接同一个 `ndutil.lib`。
+- `include/rdma/nd/detail/nd_autolink.hpp` 在
+  `!ASIO_NO_DEFAULT_LINKED_LIBS && _MSC_VER` 下 `#pragma comment(lib, "ndutil.lib")`,
+  由 `nd_types.hpp` 引入。
 
-本计划**扩展**这套约定到"rdma 自身的非模板实现",而不是替换它。`networkdirect.hpp` 是新 `.ipp` 伞的样板。
-(ibv 侧无 vendored native lib,不需要 autolink;见 `ibv_cmake_refactor_plan.md`。)
+本计划只拆分 rdma_on_asio 自身的非模板实现;NetworkDirect 第三方 `.cpp` 不放进 public header 或 `rdma/impl/src.hpp`。
 
 ---
 
@@ -164,7 +166,7 @@ dyn-link 时 `ASIO_DECL` 正确 dllexport)。避免 `ASIO_SOURCE` 重定义。
 #  ... // 见 §4 ibv 清单
 #elif defined(ASIO_RDMA_BACKEND_ND)
 #  include "rdma/nd/detail/impl/nd_device_impl.ipp"
-#  ... // 见 §4 nd 清单(networkdirect.hpp 先例并存)
+#  ... // 见 §4 nd 清单
 #endif
 #endif
 ```
@@ -242,7 +244,7 @@ dyn-link 时 `ASIO_DECL` 正确 dllexport)。避免 `ASIO_SOURCE` 重定义。
   `detail/nd_op_base.hpp`、`detail/nd_op_complete.hpp`、`detail/nd_op_disconnect.hpp`、
   `detail/nd_op_connect.hpp`(非模板基 `nd_connect_op_base`)、`nd_device.hpp`(`get_v*_address`)。
 - **不拆**:`*_service_{connector,listener}`(PortSpace 模板)、`nd_op_{accept,get_connection_request,wait_disconnect}`(Handler 模板)、`nd_queue_pair`/`nd_connector`/`nd_listener`、`nd_types.hpp`/`nd_impl_types.hpp`(类型)、ranges DSL 模板。
-- 与现有 `impl/networkdirect.hpp` + `nd_autolink.hpp` 先例并存。
+- NetworkDirect 第三方实现不拆入 `.ipp`;始终链接 native `ndutil.lib`。
 
 ---
 
@@ -254,7 +256,7 @@ dyn-link 时 `ASIO_DECL` 正确 dllexport)。避免 `ASIO_SOURCE` 重定义。
   `ASIO_DECL`)。先空跑(无 .ipp)确保两态都能配置。
 - **Phase 1 — shared 试点**:只改 `rdma_error.hpp` → `impl/rdma_error.ipp`,把它加进 `src.hpp`。两态构建 + 跑 ctest。**这是验证整套机制的最小闭环。**
 - **Phase 2 — ibv**:按 §4.2 逐文件拆,每拆几个就两态构建。`ibv_device_impl` / `ibv_ops_*` 是大头。
-- **Phase 3 — nd**:按 §4.3 拆,与 `networkdirect.hpp` 先例对齐(Windows agent 验证)。
+- **Phase 3 — nd**:按 §4.3 拆,并保持 NetworkDirect 第三方实现走 native `ndutil.lib` 链接(Windows agent 验证)。
 - **Phase 4 — 测试矩阵**:见 §6,挂进统一 CTest 图。
 
 每阶段内**先拆叶子(ops/error/config_derive),后拆依赖它们的(service/queue_pair/device)**,降低 include 顺序风险。
@@ -307,7 +309,8 @@ rdma_on_asio 本身 header-only(无交付的 `.a/.so`),所以 separate compilati
 2. **大文件**(`ibv_device_impl` / `nd_device_impl`):函数体里用到了头里的模板(如 nd 的 ranges DSL)。`.ipp` include 该头即可见模板,**模板留头、实现进 .ipp** 两不冲突。
 3. **琐碎 inline 的边界**:一行访问器/工厂(`tcp::v4()`、`fill_native_sge`、service 访问器)**不拆**(asio 同此)。计划只拆"有实际工作体"的函数,避免无收益的碎片化。
 4. **`make_error_code` ADL**:声明留头(挂 `ASIO_DECL`),ADL 仍可见;仅定义体进 `.ipp`。
-5. **与 nd 既有 separate-compilation 先例**:不冲突 —— `networkdirect.hpp` 管的是 vendored ndutil 源;本计划管的是 rdma 自身实现。`src.hpp` 伞按后端宏只引入活动后端的 `.ipp`。
+5. **与 nd native ndutil 并存**:不冲突 —— `ndutil.lib` 管 vendored NetworkDirect 实现;本计划管的是 rdma 自身实现。
+   `src.hpp` 伞按后端宏只引入活动后端的 rdma `.ipp`。
 6. **不引入平行宏**:直接用 `ASIO_DECL` / `ASIO_SOURCE` / `ASIO_SEPARATE_COMPILATION`,不要 `RDMA_DECL` / `RDMA_SOURCE` /
    `RDMA_SEPARATE_COMPILATION`。语义、dyn-link(dllexport/import)分支全由 asio 提供。
 7. **DLL / shared-lib 范围**:本计划主要面向 **static / object 形态的 separate compilation**(`ASIO_DECL` 为空)。

@@ -1,11 +1,7 @@
 find_package(Threads REQUIRED)
 
 function(rdma_collect_backend_sources out_var)
-  set(sources ${ARGN})
-  if(RDMA_BACKEND STREQUAL "nd")
-    list(APPEND sources ${NETWORKDIRECT_SOURCE})
-  endif()
-  set(${out_var} ${sources} PARENT_SCOPE)
+  set(${out_var} ${ARGN} PARENT_SCOPE)
 endfunction()
 
 function(rdma_configure_test_target name)
@@ -21,6 +17,10 @@ function(rdma_configure_test_target name)
 
   if(RDMA_BACKEND STREQUAL "ibv")
     target_link_libraries(${name} PRIVATE PkgConfig::IBVERBS PkgConfig::RDMACM)
+  elseif(MSVC AND RDMA_BACKEND STREQUAL "nd")
+    # The vendored NetworkDirect ndutil.vcxproj builds with /MT or /MTd.
+    set_property(TARGET ${name} PROPERTY
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
   endif()
 endfunction()
 
@@ -157,10 +157,6 @@ if(RDMA_BACKEND STREQUAL "nd")
         SOURCES
             ${CMAKE_CURRENT_SOURCE_DIR}/${test_source}
             ${CMAKE_CURRENT_SOURCE_DIR}/${asio_source})
-    if(MSVC)
-      set_property(TARGET ${name} PROPERTY
-          MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-    endif()
     rdma_add_ctest(${name} ${name} "unit;nd;compile;asio_macro")
   endfunction()
 
@@ -438,9 +434,6 @@ rdma_configure_benchmark_target(asio_perftest_obj)
 set(ASIO_PERFTEST_ENTRIES ${CMAKE_CURRENT_SOURCE_DIR}/benchmark/entries)
 function(rdma_add_asio_perftest name entry)
   set(asio_perftest_sources ${entry} $<TARGET_OBJECTS:asio_perftest_obj>)
-  if(RDMA_BACKEND STREQUAL "nd")
-    list(APPEND asio_perftest_sources ${NETWORKDIRECT_SOURCE})
-  endif()
 
   add_executable(${name} ${asio_perftest_sources})
   rdma_configure_benchmark_target(${name})
@@ -612,9 +605,7 @@ if(RDMA_BACKEND STREQUAL "nd")
       COPYONLY)
 
   function(rdma_add_nd_perftest name)
-    add_executable(${name}
-        ${ND_PERFTEST_SOURCE}
-        ${NETWORKDIRECT_SOURCE})
+    add_executable(${name} ${ND_PERFTEST_SOURCE})
     rdma_configure_benchmark_target(${name})
   endfunction()
 
@@ -752,8 +743,4 @@ rdma_add_plain_executable(unit_rdma_separate_compilation
         ${CMAKE_CURRENT_SOURCE_DIR}/sepcomp/tu_b.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/sepcomp/main.cpp)
 target_compile_definitions(unit_rdma_separate_compilation PRIVATE ASIO_SEPARATE_COMPILATION)
-if(MSVC AND RDMA_BACKEND STREQUAL "nd")
-  set_property(TARGET unit_rdma_separate_compilation PROPERTY
-      MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
 rdma_add_ctest(unit_rdma_separate_compilation unit_rdma_separate_compilation "unit;sepcomp")

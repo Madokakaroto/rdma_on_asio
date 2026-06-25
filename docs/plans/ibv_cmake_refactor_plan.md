@@ -71,7 +71,7 @@ ibv 后端是 header-only(无 `src/ibverbs.cpp` wrapper),系统头 `<infiniband/
   "由构建系统链 pthread 等"完全一致。
 
 (nd 那边 `nd_autolink.hpp` 在 `_MSC_VER` 下发 `#pragma comment(lib, "ndutil.lib")` 是 Windows/MSVC
-专属、且服务 vendored 私有库的特例,不构成 ibv 必须对齐的理由。)
+专属、且服务 vendored native `ndutil.lib` 的特例,不构成 ibv 必须对齐的理由。)
 
 ## 唯一可选的小清理(纯去重,不是"对齐")
 
