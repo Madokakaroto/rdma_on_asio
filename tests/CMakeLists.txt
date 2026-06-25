@@ -737,3 +737,19 @@ if(RDMA_BACKEND STREQUAL "nd")
                  --queue-depth 4)
   rdma_set_hardware_ctest_properties(baseline_native_nd_read_write_bench_compat_smoke 30)
 endif()
+
+# --- Separate-compilation verification (ASIO_SEPARATE_COMPILATION) ---
+# One src TU (#include <rdma/impl/src.hpp>) + two TUs that include the public
+# headers + main. Building this target proves ODR (no duplicate non-template
+# definitions across TUs) and linkage (every split symbol resolves from the src
+# TU); running it is the smoke. The whole target is compiled with
+# ASIO_SEPARATE_COMPILATION (whole-program single-mode). See
+# docs/separate_compilation_usage.md / docs/plans/separate_compilation_plan.md.
+rdma_add_backend_executable(unit_rdma_separate_compilation
+    SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/sepcomp/src_rdma.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/sepcomp/tu_a.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/sepcomp/tu_b.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/sepcomp/main.cpp)
+target_compile_definitions(unit_rdma_separate_compilation PRIVATE ASIO_SEPARATE_COMPILATION)
+rdma_add_ctest(unit_rdma_separate_compilation unit_rdma_separate_compilation "unit;sepcomp")

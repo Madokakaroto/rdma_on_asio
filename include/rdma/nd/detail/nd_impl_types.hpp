@@ -2,6 +2,7 @@
 
 #include <optional>
 
+#include "asio/detail/config.hpp"  // ASIO_DECL
 #include "asio/ip/address.hpp"
 #include "rdma/detail/small_sglist.hpp"
 #include "rdma/rdma_commons.hpp"
@@ -127,8 +128,8 @@ struct nd_adapter_t {
   std::string name_;  // display: first bound address string
   native_context_config_t info_;
 
-  asio::ip::address get_v4_address() const;
-  asio::ip::address get_v6_address() const;
+  ASIO_DECL asio::ip::address get_v4_address() const;
+  ASIO_DECL asio::ip::address get_v6_address() const;
 };
 using nd_adapter_ptr = std::shared_ptr<nd_adapter_t>;
 // provider types -- adapters grouped by AdapterId (one entry per physical NIC,

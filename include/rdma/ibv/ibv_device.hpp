@@ -2,7 +2,7 @@
 
 #include <vector>
 
-#include "asio/detail/throw_error.hpp"
+#include "asio/detail/config.hpp"  // ASIO_DECL / ASIO_HEADER_ONLY
 #include "rdma/ibv/ibv_types.hpp"
 #include "rdma/ibv/ibv_error.hpp"
 #include "rdma/ibv/detail/ibv_config_derive.hpp"
@@ -57,24 +57,8 @@ class ibv_device_manager_t {
   ibv_device_manager_t& operator=(ibv_device_manager_t const&) = delete;
 };
 
-namespace detail {
-
-inline asio::ip::address ibv_device_t::get_v4_address() const {
-  if (!v4_address_) {
-    asio::detail::throw_error(
-        make_error_code(rdma_errc::address_family_not_supported));
-  }
-  return *v4_address_;
 }
 
-inline asio::ip::address ibv_device_t::get_v6_address() const {
-  if (!v6_address_) {
-    asio::detail::throw_error(
-        make_error_code(rdma_errc::address_family_not_supported));
-  }
-  return *v6_address_;
-}
-
-}  // namespace detail
-
-}
+#if defined(ASIO_HEADER_ONLY)
+# include "rdma/ibv/impl/ibv_device.ipp"
+#endif

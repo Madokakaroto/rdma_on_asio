@@ -57,33 +57,7 @@ public:
   void shutdown() override {}
 
   // Create the QP from the impl's device/cq/config. Static: no io_context needed.
-  static asio::error_code create_qp(implementation_type& impl) {
-    asio::error_code ec;
-    if (impl.qp_) {
-      ec = asio::error::already_open;
-      ASIO_ERROR_LOCATION(ec);
-      return ec;
-    }
-    if (!impl.device_ || !impl.device_->pd_ || !impl.cq_) {
-      ec = rdma_errc::invalid_device;
-      ASIO_ERROR_LOCATION(ec);
-      return ec;
-    }
-    auto const& eff = impl.config_;
-    native_qp_init_attr qp_init_attr{
-        .qp_context_ = nullptr,
-        .rcq_ = impl.cq_,
-        .icq_ = impl.cq_,
-        .max_send_wr_ = eff.max_send_wr_,
-        .max_recv_wr_ = eff.max_recv_wr_,
-        .max_send_sge_ = eff.max_send_sge_,
-        .max_recv_sge_ = eff.max_recv_sge_,
-        .max_inline_data_ = eff.max_inline_data_,
-    };
-    impl.qp_.Attach(
-        verbs_ops::create_qp(impl.device_->pd_.get(), qp_init_attr, ec));
-    return ec;
-  }
+  ASIO_DECL static asio::error_code create_qp(implementation_type& impl);
 
   // "bound" = associated with a completion mechanism (a CQ). On nd the QP is
   // created at bind time, so native_handle() is also non-null then; the predicate
@@ -373,3 +347,7 @@ private:
 };
 
 }
+
+#if defined(ASIO_HEADER_ONLY)
+# include "rdma/nd/detail/impl/nd_service_verbs.ipp"
+#endif

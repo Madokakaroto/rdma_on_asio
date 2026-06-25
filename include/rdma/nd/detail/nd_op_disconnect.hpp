@@ -1,5 +1,6 @@
 #pragma once
 
+#include "asio/detail/config.hpp"  // ASIO_DECL / ASIO_HEADER_ONLY
 #include "asio/detail/handler_alloc_helpers.hpp"
 #include "asio/detail/memory.hpp"
 #include "rdma/nd/detail/nd_op_base.hpp"
@@ -17,21 +18,19 @@ public:
   struct Handler {};
   ASIO_DEFINE_HANDLER_PTR(nd_disconnect_op);
 
-  explicit nd_disconnect_op(IND2Connector* connector)
-      : nd_op_base(connector, &nd_op_base::default_process,
-                   &nd_disconnect_op::do_complete) {
-  }
+  ASIO_DECL explicit nd_disconnect_op(IND2Connector* connector);
 
 private:
-  static void do_complete(void* /*owner*/, asio::detail::operation* base,
-                          const asio::error_code& /*result_ec*/,
-                          std::size_t /*bytes_transferred*/) {
-    auto* o = static_cast<nd_disconnect_op*>(base);
-    ptr p = {nullptr, o, o};
-    p.reset();  // fire-and-forget: free the op, no upcall
-  }
+  ASIO_DECL static void do_complete(void* /*owner*/,
+                                    asio::detail::operation* base,
+                                    const asio::error_code& /*result_ec*/,
+                                    std::size_t /*bytes_transferred*/);
 };
 
 }
 
 #include "asio/detail/pop_options.hpp"
+
+#if defined(ASIO_HEADER_ONLY)
+# include "rdma/nd/detail/impl/nd_op_disconnect.ipp"
+#endif

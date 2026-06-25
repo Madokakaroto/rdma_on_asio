@@ -1,5 +1,6 @@
 #pragma once
 
+#include "asio/detail/config.hpp"  // ASIO_DECL / ASIO_HEADER_ONLY
 #include "asio/io_context.hpp"
 #include "rdma/ibv/ibv_device.hpp"
 #include "rdma/ibv/ibv_error.hpp"
@@ -17,33 +18,14 @@ namespace asio::rdma {
 // MR / completion_queue / etc.). The same device_ptr may be passed to use_device
 // on multiple io_contexts --each gets its own shared CQ + comp_channel bound to
 // its own reactor, all sharing the device's context/PD. Mirrors nd use_device.
-inline void use_device(asio::io_context& io_ctx, ibv_device_ptr const& device,
-                       ibv_config_t const& config, asio::error_code& ec) {
-  auto& dev_svc = asio::use_service<detail::ibv_device_service>(io_ctx);
-  if (dev_svc.is_registered()) {
-    ec = make_error_code(rdma_errc::already_registered);
-    return;
-  }
-  if (!device) {
-    ec = make_error_code(rdma_errc::invalid_device);
-    return;
-  }
-  auto const effective = detail::derive_effective_config(config, device->attr_);
-  // Initialize the CQ/notify service first; register the device only on success
-  // so a CQ-creation failure leaves the io_context cleanly unregistered.
-  auto& io_svc = asio::use_service<detail::ibv_io_completion_service>(io_ctx);
-  io_svc.initialize(device, effective.cqe_, effective.cq_poll_batch_, ec);
-  if (ec) {
-    return;
-  }
-  dev_svc.register_device(device, effective);
-}
+ASIO_DECL void use_device(asio::io_context& io_ctx, ibv_device_ptr const& device,
+                          ibv_config_t const& config, asio::error_code& ec);
 
-inline void use_device(asio::io_context& io_ctx, ibv_device_ptr const& device,
-                       ibv_config_t const& config = {}) {
-  asio::error_code ec{};
-  use_device(io_ctx, device, config, ec);
-  asio::detail::throw_error(ec);
-}
+ASIO_DECL void use_device(asio::io_context& io_ctx, ibv_device_ptr const& device,
+                          ibv_config_t const& config = {});
 
 }
+
+#if defined(ASIO_HEADER_ONLY)
+# include "rdma/ibv/impl/ibv_use_device.ipp"
+#endif

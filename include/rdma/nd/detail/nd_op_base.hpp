@@ -1,5 +1,6 @@
 #pragma once
 
+#include "asio/detail/config.hpp"  // ASIO_DECL / ASIO_HEADER_ONLY
 #include "asio/detail/operation.hpp"
 #include "asio/detail/win_iocp_io_context.hpp"
 #include "rdma/nd/nd_types.hpp"
@@ -36,29 +37,14 @@ protected:
     return status_t::completed;
   }
 
-  status_t resume_process(void* owner, asio::error_code& ec) {
-    if (ec) {
-      return status_t::completed;
-    }
-    auto const status = do_process(owner, ec);
-    if (status_t::continuation == status) {
-      assert(owner);
-      auto* context = static_cast<asio::detail::win_iocp_io_context*>(owner);
-      context->work_started();
-      context->on_pending(this);
-    }
-    return status;
-  }
+  ASIO_DECL status_t resume_process(void* owner, asio::error_code& ec);
 
 private:
-  status_t do_process(void* owner, asio::error_code& ec) {
-    assert(overlapped_);
-
-    if (process_func_) {
-      return process_func_(owner, this, ec);
-    }
-    return status_t::completed;
-  }
+  ASIO_DECL status_t do_process(void* owner, asio::error_code& ec);
 };
 
 }
+
+#if defined(ASIO_HEADER_ONLY)
+# include "rdma/nd/detail/impl/nd_op_base.ipp"
+#endif

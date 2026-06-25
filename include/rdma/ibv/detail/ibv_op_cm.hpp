@@ -2,6 +2,7 @@
 
 #include "asio/associated_cancellation_slot.hpp"
 #include "asio/cancellation_type.hpp"
+#include "asio/detail/config.hpp"
 #include "asio/detail/reactor.hpp"
 #include "asio/detail/reactor_op.hpp"
 #include "rdma/ibv/detail/ibv_impl_types.hpp"
@@ -71,14 +72,11 @@ protected:
 
   // Pull one CM event. Returns the stored ec_. On EAGAIN, ec_ stays clear and
   // event_ptr is left empty (no event yet) so the caller returns not_done.
-  asio::error_code get_cm_event(unique_rdma_cm_event_ptr& event_ptr) {
-    native_cm_event_t* event = nullptr;
-    int const rc = detail::get_cm_event(channel_, &event, this->ec_);
-    if (rc == 0) {
-      event_ptr.reset(event);
-    }
-    return this->ec_;
-  }
+  ASIO_DECL asio::error_code get_cm_event(unique_rdma_cm_event_ptr& event_ptr);
 };
 
 }
+
+#if defined(ASIO_HEADER_ONLY)
+# include "rdma/ibv/detail/impl/ibv_op_cm.ipp"
+#endif

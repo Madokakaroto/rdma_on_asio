@@ -7,6 +7,7 @@
 #include <rdma/rdma_cma.h>
 
 #include "asio.hpp"
+#include "asio/detail/config.hpp"  // ASIO_DECL / ASIO_HEADER_ONLY
 #include "rdma/ibv/ibv_error.hpp"
 #include "rdma/ibv/ibv_types.hpp"
 #include "rdma/ibv/detail/ibv_impl_types.hpp"
@@ -19,182 +20,41 @@ namespace asio::rdma::detail {
 
 // Make a file descriptor non-blocking so rdma_get_cm_event returns EAGAIN
 // instead of blocking inside the reactor callback.
-inline bool set_nonblocking(int fd, asio::error_code& ec) {
-  int opt = ::fcntl(fd, F_GETFL);
-  if (opt == -1) {
-    ec = last_system_error();
-    return false;
-  }
-  if (::fcntl(fd, F_SETFL, opt | O_NONBLOCK) == -1) {
-    ec = last_system_error();
-    return false;
-  }
-  ec.clear();
-  return true;
-}
+ASIO_DECL bool set_nonblocking(int fd, asio::error_code& ec);
 
 // Create a CM event channel and make its fd non-blocking.
-inline native_event_channel_t* create_event_channel(asio::error_code& ec) {
-  unique_rdma_event_channel_ptr channel{ ::rdma_create_event_channel() };
-  if (!channel) {
-    ec = last_system_error();
-    return nullptr;
-  }
-  if (!set_nonblocking(channel->fd, ec)) {
-    return nullptr;
-  }
-  return channel.release();
-}
+ASIO_DECL native_event_channel_t* create_event_channel(asio::error_code& ec);
 
-inline int create_cm_id(native_event_channel_t* channel, native_cm_id_t** id,
-                        void* context, rdma_port_space port_space,
-                        asio::error_code& ec) {
-  int const rc = ::rdma_create_id(channel, id, context, port_space);
-  if (rc) {
-    ec = last_system_error();
-  }
-  else {
-    ec.clear();
-  }
-  return rc;
-}
+ASIO_DECL int create_cm_id(native_event_channel_t* channel, native_cm_id_t** id,
+                           void* context, rdma_port_space port_space,
+                           asio::error_code& ec);
 
-inline int migrate_id(native_cm_id_t* cm_id, native_event_channel_t* channel,
-                      asio::error_code& ec) {
-  int const rc = ::rdma_migrate_id(cm_id, channel);
-  if (rc) {
-    ec = last_system_error();
-  }
-  else {
-    ec.clear();
-  }
-  return rc;
-}
+ASIO_DECL int migrate_id(native_cm_id_t* cm_id, native_event_channel_t* channel,
+                         asio::error_code& ec);
 
-inline int bind_addr(native_cm_id_t* cm_id, sockaddr const* addr,
-                     asio::error_code& ec) {
-  if (cm_id == nullptr) {
-    ec = asio::error::bad_descriptor;
-    return -1;
-  }
-  int const rc = ::rdma_bind_addr(cm_id, const_cast<sockaddr*>(addr));
-  if (rc) {
-    ec = last_system_error();
-  }
-  else {
-    ec.clear();
-  }
-  return rc;
-}
+ASIO_DECL int bind_addr(native_cm_id_t* cm_id, sockaddr const* addr,
+                        asio::error_code& ec);
 
-inline int listen(native_cm_id_t* cm_id, int backlog, asio::error_code& ec) {
-  if (cm_id == nullptr) {
-    ec = asio::error::bad_descriptor;
-    return -1;
-  }
-  int const rc = ::rdma_listen(cm_id, backlog);
-  if (rc) {
-    ec = last_system_error();
-  }
-  else {
-    ec.clear();
-  }
-  return rc;
-}
+ASIO_DECL int listen(native_cm_id_t* cm_id, int backlog, asio::error_code& ec);
 
-inline int resolve_addr(native_cm_id_t* cm_id, sockaddr* src, sockaddr* dst,
-                        int timeout_ms, asio::error_code& ec) {
-  if (cm_id == nullptr) {
-    ec = asio::error::bad_descriptor;
-    return -1;
-  }
-  int const rc = ::rdma_resolve_addr(cm_id, src, dst, timeout_ms);
-  if (rc) {
-    ec = last_system_error();
-  }
-  else {
-    ec.clear();
-  }
-  return rc;
-}
+ASIO_DECL int resolve_addr(native_cm_id_t* cm_id, sockaddr* src, sockaddr* dst,
+                           int timeout_ms, asio::error_code& ec);
 
-inline int resolve_route(native_cm_id_t* cm_id, int timeout_ms,
-                         asio::error_code& ec) {
-  if (cm_id == nullptr) {
-    ec = asio::error::bad_descriptor;
-    return -1;
-  }
-  int const rc = ::rdma_resolve_route(cm_id, timeout_ms);
-  if (rc) {
-    ec = last_system_error();
-  }
-  else {
-    ec.clear();
-  }
-  return rc;
-}
+ASIO_DECL int resolve_route(native_cm_id_t* cm_id, int timeout_ms,
+                            asio::error_code& ec);
 
-inline int connect(native_cm_id_t* cm_id, rdma_conn_param* conn_param,
-                   asio::error_code& ec) {
-  if (cm_id == nullptr) {
-    ec = asio::error::bad_descriptor;
-    return -1;
-  }
-  int const rc = ::rdma_connect(cm_id, conn_param);
-  if (rc) {
-    ec = last_system_error();
-  }
-  else {
-    ec.clear();
-  }
-  return rc;
-}
+ASIO_DECL int connect(native_cm_id_t* cm_id, rdma_conn_param* conn_param,
+                      asio::error_code& ec);
 
-inline int accept(native_cm_id_t* cm_id, rdma_conn_param* conn_param,
-                  asio::error_code& ec) {
-  if (cm_id == nullptr) {
-    ec = asio::error::bad_descriptor;
-    return -1;
-  }
-  int const rc = ::rdma_accept(cm_id, conn_param);
-  if (rc) {
-    ec = last_system_error();
-  }
-  else {
-    ec.clear();
-  }
-  return rc;
-}
+ASIO_DECL int accept(native_cm_id_t* cm_id, rdma_conn_param* conn_param,
+                     asio::error_code& ec);
 
-inline int disconnect(native_cm_id_t* cm_id, asio::error_code& ec) {
-  if (cm_id == nullptr) {
-    ec = asio::error::bad_descriptor;
-    return -1;
-  }
-  int const rc = ::rdma_disconnect(cm_id);
-  if (rc) {
-    ec = last_system_error();
-  }
-  else {
-    ec.clear();
-  }
-  return rc;
-}
+ASIO_DECL int disconnect(native_cm_id_t* cm_id, asio::error_code& ec);
 
 // Pull one CM event off the channel. On EAGAIN (no event yet) ec stays clear
 // and *out_event is null --the caller keeps the op armed on the fd.
-inline int get_cm_event(native_event_channel_t* channel,
-                        native_cm_event_t** out_event, asio::error_code& ec) {
-  *out_event = nullptr;
-  int const rc = ::rdma_get_cm_event(channel, out_event);
-  if (rc != 0 && errno != EAGAIN) {
-    ec = last_system_error();
-  }
-  else {
-    ec.clear();
-  }
-  return rc;
-}
+ASIO_DECL int get_cm_event(native_event_channel_t* channel,
+                           native_cm_event_t** out_event, asio::error_code& ec);
 
 // Drain + ack every currently-queued CM event on a (non-blocking) channel.
 // Must be called before rdma_destroy_id on teardown: rdma_destroy_id blocks
@@ -206,24 +66,11 @@ inline int get_cm_event(native_event_channel_t* channel,
 // rdma_disconnect so the peer gets a DREQ instead of an abrupt destroy. Only
 // fires in that narrow race window; on the normal path ESTABLISHED was already
 // consumed by the connect/accept op. See docs/cancellation_stage1_object.md A.7.
-inline void drain_cm_events(native_event_channel_t* channel,
-                            native_cm_id_t* graceful_cm_id = nullptr) {
-  if (channel == nullptr) {
-    return;
-  }
-  asio::error_code ec;
-  for (;;) {
-    native_cm_event_t* event = nullptr;
-    if (get_cm_event(channel, &event, ec) != 0) {
-      break;  // EAGAIN (drained) or a hard error -- stop either way
-    }
-    unique_rdma_cm_event_ptr acked{ event };  // deleter acks on scope exit
-    if (graceful_cm_id != nullptr &&
-        acked->event == RDMA_CM_EVENT_ESTABLISHED) {
-      asio::error_code ignored;
-      disconnect(graceful_cm_id, ignored);
-    }
-  }
-}
+ASIO_DECL void drain_cm_events(native_event_channel_t* channel,
+                               native_cm_id_t* graceful_cm_id = nullptr);
 
 }
+
+#if defined(ASIO_HEADER_ONLY)
+# include "rdma/ibv/detail/impl/ibv_ops_cm.ipp"
+#endif

@@ -4,6 +4,8 @@
 #include <cassert>
 #include <cstddef>
 #include <functional>
+
+#include "asio/detail/config.hpp"
 #include <memory>
 #include <optional>
 #include <string>
@@ -78,8 +80,8 @@ struct ibv_device_t {
   std::optional<asio::ip::address> v4_address_;
   std::optional<asio::ip::address> v6_address_;
 
-  asio::ip::address get_v4_address() const;
-  asio::ip::address get_v6_address() const;
+  ASIO_DECL asio::ip::address get_v4_address() const;
+  ASIO_DECL asio::ip::address get_v6_address() const;
 };
 using ibv_device_ptr = std::shared_ptr<ibv_device_t>;
 

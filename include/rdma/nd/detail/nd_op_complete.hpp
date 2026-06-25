@@ -1,5 +1,6 @@
 #pragma once
 
+#include "asio/detail/config.hpp"  // ASIO_DECL / ASIO_HEADER_ONLY
 #include "rdma/nd/detail/nd_op_base.hpp"
 
 namespace asio::rdma::detail {
@@ -24,20 +25,13 @@ public:
   }
 
 private:
-  static void do_complete(void* owner, asio::detail::operation* base_op,
-                          [[maybe_unused]]asio::error_code const& ec,
-                          [[maybe_unused]]std::size_t bytes_transferred) {
-    nd_complete_op* o = static_cast<nd_complete_op*>(base_op);
-    auto* op = o->op_;
-    assert(op);
-
-    // ptr object for destruct and free operation
-    ptr p = {nullptr, o, o};
-    p.reset();
-
-    // callback
-    op->complete(owner);
-  }
+  ASIO_DECL static void do_complete(void* owner, asio::detail::operation* base_op,
+                                    asio::error_code const& ec,
+                                    std::size_t bytes_transferred);
 };
 
 }
+
+#if defined(ASIO_HEADER_ONLY)
+# include "rdma/nd/detail/impl/nd_op_complete.ipp"
+#endif

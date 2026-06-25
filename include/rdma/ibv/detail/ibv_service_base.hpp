@@ -1,5 +1,6 @@
 #pragma once
 
+#include "asio/detail/config.hpp"  // ASIO_DECL / ASIO_HEADER_ONLY
 #include "asio/detail/mutex.hpp"
 #include "asio/detail/reactor.hpp"
 #include "asio/detail/scheduler.hpp"
@@ -25,33 +26,14 @@ protected:
   // Baseline success ec passed to reactor_op ctors.
   asio::error_code success_ec_;
 
-  explicit ibv_service_base(asio::execution_context& context)
-      : reactor_(asio::use_service<asio::detail::reactor>(context))
-      , scheduler_(asio::use_service<asio::detail::scheduler>(context))
-      , mutex_()
-      , impl_list_(nullptr)
-      , success_ec_() {
-    // Install the reactor as the scheduler's task (epoll loop). asio's own
-    // reactive service bases do this; without it the scheduler parks on its
-    // condition variable and never calls epoll_wait.
-    reactor_.init_task();
-  }
+  ASIO_DECL explicit ibv_service_base(asio::execution_context& context);
 
-  void base_construct(base_implementation_type& impl) {
-    asio::detail::mutex::scoped_lock lock(mutex_);
-    do_insert(impl);
-  }
+  ASIO_DECL void base_construct(base_implementation_type& impl);
 
-  void base_move_construct(base_implementation_type& impl,
-                           base_implementation_type& /*other_impl*/) {
-    asio::detail::mutex::scoped_lock lock(mutex_);
-    do_insert(impl);
-  }
+  ASIO_DECL void base_move_construct(base_implementation_type& impl,
+                                     base_implementation_type& other_impl);
 
-  void base_destroy(base_implementation_type& impl) {
-    asio::detail::mutex::scoped_lock lock(mutex_);
-    do_remove(impl);
-  }
+  ASIO_DECL void base_destroy(base_implementation_type& impl);
 
   template <typename ImplType, typename Destroyer>
   void base_shutdown(Destroyer const& destroyer) {
@@ -63,28 +45,13 @@ protected:
     }
   }
 
-  void do_insert(base_implementation_type& impl) {
-    impl.next_ = impl_list_;
-    impl.prev_ = nullptr;
-    if (impl_list_) {
-      impl_list_->prev_ = &impl;
-    }
-    impl_list_ = &impl;
-  }
+  ASIO_DECL void do_insert(base_implementation_type& impl);
 
-  void do_remove(base_implementation_type& impl) {
-    if (impl_list_ == &impl) {
-      impl_list_ = impl.next_;
-    }
-    if (impl.prev_) {
-      impl.prev_->next_ = impl.next_;
-    }
-    if (impl.next_) {
-      impl.next_->prev_ = impl.prev_;
-    }
-    impl.next_ = nullptr;
-    impl.prev_ = nullptr;
-  }
+  ASIO_DECL void do_remove(base_implementation_type& impl);
 };
 
 }
+
+#if defined(ASIO_HEADER_ONLY)
+# include "rdma/ibv/detail/impl/ibv_service_base.ipp"
+#endif

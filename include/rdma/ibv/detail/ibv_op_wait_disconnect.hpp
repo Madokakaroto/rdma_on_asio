@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "asio/detail/bind_handler.hpp"
+#include "asio/detail/config.hpp"  // ASIO_DECL / ASIO_HEADER_ONLY
 #include "asio/detail/fenced_block.hpp"
 #include "asio/detail/handler_alloc_helpers.hpp"
 #include "asio/detail/handler_work.hpp"
@@ -35,42 +36,13 @@ class ibv_wait_disconnect_op_base : public ibv_op_cm {
 protected:
   std::atomic<bool>* peer_closed_;  // connector's latch, set on the terminal event
 
-  ibv_wait_disconnect_op_base(asio::error_code const& success_ec,
-                              native_event_channel_t* channel,
-                              std::atomic<bool>* peer_closed,
-                              func_type complete_func)
-      : ibv_op_cm(success_ec, channel, &do_perform, complete_func)
-      , peer_closed_(peer_closed) {
-  }
+  ASIO_DECL ibv_wait_disconnect_op_base(asio::error_code const& success_ec,
+                                        native_event_channel_t* channel,
+                                        std::atomic<bool>* peer_closed,
+                                        func_type complete_func);
 
 private:
-  static status do_perform(asio::detail::reactor_op* base) {
-    auto* op = static_cast<ibv_wait_disconnect_op_base*>(base);
-    unique_rdma_cm_event_ptr event{};  // deleter acks on scope exit
-    if (op->get_cm_event(event)) {
-      return status::done;  // hard error pulling the event
-    }
-    if (!event) {
-      return status::not_done;  // EAGAIN: no event yet, stay armed
-    }
-    switch (event->event) {
-      case RDMA_CM_EVENT_DISCONNECTED:
-        if (op->peer_closed_) {
-          op->peer_closed_->store(true, std::memory_order_release);
-        }
-        op->ec_ = make_error_code(rdma_errc::disconnected);
-        return status::done;
-      case RDMA_CM_EVENT_DEVICE_REMOVAL:
-        if (op->peer_closed_) {
-          op->peer_closed_->store(true, std::memory_order_release);
-        }
-        op->ec_ = make_error_code(rdma_errc::device_removed);
-        return status::done;
-      default:
-        // TIMEWAIT_EXIT / ADDR_CHANGE / etc: acked above, keep waiting.
-        return status::not_done;
-    }
-  }
+  ASIO_DECL static status do_perform(asio::detail::reactor_op* base);
 };
 
 template <typename Handler, typename IoExecutor>
@@ -124,3 +96,7 @@ private:
 }
 
 #include "asio/detail/pop_options.hpp"
+
+#if defined(ASIO_HEADER_ONLY)
+# include "rdma/ibv/detail/impl/ibv_op_wait_disconnect.ipp"
+#endif
