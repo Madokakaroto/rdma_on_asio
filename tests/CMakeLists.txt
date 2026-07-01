@@ -197,6 +197,7 @@ if(RDMA_BACKEND STREQUAL "nd")
           test_nd_use_device
           test_nd_refactored_compile
           test_nd_connector_listener
+          test_nd_socket_echo_without_rdma_io
           test_nd_echo
           test_nd_echo_poll
           test_nd_wait_disconnect
@@ -214,6 +215,10 @@ if(RDMA_BACKEND STREQUAL "nd")
   rdma_add_ctest(integration_nd_use_device test_nd_use_device "unit;nd")
   rdma_add_ctest(integration_nd_connector_listener
                  test_nd_connector_listener "unit;nd")
+  rdma_add_ctest(integration_nd_socket_echo_without_rdma_io
+                 test_nd_socket_echo_without_rdma_io "unit;nd;socket")
+  rdma_set_hardware_ctest_properties(
+      integration_nd_socket_echo_without_rdma_io 20)
   rdma_add_ctest(integration_nd_wait_disconnect
                  test_nd_wait_disconnect "unit;nd;race"
                  ${RDMA_TEST_WAIT_DISCONNECT_PORT})
