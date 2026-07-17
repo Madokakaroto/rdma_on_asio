@@ -14,8 +14,12 @@ void use_device(asio::io_context& io_ctx, ibv_device_ptr const& device,
     ec = make_error_code(rdma_errc::already_registered);
     return;
   }
-  if (!device) {
+  if (!device || !device->context_) {
     ec = make_error_code(rdma_errc::invalid_device);
+    return;
+  }
+  if (!detail::is_config_compatible(config, device->attr_)) {
+    ec = make_error_code(rdma_errc::invalid_config);
     return;
   }
   auto const effective = detail::derive_effective_config(config, device->attr_);

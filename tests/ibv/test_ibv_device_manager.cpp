@@ -1,5 +1,7 @@
 #include <cassert>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 #include <system_error>
 
 #include "rdma/rdma.hpp"
@@ -38,11 +40,28 @@ void test_get_device_with_strict_config() {
                "nullptr\n";
 }
 
+void test_explicit_device_rejects_incompatible_config() {
+  auto device = asio::rdma::ibv_device_manager_t::instance()
+                    .get_first_available_device({});
+  if (!device) {
+    std::cout << "[SKIP] invalid explicit config: no device\n";
+    return;
+  }
+  asio::io_context io;
+  asio::rdma::ibv_config_t config{};
+  config.cqe_ = (std::numeric_limits<std::uint32_t>::max)();
+  asio::error_code ec;
+  asio::rdma::use_device(io, device, config, ec);
+  assert(ec == asio::rdma::rdma_errc::invalid_config);
+  std::cout << "[PASS] explicit device rejects incompatible config\n";
+}
+
 int main() {
   try {
     test_singleton();
     test_get_first_available_device();
     test_get_device_with_strict_config();
+    test_explicit_device_rejects_incompatible_config();
     std::cout << "\nAll ibv_device_manager tests passed.\n";
     return 0;
   }

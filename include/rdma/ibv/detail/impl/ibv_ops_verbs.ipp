@@ -75,7 +75,7 @@ void ack_cq_events(native_cq_t* cq, unsigned int n) {
 }
 
 native_mr_t* reg_mr(native_pd_t* pd, void* addr, std::size_t length,
-                    mr_acccess_flag_t flag, int extra_flag,
+                    mr_access_flag_t flag, int extra_flag,
                     asio::error_code& ec) {
   // Default to a permissive access set covering send/recv + RDMA read/write.
   int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |

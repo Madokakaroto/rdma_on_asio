@@ -84,6 +84,10 @@ public:
   BufferSequence const& get_buffer_sequence() const noexcept {
     return buffer_seq_;
   }
+
+  void set_posted_bytes(std::size_t bytes) noexcept {
+    bytes_transferred_ = bytes;
+  }
 };
 
 template <typename BufferSequence>

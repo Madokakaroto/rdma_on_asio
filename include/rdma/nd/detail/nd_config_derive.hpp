@@ -16,9 +16,10 @@ inline constexpr size_type default_max_recv_sge = 4;
 ASIO_DECL nd_config_t derive_effective_config(nd_config_t const& user_config,
                                               native_context_config_t const& caps);
 
-// Device-selection compatibility lives in detail::is_valid_adapter (nd_device_impl.hpp),
-// which the device manager uses. (The former is_config_compatible here was only used by the
-// removed auto-discover use_device overload.)
+ASIO_DECL bool is_config_compatible(nd_config_t const& config,
+                                    native_context_config_t const& caps);
+
+// Device selection additionally checks that an adapter object is usable.
 
 }
 

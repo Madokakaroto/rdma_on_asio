@@ -46,8 +46,12 @@ void async_overloads_compile()
 
   auto send_op = qp.async_send(send_buffers, asio::deferred);
   auto recv_op = qp.async_recv(recv_buffers, asio::deferred);
-  auto write_op = qp.async_write(send_buffers, remote, asio::deferred);
-  auto read_op = qp.async_read(recv_buffers, remote, asio::deferred);
+  auto write_op = qp.async_write(
+      send_buffers, rdma::rdma_remote_addr_t{remote.addr_, remote.token_},
+      asio::deferred);
+  auto read_op = qp.async_read(
+      recv_buffers, rdma::rdma_remote_addr_t{remote.addr_, remote.token_},
+      asio::deferred);
 
   auto connect_with_reply =
       connector.async_connect(qp, endpoint, asio::const_buffer{},
@@ -58,6 +62,9 @@ void async_overloads_compile()
   auto accept_with_data =
       connector.async_accept(qp, asio::const_buffer{}, asio::deferred);
   auto accept_no_data = connector.async_accept(qp, asio::deferred);
+  auto move_accept_with_data =
+      connector.async_accept(io, asio::const_buffer{}, asio::deferred);
+  auto move_accept_no_data = connector.async_accept(io, asio::deferred);
   auto wait_disconnect = connector.async_wait_disconnect(asio::deferred);
 
   auto get_connection_return =
@@ -74,6 +81,8 @@ void async_overloads_compile()
   (void)connect_no_reply;
   (void)accept_with_data;
   (void)accept_no_data;
+  (void)move_accept_with_data;
+  (void)move_accept_no_data;
   (void)wait_disconnect;
   (void)get_connection_return;
   (void)get_connection_fill;

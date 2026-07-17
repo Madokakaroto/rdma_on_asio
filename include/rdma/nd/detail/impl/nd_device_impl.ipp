@@ -19,10 +19,11 @@ namespace asio::rdma::detail {
 
 HANDLE create_overlapped_file(native_context_t* context, asio::error_code& ec) {
   assert(context);
-  HANDLE result;
-  auto const hr = context->CreateOverlappedFile(&result);
-  ec = static_cast<nd_errc>(hr);
-  return result;
+  return create_overlapped_file_checked(
+      [context](HANDLE* result) {
+        return context->CreateOverlappedFile(result);
+      },
+      ec);
 }
 
 bool is_supported_addr_family(nd2_sockaddr_t const& addr) noexcept {
@@ -136,13 +137,12 @@ std::wstring get_provider_path(WSAPROTOCOL_INFOW const& proto,
   std::wstring temp{};
   temp.resize(len);
   res = WSCGetProviderPath((GUID*)&proto.ProviderId, temp.data(), &len, &err);
-  if (res != 0) {
-    if (res == WSAEINVAL) {
+  if (res == SOCKET_ERROR) {
+    if (err == WSAEINVAL) {
       ec = make_error_code(std::errc::invalid_argument);
     }
-    else  // WSAEFAULT
-    {
-      ec = make_error_code(std::errc::not_enough_memory);
+    else {
+      ec = make_system_error_code(err);
     }
     return {};
   }
@@ -168,21 +168,21 @@ auto create_provider_factory(std::wstring provider_path,
                              WSAPROTOCOL_INFOW const& proto,
                              asio::error_code& ec)
     -> nd_provider_factory_ptr {
-  unique_module_t provier_module{LoadLibraryW(provider_path.c_str())};
-  if (!provier_module) {
+  unique_module_t provider_module{LoadLibraryW(provider_path.c_str())};
+  if (!provider_module) {
     ec = make_system_error_code(::GetLastError());
     return nullptr;
   }
 
   dll_can_unload_now unload = reinterpret_cast<dll_can_unload_now>(
-      GetProcAddress(provier_module.get(), "DllCanUnloadNow"));
+      GetProcAddress(provider_module.get(), "DllCanUnloadNow"));
   if (!unload) {
     ec = make_system_error_code(::GetLastError());
     return nullptr;
   }
 
   dll_get_class_object getclassobj = reinterpret_cast<dll_get_class_object>(
-      GetProcAddress(provier_module.get(), "DllGetClassObject"));
+      GetProcAddress(provider_module.get(), "DllGetClassObject"));
   if (!getclassobj) {
     ec = make_system_error_code(::GetLastError());
     return nullptr;
@@ -200,7 +200,7 @@ auto create_provider_factory(std::wstring provider_path,
   auto provider_factory = std::make_shared<nd_provider_factory_t>();
   provider_factory->proto_ = proto;
   provider_factory->module_name_ = std::move(provider_path);
-  provider_factory->module_ = std::move(provier_module);
+  provider_factory->module_ = std::move(provider_module);
   provider_factory->unload_ = unload;
   provider_factory->factory_ = std::move(class_factory);
   return provider_factory;
@@ -208,15 +208,15 @@ auto create_provider_factory(std::wstring provider_path,
 
 auto create_provider(nd_provider_factory_t const& factory, asio::error_code& ec)
     -> nd2_provider_ptr {
-  nd2_provider_ptr provdier{};
+  nd2_provider_ptr provider{};
   HRESULT const hr = factory.factory_->CreateInstance(
       nullptr, IID_IND2Provider,
-      reinterpret_cast<LPVOID*>(provdier.GetAddressOf()));
+      reinterpret_cast<LPVOID*>(provider.GetAddressOf()));
   if (hr != S_OK) {
     ec = make_system_error_code(hr);
     return nullptr;
   }
-  return provdier;
+  return provider;
 }
 
 void enumerate_addr_list(nd_provider_t const& provider,
@@ -317,13 +317,13 @@ UINT64 resolve_adapter_id(nd2_provider_ptr const& provider, sockaddr const* addr
   return adapter_id;
 }
 
-ND2_ADAPTER_INFO query_adapter_info(nd2_adapter_ptr const& adaptor,
+ND2_ADAPTER_INFO query_adapter_info(nd2_adapter_ptr const& adapter,
                                     asio::error_code& ec) {
-  assert(adaptor);
+  assert(adapter);
   ND2_ADAPTER_INFO result = {0};
   result.InfoVersion = ND_VERSION_2;
   ULONG linfo = sizeof(result);
-  HRESULT hr = adaptor->Query(&result, &linfo);
+  HRESULT hr = adapter->Query(&result, &linfo);
   if (hr != ND_SUCCESS) {
     ec = make_nd_error_code(hr);
   }
@@ -415,10 +415,11 @@ nd_adapter_ptr create_device(nd_provider_ptr const& provider,
   }
   auto pd = std::make_unique<native_pd_t>();
   pd->context_ = adapter_ptr.Get();
-  pd->sync_handle_.reset(create_overlapped_file(adapter_ptr.Get(), ec));
+  auto sync_handle = create_overlapped_file(adapter_ptr.Get(), ec);
   if (ec) {
     return nullptr;
   }
+  pd->sync_handle_.reset(sync_handle);
   result->adapter_ = adapter_ptr;
   result->pd_ = std::move(pd);
   result->adapter_id_ = adapter_id;

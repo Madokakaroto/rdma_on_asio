@@ -20,6 +20,7 @@
 #include "rdma/ibv/detail/ibv_service_base.hpp"
 #include "rdma/ibv/ibv_error.hpp"
 #include "rdma/ibv/ibv_types.hpp"
+#include "rdma/detail/move_accept_handler.hpp"
 
 namespace asio::rdma::detail {
 
@@ -257,6 +258,12 @@ public:
       p.v = p.p = 0;
       return;
     }
+    if (!is_open(impl)) {
+      p.p->ec_ = make_error_code(rdma_errc::invalid_handle);
+      this->reactor_.post_immediate_completion(p.p, false);
+      p.v = p.p = 0;
+      return;
+    }
     if (private_data.size() > max_outgoing_private_data) {
       p.p->ec_ = make_error_code(rdma_errc::private_data_too_large);
       this->reactor_.post_immediate_completion(p.p, false);
@@ -272,6 +279,54 @@ public:
     }
     // Per-op cancellation (cancelling accept tears down the half-open connection;
     // see docs/cancellation_stage2_control_single_op.md).
+    arm_cm_cancellation(cancel_slot, this->reactor_, impl.cm_reactor_data_,
+                        impl.cm_channel_->fd, p.p);
+    start_accept_op(impl, std::move(create_qp), private_data, p.p);
+    p.v = p.p = 0;
+  }
+
+  template <typename Handler, typename IoExecutor>
+  void async_move_accept(implementation_type& impl,
+                         asio::error_code const& bind_ec,
+                         asio::const_buffer private_data,
+                         Handler& handler, IoExecutor const& io_ex) {
+    auto cancel_slot = asio::get_associated_cancellation_slot(handler);
+    using op = ibv_accept_op<Handler, IoExecutor>;
+    typename op::ptr p = {asio::detail::addressof(handler),
+                          op::ptr::allocate(handler), 0};
+    p.p = new (p.v) op{this->success_ec_, impl.cm_id_.get(),
+                       &impl.connect_state_, effective_config().min_rnr_timer_,
+                       handler, io_ex};
+    auto complete_now = [&](asio::error_code ec) {
+      p.p->ec_ = ec;
+      this->reactor_.post_immediate_completion(p.p, false);
+      p.v = p.p = 0;
+    };
+
+    if (bind_ec) {
+      complete_now(bind_ec);
+      return;
+    }
+    if (!device_registered()) {
+      complete_now(make_error_code(rdma_errc::device_not_registered));
+      return;
+    }
+    if (!is_open(impl)) {
+      complete_now(make_error_code(rdma_errc::invalid_handle));
+      return;
+    }
+    if (private_data.size() > max_outgoing_private_data) {
+      complete_now(make_error_code(rdma_errc::private_data_too_large));
+      return;
+    }
+    if (impl.connect_state_.load(std::memory_order_acquire) !=
+        connect_state::idle) {
+      complete_now(make_error_code(rdma_errc::connector_terminal));
+      return;
+    }
+
+    auto create_qp =
+        p.p->completion_handler().queue_pair().make_create_qp_fn();
     arm_cm_cancellation(cancel_slot, this->reactor_, impl.cm_reactor_data_,
                         impl.cm_channel_->fd, p.p);
     start_accept_op(impl, std::move(create_qp), private_data, p.p);

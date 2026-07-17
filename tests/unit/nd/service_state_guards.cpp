@@ -1,4 +1,6 @@
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <system_error>
 #include <utility>
 
@@ -6,6 +8,7 @@
 
 #include "asio/buffer.hpp"
 #include "asio/io_context.hpp"
+#include "asio/system_executor.hpp"
 #include "rdma/nd/nd_connector.hpp"
 #include "rdma/nd/nd_listener.hpp"
 #include "rdma/nd/nd_mr.hpp"
@@ -92,6 +95,48 @@ void default_queue_pair_state()
   ASIO_CHECK(!qp.is_bound());
   ASIO_CHECK(qp.bound_type() == rdma::completion_mode::none);
   ASIO_CHECK(qp.native_handle() == nullptr);
+}
+
+void invalid_windows_handles_are_not_closable()
+{
+  ASIO_CHECK(!rdma::detail::is_closable_handle(nullptr));
+  ASIO_CHECK(!rdma::detail::is_closable_handle(INVALID_HANDLE_VALUE));
+  ASIO_CHECK(rdma::detail::is_closable_handle(
+      reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(1))));
+}
+
+void create_overlapped_file_checked_has_strict_failure_contract()
+{
+  asio::error_code ec;
+  auto handle = rdma::detail::create_overlapped_file_checked(
+      [](HANDLE*) { return E_FAIL; }, ec);
+  ASIO_CHECK(handle == nullptr);
+  ASIO_CHECK(ec == rdma::make_nd_error_code(E_FAIL));
+
+  handle = rdma::detail::create_overlapped_file_checked(
+      [](HANDLE* out) {
+        *out = INVALID_HANDLE_VALUE;
+        return E_FAIL;
+      }, ec);
+  ASIO_CHECK(handle == nullptr);
+  ASIO_CHECK(ec == rdma::make_nd_error_code(E_FAIL));
+
+  handle = rdma::detail::create_overlapped_file_checked(
+      [](HANDLE* out) {
+        *out = INVALID_HANDLE_VALUE;
+        return S_OK;
+      }, ec);
+  ASIO_CHECK(handle == nullptr);
+  ASIO_CHECK(ec == rdma::rdma_errc::invalid_handle);
+
+  auto expected = reinterpret_cast<HANDLE>(static_cast<std::uintptr_t>(1));
+  handle = rdma::detail::create_overlapped_file_checked(
+      [expected](HANDLE* out) {
+        *out = expected;
+        return S_OK;
+      }, ec);
+  ASIO_CHECK(handle == expected);
+  ASIO_CHECK(!ec);
 }
 
 void invalid_assign_handle()
@@ -230,6 +275,91 @@ void async_accept_without_use_device_completes_device_not_registered()
   ASIO_CHECK(got == rdma::rdma_errc::device_not_registered);
 }
 
+void move_accept_without_use_device_returns_empty_queue_pair()
+{
+  asio::io_context io;
+  rdma::nd_connector<rdma::tcp> connector(io);
+  bool called = false;
+  bool returned_inline = true;
+  asio::error_code got;
+
+  connector.async_accept(
+      io, asio::const_buffer{},
+      [&](asio::error_code ec, rdma::nd_queue_pair qp) {
+        called = true;
+        got = ec;
+        ASIO_CHECK(!returned_inline);
+        ASIO_CHECK(!qp.is_bound());
+        ASIO_CHECK(qp.native_handle() == nullptr);
+      });
+  returned_inline = false;
+
+  ASIO_CHECK(!called);
+  ASIO_CHECK(io.run() == 1);
+  ASIO_CHECK(called);
+  ASIO_CHECK(got == rdma::rdma_errc::device_not_registered);
+}
+
+void started_accept_failure_makes_connector_terminal()
+{
+  std::atomic<rdma::detail::connect_state> state{
+      rdma::detail::connect_state::connecting};
+  bool called = false;
+  auto handler = [&](asio::error_code ec) {
+    called = true;
+    ASIO_CHECK(ec == rdma::nd_errc::connection_aborted);
+  };
+  using handler_type = decltype(handler);
+  using op_type = rdma::detail::nd_accept_op<handler_type,
+                                               asio::system_executor>;
+  typename op_type::ptr p = {asio::detail::addressof(handler),
+                             op_type::ptr::allocate(handler), 0};
+  p.p = new (p.v) op_type{nullptr, &state, handler,
+                          asio::system_executor{}};
+  auto* op = p.p;
+  op->mark_started();
+  p.v = p.p = nullptr;
+
+  int owner = 0;
+  op->complete(&owner, make_error_code(rdma::nd_errc::connection_aborted), 0);
+
+  ASIO_CHECK(called);
+  ASIO_CHECK(state.load() == rdma::detail::connect_state::closed);
+}
+
+void connect_op_shutdown_does_not_dereference_connector()
+{
+  std::atomic<rdma::detail::connect_state> state{
+      rdma::detail::connect_state::connecting};
+  bool called = false;
+  auto handler = [&](asio::error_code, std::size_t) { called = true; };
+  using handler_type = decltype(handler);
+  using op_type = rdma::detail::nd_connect_op<handler_type,
+                                               asio::system_executor>;
+  typename op_type::ptr p = {asio::detail::addressof(handler),
+                             op_type::ptr::allocate(handler), 0};
+  auto* invalid_connector = reinterpret_cast<IND2Connector*>(
+      static_cast<std::uintptr_t>(1));
+  p.p = new (p.v) op_type{invalid_connector, &state, asio::mutable_buffer{},
+                          handler, asio::system_executor{}};
+  auto* op = p.p;
+  p.v = p.p = nullptr;
+
+  op->destroy();
+
+  ASIO_CHECK(!called);
+  ASIO_CHECK(state.load() == rdma::detail::connect_state::connecting);
+}
+
+// Compile the poll-mode overload without requiring a physical device in this
+// unit test. Runtime poll-mode success is covered by the hardware echo suite.
+void compile_poll_move_accept(rdma::nd_connector<rdma::tcp>& connector,
+                              rdma::nd_completion_queue& cq)
+{
+  connector.async_accept(
+      cq, [](asio::error_code, rdma::nd_queue_pair) {});
+}
+
 void use_device_null_device()
 {
   asio::io_context io;
@@ -262,12 +392,17 @@ ASIO_TEST_SUITE
   ASIO_TEST_CASE(open_and_bind_without_use_device)
   ASIO_TEST_CASE(throwing_overloads_without_use_device)
   ASIO_TEST_CASE(default_queue_pair_state)
+  ASIO_TEST_CASE(invalid_windows_handles_are_not_closable)
+  ASIO_TEST_CASE(create_overlapped_file_checked_has_strict_failure_contract)
   ASIO_TEST_CASE(invalid_assign_handle)
   ASIO_TEST_CASE(listener_unopened_guards)
   ASIO_TEST_CASE(connector_unopened_disconnect_guards)
   ASIO_TEST_CASE(listener_unopened_async_get_connection_guards)
   ASIO_TEST_CASE(async_connect_without_use_device_completes_device_not_registered)
   ASIO_TEST_CASE(async_accept_without_use_device_completes_device_not_registered)
+  ASIO_TEST_CASE(move_accept_without_use_device_returns_empty_queue_pair)
+  ASIO_TEST_CASE(started_accept_failure_makes_connector_terminal)
+  ASIO_TEST_CASE(connect_op_shutdown_does_not_dereference_connector)
   ASIO_TEST_CASE(use_device_null_device)
   ASIO_TEST_CASE(memory_region_null_device_throws)
 )

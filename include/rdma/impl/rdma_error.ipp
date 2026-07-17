@@ -35,6 +35,10 @@ std::string rdma_error_category::message(int status) const {
       return "RDMA outgoing private_data exceeds the CM cap";
     case rdma_errc::address_family_not_supported:
       return "RDMA device has no local address of the requested family";
+    case rdma_errc::buffer_too_large:
+      return "RDMA buffer length exceeds the supported native limit";
+    case rdma_errc::invalid_config:
+      return "RDMA configuration exceeds device capabilities or is incompatible";
     default:
       return "UNKNOWN_RDMA_ERROR";
   }

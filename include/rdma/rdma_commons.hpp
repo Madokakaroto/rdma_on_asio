@@ -10,7 +10,7 @@
 namespace asio::rdma {
 
 // command types
-enum mr_acccess_flag_t {
+enum mr_access_flag_t {
   mr_access_local_write,
   mr_access_remote_read,
   mr_access_remote_write,

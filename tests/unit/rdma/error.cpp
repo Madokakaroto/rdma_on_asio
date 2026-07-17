@@ -49,6 +49,16 @@ void no_success_enumerator()
   ASIO_CHECK(static_cast<int>(rdma::rdma_errc::no_available_device) != 0);
 }
 
+void shared_validation_errors_are_public()
+{
+  asio::error_code large = rdma::rdma_errc::buffer_too_large;
+  asio::error_code config = rdma::rdma_errc::invalid_config;
+  ASIO_CHECK(large.category() == rdma::get_rdma_error_category());
+  ASIO_CHECK(config.category() == rdma::get_rdma_error_category());
+  ASIO_CHECK(large.message().find("buffer") != std::string::npos);
+  ASIO_CHECK(config.message().find("configuration") != std::string::npos);
+}
+
 ASIO_TEST_SUITE
 (
   "rdma/error",
@@ -56,4 +66,5 @@ ASIO_TEST_SUITE
   ASIO_TEST_CASE(messages_are_backend_neutral)
   ASIO_TEST_CASE(conversion_and_comparison)
   ASIO_TEST_CASE(no_success_enumerator)
+  ASIO_TEST_CASE(shared_validation_errors_are_public)
 )

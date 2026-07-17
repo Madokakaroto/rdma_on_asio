@@ -17,10 +17,11 @@ native_pd_t* allocate_pd(native_context_t* context, asio::error_code& ec) {
     return nullptr;
   }
 
-  unique_handle_t handle{create_overlapped_file(context, ec)};
+  auto raw_handle = create_overlapped_file(context, ec);
   if (ec) {
     return nullptr;
   }
+  unique_handle_t handle{raw_handle};
 
   auto new_pd = std::make_unique<native_pd_t>();
 #ifndef __cpp_exceptions
@@ -82,7 +83,7 @@ native_qp_t* create_qp(native_pd_t* pd,
 }
 
 /// memory region ops
-ULONG to_native_access_flag(mr_acccess_flag_t access_flag,
+ULONG to_native_access_flag(mr_access_flag_t access_flag,
                             int extra_access_flag) {
   ULONG native_access_flag = ND_MR_FLAG_ALLOW_LOCAL_WRITE |
                              ND_MR_FLAG_ALLOW_REMOTE_WRITE |
@@ -110,7 +111,7 @@ ULONG to_native_access_flag(mr_acccess_flag_t access_flag,
 
 // register memory region
 native_mr_t* reg_mr(native_pd_t* pd, void* addr, size_t length,
-                    mr_acccess_flag_t access_flag, int extra_access_flag,
+                    mr_access_flag_t access_flag, int extra_access_flag,
                     asio::error_code& ec) {
   assert(pd && pd->context_);
   nd2_memory_region_ptr result{};

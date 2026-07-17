@@ -51,6 +51,8 @@ public:
       , work_(handler_, io_ex) {
   }
 
+  Handler& completion_handler() noexcept { return handler_; }
+
 private:
   // Terminal failure: claim `closed` unless disconnect() beat us. Returns true
   // if WE claimed it (keep the real error), false if disconnect() already won.

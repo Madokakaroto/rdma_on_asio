@@ -53,7 +53,7 @@ defines the `rdma_*` names (incl. `rdma_queue_pair`) on top; `rdma.hpp` includes
 
 ```
 rdma.hpp                — umbrella entry: pulls the active backend + all of the below
-rdma_commons.hpp        — rdma_config_t, rdma_remote_addr_t, mr_acccess_flag_t, buffer tags
+rdma_commons.hpp        — rdma_config_t, rdma_remote_addr_t, mr_access_flag_t, buffer tags
                           (backend-independent VALUES; both backends' impl types include it)
 rdma_types.hpp          — backend-agnostic ALIASES: rdma_connector<PS>/rdma_listener<PS>
                           (template aliases), rdma_queue_pair, rdma_completion_queue,

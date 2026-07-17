@@ -49,6 +49,25 @@ nd_config_t derive_effective_config(nd_config_t const& user_config,
   return effective;
 }
 
+bool is_config_compatible(nd_config_t const& config,
+                          native_context_config_t const& caps) {
+  return (config.cqe_ == 0 || config.cqe_ <= caps.MaxCompletionQueueDepth) &&
+         (config.max_send_wr_ == 0 ||
+          config.max_send_wr_ <= caps.MaxInitiatorQueueDepth) &&
+         (config.max_recv_wr_ == 0 ||
+          config.max_recv_wr_ <= caps.MaxReceiveQueueDepth) &&
+         (config.max_send_sge_ == 0 ||
+          config.max_send_sge_ <= caps.MaxInitiatorSge) &&
+         (config.max_recv_sge_ == 0 ||
+          config.max_recv_sge_ <= caps.MaxReceiveSge) &&
+         (config.max_inline_data_ == 0 ||
+          config.max_inline_data_ <= caps.MaxInlineDataSize) &&
+         (config.inbound_read_limit_ == 0 ||
+          config.inbound_read_limit_ <= caps.MaxInboundReadLimit) &&
+         (config.outbound_read_limit_ == 0 ||
+          config.outbound_read_limit_ <= caps.MaxOutboundReadLimit);
+}
+
 }  // namespace asio::rdma::detail
 
 #include "asio/detail/pop_options.hpp"

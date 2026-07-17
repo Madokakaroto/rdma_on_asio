@@ -12,7 +12,7 @@ namespace asio::rdma {
 using size_type = std::uint32_t;
 using result_type = int;  // verbs return code (0 = ok, non-zero = error)
 
-// mr_acccess_flag_t is shared (rdma/rdma_commons.hpp).
+// mr_access_flag_t is shared (rdma/rdma_commons.hpp).
 
 // Backend config/remote-addr are backend-independent; alias the shared types.
 using ibv_config_t = rdma_config_t;

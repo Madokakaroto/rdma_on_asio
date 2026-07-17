@@ -96,6 +96,24 @@ void zero_caps_stay_zero_for_derived_fields()
   ASIO_CHECK(effective.outbound_read_limit_ == 0);
 }
 
+void compatibility_checks_user_values_against_caps()
+{
+  auto c = large_caps();
+  rdma::nd_config_t valid{};
+  valid.cqe_ = 128;
+  valid.max_send_wr_ = 128;
+  valid.max_recv_wr_ = 128;
+  valid.max_send_sge_ = 4;
+  valid.max_recv_sge_ = 4;
+  valid.inbound_read_limit_ = 2;
+  valid.outbound_read_limit_ = 2;
+  ASIO_CHECK(rdma::detail::is_config_compatible(valid, c));
+
+  auto invalid = valid;
+  invalid.max_recv_wr_ = 999;
+  ASIO_CHECK(!rdma::detail::is_config_compatible(invalid, c));
+}
+
 ASIO_TEST_SUITE
 (
   "nd/config_derive",
@@ -103,4 +121,5 @@ ASIO_TEST_SUITE
   ASIO_TEST_CASE(defaults_respect_small_device_caps)
   ASIO_TEST_CASE(explicit_user_values_are_preserved)
   ASIO_TEST_CASE(zero_caps_stay_zero_for_derived_fields)
+  ASIO_TEST_CASE(compatibility_checks_user_values_against_caps)
 )

@@ -18,11 +18,11 @@ nd_completion_queue::nd_completion_queue(nd_device_ptr const& device,
                      ? effective_config_.cq_poll_batch_
                      : detail::default_cq_poll_batch);
 
-  handle_.reset(
-      detail::create_overlapped_file(device->adapter_.Get(), ec));
+  auto handle = detail::create_overlapped_file(device->adapter_.Get(), ec);
   if (ec) {
     asio::detail::throw_error(ec);
   }
+  handle_.reset(handle);
 
   detail::native_cq_init_attr cq_init_attr{
       .overlapped_handle_ = handle_.get(),
@@ -47,6 +47,7 @@ std::size_t nd_completion_queue::poll() {
 }
 
 std::size_t nd_completion_queue::poll(asio::error_code& ec) {
+  ec.clear();
   std::size_t total = drain_ready();
   ULONG retrieved = 0;
   do {
@@ -70,6 +71,7 @@ std::size_t nd_completion_queue::poll_one() {
 }
 
 std::size_t nd_completion_queue::poll_one(asio::error_code& ec) {
+  ec.clear();
   if (auto* op = pop_ready()) {
     op->complete(this);
     return 1;
@@ -93,7 +95,7 @@ void nd_completion_queue::dispatch_completion(void* owner,
                                               detail::native_wc_t const& wc) {
   if (!wc.RequestContext) return;
   auto* op = reinterpret_cast<detail::rdma_verbs_op_base*>(wc.RequestContext);
-  op->ec_ = static_cast<nd_errc>(wc.Status);
+  op->ec_ = detail::completion_status_to_error(wc.Status);
   if (!op->ec_) {
     if (wc.RequestType != ND2_REQUEST_TYPE::Nd2RequestTypeSend &&
         wc.RequestType != ND2_REQUEST_TYPE::Nd2RequestTypeWrite) {

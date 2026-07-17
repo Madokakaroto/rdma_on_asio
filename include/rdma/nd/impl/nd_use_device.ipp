@@ -15,8 +15,13 @@ void use_device(asio::io_context& io_ctx, nd_device_ptr const& device,
     ASIO_ERROR_LOCATION(ec);
     return;
   }
-  if (!device) {
+  if (!detail::is_valid_adapter(device)) {
     ec = rdma_errc::invalid_device;
+    ASIO_ERROR_LOCATION(ec);
+    return;
+  }
+  if (!detail::is_config_compatible(config, device->info_)) {
+    ec = rdma_errc::invalid_config;
     ASIO_ERROR_LOCATION(ec);
     return;
   }

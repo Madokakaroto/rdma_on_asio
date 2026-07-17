@@ -93,7 +93,8 @@ private:
     asio::detail::op_queue<rdma_verbs_op_base> completed_;
   };
 
-  // Drain the CQ, resolving each work completion to its verbs op.
+  // Drain at most a bounded number of CQ batches, resolving each work
+  // completion to its verbs op.
   ASIO_DECL void poll_into(asio::detail::op_queue<rdma_verbs_op_base>& out);
 
   // Arm (or re-arm) the single poller. To close the post-before-notify race (a WR

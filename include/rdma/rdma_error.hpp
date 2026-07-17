@@ -25,6 +25,10 @@ enum class rdma_errc : int {
   private_data_too_large,
 
   address_family_not_supported,
+
+  // Shared library-level validation errors (ND and ibv).
+  buffer_too_large,
+  invalid_config,
 };
 
 // Non-template implementations live in rdma/impl/rdma_error.ipp:

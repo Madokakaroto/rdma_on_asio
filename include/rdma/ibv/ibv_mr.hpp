@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 
+#include "rdma/detail/mr_range.hpp"
 #include "rdma/rdma_buffer.hpp"
 #include "rdma/ibv/ibv_device.hpp"
 #include "rdma/ibv/ibv_error.hpp"
@@ -29,13 +30,13 @@ class ibv_memory_region {
   detail::unique_ibv_mr_ptr mr_;
   void* addr_;
   std::size_t length_;
-  mr_acccess_flag_t flag_;
+  mr_access_flag_t flag_;
   int extra_flag_;
 
  public:
   explicit ibv_memory_region(ibv_device_ptr const& device, void* addr,
                     std::size_t length,
-                    mr_acccess_flag_t flag = mr_access_remote_write,
+                    mr_access_flag_t flag = mr_access_remote_write,
                     int extra_flag = 0)
       : mr_(throw_reg_mr(device, addr, length, flag, extra_flag))
       , addr_(addr)
@@ -66,19 +67,11 @@ class ibv_memory_region {
   }
 
   bool is_in_mr(void const* addr, std::size_t length) const noexcept {
-    if (!mr_) {
-      return false;
-    }
-    auto const diff = static_cast<char const*>(addr) -
-                      static_cast<char const*>(addr_);
-    if (diff < 0 || static_cast<std::size_t>(diff) >= length_) {
-      return false;
-    }
-    return static_cast<std::size_t>(diff) + length <= length_;
+    return mr_ && detail::mr_offset_of(addr_, length_, addr, length).has_value();
   }
 
   bool is_in_mr(std::size_t offset, std::size_t length) const noexcept {
-    return offset + length <= this->length();
+    return mr_ && detail::mr_contains_offset(length_, offset, length);
   }
 
   void const* addr() const noexcept { return addr_; }
@@ -99,7 +92,7 @@ class ibv_memory_region {
  private:
   static detail::unique_ibv_mr_ptr throw_reg_mr(ibv_device_ptr const& device,
                                                 void* addr, std::size_t length,
-                                                mr_acccess_flag_t flag,
+                                                mr_access_flag_t flag,
                                                 int extra_flag) {
     if (!device || !device->pd_) {
       asio::detail::throw_error(make_error_code(rdma_errc::invalid_device));

@@ -1,5 +1,7 @@
 #include <cassert>
+#include <cstdint>
 #include <iostream>
+#include <limits>
 #include <system_error>
 
 #include "asio/io_context.hpp"
@@ -89,6 +91,23 @@ void test_effective_config() {
             << ")\n";
 }
 
+void test_explicit_device_rejects_incompatible_config() {
+  asio::io_context io_ctx;
+  auto dev = first_device();
+  if (!dev) {
+    std::cout << "[SKIP] invalid explicit config: no device\n";
+    return;
+  }
+  rdma::nd_config_t config{};
+  config.cqe_ = (std::numeric_limits<std::uint32_t>::max)();
+  asio::error_code ec;
+  rdma::use_device(io_ctx, dev, config, ec);
+  assert(ec == rdma::rdma_errc::invalid_config);
+  auto& dev_svc = asio::use_service<rdma::detail::nd_device_service>(io_ctx);
+  assert(!dev_svc.is_registered());
+  std::cout << "[PASS] explicit device rejects incompatible config\n";
+}
+
 int main() {
   try {
     test_get_first_available_device();
@@ -96,6 +115,7 @@ int main() {
     test_use_device_double_init();
     test_use_device_null_device();
     test_effective_config();
+    test_explicit_device_rejects_incompatible_config();
     std::cout << "\nAll nd_use_device tests passed.\n";
     return 0;
   } catch (std::system_error const& e) {

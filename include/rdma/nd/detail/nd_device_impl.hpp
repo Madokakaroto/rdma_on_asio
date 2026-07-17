@@ -164,7 +164,7 @@ ASIO_DECL UINT64 resolve_adapter_id(nd2_provider_ptr const& provider,
                                     sockaddr const* addrin,
                                     std::size_t addr_size,
                                     asio::error_code& ec);
-ASIO_DECL ND2_ADAPTER_INFO query_adapter_info(nd2_adapter_ptr const& adaptor,
+ASIO_DECL ND2_ADAPTER_INFO query_adapter_info(nd2_adapter_ptr const& adapter,
                                               asio::error_code& ec);
 ASIO_DECL std::string query_adapter_name(ND2_ADAPTER_INFO const& info,
                                          sockaddr const* addrin,
@@ -189,6 +189,24 @@ ASIO_DECL bool is_valid_adapter(nd_adapter_ptr const& adapter,
 ASIO_DECL bool is_valid_adapter(nd_adapter_ptr const& adapter,
                                 nd_config_t const& config);
 ASIO_DECL bool is_valid_adapter(nd_adapter_ptr const& adapter);
+
+template <typename CreateFn>
+HANDLE create_overlapped_file_checked(CreateFn&& create,
+                                      asio::error_code& ec) {
+  HANDLE result = nullptr;
+  auto const hr = std::forward<CreateFn>(create)(&result);
+  if (FAILED(hr)) {
+    ec = make_nd_error_code(hr);
+    return nullptr;
+  }
+  if (!is_closable_handle(result)) {
+    ec = make_error_code(rdma_errc::invalid_handle);
+    return nullptr;
+  }
+  ec.clear();
+  return result;
+}
+
 ASIO_DECL HANDLE create_overlapped_file(native_context_t* context,
                                         asio::error_code& ec);
 

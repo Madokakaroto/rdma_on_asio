@@ -18,6 +18,7 @@
 #include "rdma/nd/detail/nd_op_disconnect.hpp"
 #include "rdma/nd/detail/nd_op_wait_disconnect.hpp"
 #include "rdma/nd/detail/nd_config_derive.hpp"
+#include "rdma/detail/move_accept_handler.hpp"
 
 namespace asio::rdma::detail {
 
@@ -238,6 +239,13 @@ public:
       p.v = p.p = 0;
       return;
     }
+    if (!is_open(impl)) {
+      asio::error_code ec = rdma_errc::invalid_handle;
+      this->scheduler_.work_started();
+      this->scheduler_.on_completion(p.p, ec);
+      p.v = p.p = 0;
+      return;
+    }
     if (private_data.size() > max_outgoing_private_data) {
       asio::error_code ec = rdma_errc::private_data_too_large;
       this->scheduler_.work_started();
@@ -260,6 +268,57 @@ public:
       p.v = p.p = 0;
       return;
     }
+    p.p->mark_started();
+    start_accept_op(impl, qp, private_data, p.p);
+    arm_nd_cancellation(cancel_slot, impl.connector_handle_.get(), p.p);
+    p.v = p.p = 0;
+  }
+
+  template <typename Handler, typename IoExecutor>
+  void async_move_accept(implementation_type& impl,
+                         asio::error_code const& bind_ec,
+                         asio::const_buffer private_data,
+                         Handler& handler, IoExecutor const& io_ex) {
+    auto cancel_slot = asio::get_associated_cancellation_slot(handler);
+    using op = nd_accept_op<Handler, IoExecutor>;
+    typename op::ptr p = {asio::detail::addressof(handler),
+                          op::ptr::allocate(handler), 0};
+    p.p = new (p.v) op{impl.connector_.Get(), &impl.connect_state_, handler,
+                       io_ex};
+    auto complete_now = [&](asio::error_code ec) {
+      this->scheduler_.work_started();
+      this->scheduler_.on_completion(p.p, ec);
+      p.v = p.p = 0;
+    };
+
+    if (bind_ec) {
+      complete_now(bind_ec);
+      return;
+    }
+    if (!device_registered()) {
+      complete_now(make_error_code(rdma_errc::device_not_registered));
+      return;
+    }
+    if (!is_open(impl)) {
+      complete_now(make_error_code(rdma_errc::invalid_handle));
+      return;
+    }
+    if (private_data.size() > max_outgoing_private_data) {
+      complete_now(make_error_code(rdma_errc::private_data_too_large));
+      return;
+    }
+    if (impl.connect_state_.load(std::memory_order_acquire) !=
+        connect_state::idle) {
+      complete_now(make_error_code(rdma_errc::connector_terminal));
+      return;
+    }
+
+    auto* qp = p.p->completion_handler().queue_pair().native_handle();
+    if (!qp) {
+      complete_now(make_error_code(rdma_errc::invalid_handle));
+      return;
+    }
+    p.p->mark_started();
     start_accept_op(impl, qp, private_data, p.p);
     arm_nd_cancellation(cancel_slot, impl.connector_handle_.get(), p.p);
     p.v = p.p = 0;
@@ -382,12 +441,12 @@ private:
     }
 
     auto adapter = device_svc_.get_device();
-    impl.connector_handle_.reset(
-        create_overlapped_file(adapter->adapter_.Get(), ec));
+    auto handle = create_overlapped_file(adapter->adapter_.Get(), ec);
     if (ec) {
       ASIO_ERROR_LOCATION(ec);
       return;
     }
+    impl.connector_handle_.reset(handle);
 
     impl.connector_.Attach(
         create_connector(adapter->adapter_.Get(),

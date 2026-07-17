@@ -28,7 +28,11 @@ ibv_completion_queue::ibv_completion_queue(ibv_device_ptr const& device,
 
 std::size_t ibv_completion_queue::poll() {
   asio::error_code ec;
-  return poll(ec);
+  auto const n = poll(ec);
+  if (ec) {
+    asio::detail::throw_error(ec);
+  }
+  return n;
 }
 
 // error_code& overload (parity with nd_completion_queue). ibv_poll_cq returns a
@@ -55,7 +59,11 @@ std::size_t ibv_completion_queue::poll(asio::error_code& ec) {
 
 std::size_t ibv_completion_queue::poll_one() {
   asio::error_code ec;
-  return poll_one(ec);
+  auto const n = poll_one(ec);
+  if (ec) {
+    asio::detail::throw_error(ec);
+  }
+  return n;
 }
 
 std::size_t ibv_completion_queue::poll_one(asio::error_code& ec) {

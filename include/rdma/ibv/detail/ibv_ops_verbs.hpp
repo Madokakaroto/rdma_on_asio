@@ -45,7 +45,7 @@ inline int poll_cq(native_cq_t* cq, int num_entries, native_wc_t* wcs) {
 }
 
 ASIO_DECL native_mr_t* reg_mr(native_pd_t* pd, void* addr, std::size_t length,
-                              mr_acccess_flag_t flag, int extra_flag,
+                              mr_access_flag_t flag, int extra_flag,
                               asio::error_code& ec);
 
 ASIO_DECL int dereg_mr(native_mr_t* mr, asio::error_code& ec);

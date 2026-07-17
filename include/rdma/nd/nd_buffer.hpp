@@ -1,5 +1,7 @@
 #pragma once
 
+#include <limits>
+
 #include "rdma/rdma_buffer.hpp"
 #include "rdma/nd/nd_types.hpp"
 
@@ -9,13 +11,13 @@ namespace asio::rdma::detail {
 
 inline void fill_native_sge(native_sge_t& sge, const_buffer const& buffer) {
   sge.Buffer = const_cast<void*>(buffer.addr());
-  sge.BufferLength = buffer.length();
+  sge.BufferLength = static_cast<decltype(sge.BufferLength)>(buffer.length());
   sge.MemoryRegionToken = buffer.local_key();
 }
 
 inline void fill_native_sge(native_sge_t& sge, mutable_buffer const& buffer) {
   sge.Buffer = buffer.addr();
-  sge.BufferLength = buffer.length();
+  sge.BufferLength = static_cast<decltype(sge.BufferLength)>(buffer.length());
   sge.MemoryRegionToken = buffer.local_key();
 }
 
@@ -27,7 +29,9 @@ inline built_sglist<native_sge_t> build_native_sglist(
 
   auto it = buffer_sequence_begin(bs);
   auto const end = buffer_sequence_end(bs);
-  asio::error_code ec;
+  constexpr auto max_segment =
+      (std::numeric_limits<decltype(native_sge_t::BufferLength)>::max)();
+  constexpr auto max_operation = (std::numeric_limits<std::uint32_t>::max)();
   for (; it != end; ++it) {
     if (max_sge != 0 && built.count >= max_sge) {
       built.too_many_sge = true;
@@ -35,11 +39,19 @@ inline built_sglist<native_sge_t> build_native_sglist(
       built.heap_spilled = sglist.uses_heap();
       return built;
     }
-    auto& sge = sglist.append_uninitialized(ec);
+    auto const length = it->length();
+    if (length > max_segment ||
+        built.total_bytes > max_operation - length) {
+      built.buffer_too_large = true;
+      built.data = sglist.data();
+      built.heap_spilled = sglist.uses_heap();
+      return built;
+    }
+    auto& sge = sglist.append_uninitialized();
     fill_native_sge(sge, *it);
     ++built.count;
-    built.total_bytes += it->length();
-    built.all_empty = built.all_empty && it->length() == 0;
+    built.total_bytes += length;
+    built.all_empty = built.all_empty && length == 0;
   }
 
   built.data = sglist.data();

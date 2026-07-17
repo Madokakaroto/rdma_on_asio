@@ -104,12 +104,12 @@ public:
     }
 
     auto adapter = device_svc_.get_device();
-    impl.listener_handle_.reset(
-        create_overlapped_file(adapter->adapter_.Get(), ec));
+    auto handle = create_overlapped_file(adapter->adapter_.Get(), ec);
     if (ec) {
       ASIO_ERROR_LOCATION(ec);
       return;
     }
+    impl.listener_handle_.reset(handle);
 
     impl.listener_.Attach(
         create_listener(adapter->adapter_.Get(),
@@ -201,8 +201,7 @@ public:
     }
 
     connector_handle.adapter_ = impl.adapter_;
-    connector_handle.overlapped_handle_.reset(
-        create_overlapped_file(impl.adapter_->adapter_.Get(), ec));
+    auto handle = create_overlapped_file(impl.adapter_->adapter_.Get(), ec);
     if (ec) {
       typename op::ptr p = {asio::detail::addressof(handler),
                             op::ptr::allocate(handler), 0};
@@ -213,6 +212,7 @@ public:
       p.v = p.p = 0;
       return;
     }
+    connector_handle.overlapped_handle_.reset(handle);
 
     connector_handle.connector_.Attach(
         create_connector(impl.adapter_->adapter_.Get(),

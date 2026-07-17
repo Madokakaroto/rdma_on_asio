@@ -230,6 +230,38 @@ void async_accept_without_use_device_completes_device_not_registered()
   ASIO_CHECK(got == rdma::rdma_errc::device_not_registered);
 }
 
+void move_accept_without_use_device_returns_empty_queue_pair()
+{
+  asio::io_context io;
+  rdma::ibv_connector<rdma::tcp> connector(io);
+  bool called = false;
+  bool returned_inline = true;
+  asio::error_code got;
+
+  connector.async_accept(
+      io, asio::const_buffer{},
+      [&](asio::error_code ec, rdma::ibv_queue_pair qp) {
+        called = true;
+        got = ec;
+        ASIO_CHECK(!returned_inline);
+        ASIO_CHECK(!qp.is_bound());
+        ASIO_CHECK(qp.native_handle() == nullptr);
+      });
+  returned_inline = false;
+
+  ASIO_CHECK(!called);
+  ASIO_CHECK(io.run() == 1);
+  ASIO_CHECK(called);
+  ASIO_CHECK(got == rdma::rdma_errc::device_not_registered);
+}
+
+void compile_poll_move_accept(rdma::ibv_connector<rdma::tcp>& connector,
+                              rdma::ibv_completion_queue& cq)
+{
+  connector.async_accept(
+      cq, [](asio::error_code, rdma::ibv_queue_pair) {});
+}
+
 void use_device_null_device()
 {
   asio::io_context io;
@@ -269,6 +301,7 @@ ASIO_TEST_SUITE
   ASIO_TEST_CASE(listener_unopened_async_get_connection_guards)
   ASIO_TEST_CASE(async_connect_without_use_device_completes_device_not_registered)
   ASIO_TEST_CASE(async_accept_without_use_device_completes_device_not_registered)
+  ASIO_TEST_CASE(move_accept_without_use_device_returns_empty_queue_pair)
   ASIO_TEST_CASE(use_device_null_device)
   ASIO_TEST_CASE(memory_region_null_device_throws)
 )

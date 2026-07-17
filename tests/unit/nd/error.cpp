@@ -45,6 +45,15 @@ void native_cancel_is_not_user_visible_cancellation()
   ASIO_CHECK(user_cancel == asio::error::operation_aborted);
 }
 
+void completion_status_has_shared_cancellation_mapping()
+{
+  ASIO_CHECK(!rdma::detail::completion_status_to_error(ND_SUCCESS));
+  ASIO_CHECK(rdma::detail::completion_status_to_error(ND_CANCELED) ==
+             asio::error::operation_aborted);
+  ASIO_CHECK(rdma::detail::completion_status_to_error(ND_INVALID_PARAMETER) ==
+             rdma::nd_errc::invalid_parameter);
+}
+
 void enum_conversion()
 {
   static_assert(std::is_error_code_enum_v<rdma::nd_errc>);
@@ -61,5 +70,6 @@ ASIO_TEST_SUITE
   ASIO_TEST_CASE(native_messages)
   ASIO_TEST_CASE(pending_is_internal_diagnostic_only)
   ASIO_TEST_CASE(native_cancel_is_not_user_visible_cancellation)
+  ASIO_TEST_CASE(completion_status_has_shared_cancellation_mapping)
   ASIO_TEST_CASE(enum_conversion)
 )

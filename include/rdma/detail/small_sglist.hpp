@@ -5,8 +5,6 @@
 #include <cstddef>
 #include <memory>
 
-#include "asio/error.hpp"
-
 namespace asio::rdma::detail {
 
 template <class NativeSge>
@@ -16,6 +14,7 @@ struct built_sglist {
   std::size_t total_bytes = 0;
   bool all_empty = true;
   bool too_many_sge = false;
+  bool buffer_too_large = false;
   bool heap_spilled = false;
 };
 
@@ -34,10 +33,11 @@ class small_sglist {
     size_ = 0;
   }
 
-  bool reserve(std::size_t count, asio::error_code& ec) {
+  // Allocation follows the normal C++ throwing-allocation contract. In
+  // particular, std::bad_alloc is not translated to an error_code.
+  void reserve(std::size_t count) {
     if (count <= inline_sge_count) {
-      ec.clear();
-      return true;
+      return;
     }
     if (count > heap_capacity_) {
       auto heap = std::make_unique<NativeSge[]>(count);
@@ -50,8 +50,6 @@ class small_sglist {
         data_ = heap_.get();
       }
     }
-    ec.clear();
-    return true;
   }
 
   void resize(std::size_t count) {
@@ -64,8 +62,7 @@ class small_sglist {
     auto const old_size = size_;
     auto const move_heap_to_inline =
         count <= inline_sge_count && old_data == heap_.get();
-    asio::error_code ec;
-    reserve(count, ec);
+    reserve(count);
     auto* new_data = count <= inline_sge_count ? inline_.data() : heap_.get();
     if (move_heap_to_inline) {
       std::copy_n(old_data, (std::min)(old_size, count), new_data);
@@ -74,15 +71,13 @@ class small_sglist {
     size_ = count;
   }
 
-  NativeSge& append_uninitialized(asio::error_code& ec) {
+  NativeSge& append_uninitialized() {
     auto const index = size_;
     auto const target = size_ + 1;
     if (target > inline_sge_count && target > heap_capacity_) {
       auto const doubled = heap_capacity_ == 0 ? inline_sge_count * 2
                                                : heap_capacity_ * 2;
-      reserve((std::max)(target, doubled), ec);
-    } else {
-      ec.clear();
+      reserve((std::max)(target, doubled));
     }
     if (!data_) {
       data_ = inline_.data();
@@ -90,7 +85,6 @@ class small_sglist {
       data_ = heap_.get();
     }
     size_ = target;
-    ec.clear();
     return data_[index];
   }
 

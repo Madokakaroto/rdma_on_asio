@@ -39,8 +39,8 @@ private:
                           asio::error_code const& ec,
                           std::size_t /*bytes_transferred*/) {
     rdma_write_op* o = static_cast<rdma_write_op*>(base);
-    if (!ec) {
-      o->bytes_transferred_ = buffer_size(o->get_buffer_sequence());
+    if (ec) {
+      o->bytes_transferred_ = 0;
     }
 
     ptr p = {asio::detail::addressof(o->handler_), o, o};

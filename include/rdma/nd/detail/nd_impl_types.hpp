@@ -9,10 +9,14 @@
 
 namespace asio::rdma::detail {
 
+inline bool is_closable_handle(HANDLE handle) noexcept {
+  return handle != nullptr && handle != INVALID_HANDLE_VALUE;
+}
+
 // raii handler
 struct handle_deleter {
-  void operator()(HANDLE handle) const {
-    if (handle != INVALID_HANDLE_VALUE || handle != NULL) {
+  void operator()(HANDLE handle) const noexcept {
+    if (is_closable_handle(handle)) {
       ::CloseHandle(handle);
     }
   }

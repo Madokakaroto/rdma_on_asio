@@ -66,6 +66,37 @@ void test_connector_open() {
   std::cout << "[PASS] connector open (event channel + cm_id created)\n";
 }
 
+void test_accept_on_registered_but_unopened_connector() {
+  asio::io_context io;
+  auto device = asio::rdma::ibv_device_manager_t::instance()
+                    .get_first_available_device({});
+  asio::error_code ec;
+  asio::rdma::use_device(io, device, {}, ec);
+  if (ec) {
+    std::cout << "[SKIP] unopened accept guard: " << ec.message() << "\n";
+    return;
+  }
+
+  asio::rdma::ibv_completion_queue cq(device);
+  ec = asio::error::operation_aborted;
+  assert(cq.poll(ec) == 0);
+  assert(!ec);
+  ec = asio::error::operation_aborted;
+  assert(cq.poll_one(ec) == 0);
+  assert(!ec);
+  asio::rdma::ibv_queue_pair qp(cq);
+  asio::rdma::ibv_connector<tcp> connector(io);
+  bool called = false;
+  connector.async_accept(qp, [&](asio::error_code accept_ec) {
+    called = true;
+    ec = accept_ec;
+  });
+  io.run();
+  assert(called);
+  assert(ec == asio::rdma::rdma_errc::invalid_handle);
+  std::cout << "[PASS] accept rejects registered but unopened connector\n";
+}
+
 // Compile-only coverage of the async surface (full ESTABLISHED needs a peer).
 void compile_only_async_surface(bool run) {
   if (!run) {
@@ -105,6 +136,7 @@ int main() {
   try {
     test_listener_open_bind_listen();
     test_connector_open();
+    test_accept_on_registered_but_unopened_connector();
     compile_only_async_surface(false);
     std::cout << "\nAll ibv_connector/listener tests passed.\n";
     return 0;

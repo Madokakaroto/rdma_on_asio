@@ -12,7 +12,7 @@ namespace asio::rdma {
 
 nd_memory_region::nd_memory_region(nd_device_ptr const& device, void* addr,
                                    std::size_t length,
-                                   mr_acccess_flag_t flag, int extra_flag)
+                                   mr_access_flag_t flag, int extra_flag)
     : mr_(throw_reg_mr(device, addr, length, flag, extra_flag))
     , addr_(addr)
     , length_(length)
@@ -43,7 +43,7 @@ rdma_remote_addr_t nd_memory_region::remote_addr(std::size_t offset,
 
 detail::nd2_memory_region_ptr nd_memory_region::throw_reg_mr(
     nd_device_ptr const& device, void* addr, std::size_t length,
-    mr_acccess_flag_t flag, int extra_flag) {
+    mr_access_flag_t flag, int extra_flag) {
   if (!device) {
     asio::detail::throw_error(rdma_errc::invalid_device);
   }
@@ -65,20 +65,18 @@ const_buffer nd_memory_region::slice(std::size_t offset,
 }
 
 mutable_buffer nd_memory_region::slice(void* addr, std::size_t length) {
-  auto const ptr_diff = reinterpret_cast<std::uint8_t*>(addr) -
-                        reinterpret_cast<std::uint8_t*>(this->addr());
-  if (ptr_diff > 0) {
-    return slice(static_cast<std::size_t>(ptr_diff), length);
+  if (auto const offset =
+          detail::mr_offset_of(this->addr(), this->length(), addr, length)) {
+    return slice(*offset, length);
   }
   return mutable_buffer{};
 }
 
 const_buffer nd_memory_region::slice(void const* addr,
                                      std::size_t length) const {
-  auto const ptr_diff = reinterpret_cast<std::uint8_t const*>(addr) -
-                        reinterpret_cast<std::uint8_t const*>(this->addr());
-  if (ptr_diff > 0) {
-    return cslice(static_cast<std::size_t>(ptr_diff), length);
+  if (auto const offset =
+          detail::mr_offset_of(this->addr(), this->length(), addr, length)) {
+    return cslice(*offset, length);
   }
   return const_buffer{};
 }

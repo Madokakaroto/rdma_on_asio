@@ -1,6 +1,7 @@
 #include <array>
 #include <cstdint>
 #include <list>
+#include <limits>
 #include <vector>
 
 #include "unit_test.hpp"
@@ -148,6 +149,29 @@ void builder_reports_all_empty_and_too_many_sge()
   ASIO_CHECK(limited.total_bytes == 2);
 }
 
+void builder_rejects_unrepresentable_lengths()
+{
+  std::array<unsigned char, 1> storage{};
+  auto const too_large =
+      static_cast<std::size_t>((std::numeric_limits<std::uint32_t>::max)()) + 1;
+  std::array<rdma::const_buffer, 1> segment = {
+      rdma::const_buffer(storage.data(), too_large, 1),
+  };
+  rdma::detail::ibv_sglist_t sglist;
+  auto built = rdma::detail::build_native_sglist(segment, sglist);
+  ASIO_CHECK(built.buffer_too_large);
+  ASIO_CHECK(built.count == 0);
+
+  std::array<rdma::const_buffer, 2> total = {
+      rdma::const_buffer(storage.data(),
+                         (std::numeric_limits<std::uint32_t>::max)(), 1),
+      rdma::const_buffer(storage.data(), 1, 1),
+  };
+  built = rdma::detail::build_native_sglist(total, sglist);
+  ASIO_CHECK(built.buffer_too_large);
+  ASIO_CHECK(built.count == 1);
+}
+
 ASIO_TEST_SUITE
 (
   "ibv/buffer",
@@ -158,4 +182,5 @@ ASIO_TEST_SUITE
   ASIO_TEST_CASE(sglist_spills_to_heap_after_inline_capacity)
   ASIO_TEST_CASE(sglist_reuses_heap_capacity)
   ASIO_TEST_CASE(builder_reports_all_empty_and_too_many_sge)
+  ASIO_TEST_CASE(builder_rejects_unrepresentable_lengths)
 )

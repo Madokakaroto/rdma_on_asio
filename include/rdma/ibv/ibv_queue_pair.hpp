@@ -147,7 +147,7 @@ public:
                    ibv_remote_addr_t const& remote_addr, WriteToken&& token) {
     return asio::async_initiate<WriteToken,
                                 void(asio::error_code, std::size_t)>(
-        [this, &remote_addr](auto handler, auto const& bufs) {
+        [this, remote_addr](auto handler, auto const& bufs) {
           if (io_ctx_) {
             (*verbs_svc_)
                 .async_write(impl_, bufs, remote_addr, handler,
@@ -165,7 +165,7 @@ public:
                   ibv_remote_addr_t const& remote_addr, ReadToken&& token) {
     return asio::async_initiate<ReadToken,
                                 void(asio::error_code, std::size_t)>(
-        [this, &remote_addr](auto handler, auto const& bufs) {
+        [this, remote_addr](auto handler, auto const& bufs) {
           if (io_ctx_) {
             (*verbs_svc_)
                 .async_read(impl_, bufs, remote_addr, handler,

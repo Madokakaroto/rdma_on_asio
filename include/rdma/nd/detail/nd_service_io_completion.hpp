@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "asio/detail/config.hpp"
-#include "asio/detail/handler_alloc_helpers.hpp"
 #include "asio/detail/op_queue.hpp"
 #include "asio/execution_context.hpp"
 #include "asio/detail/win_iocp_io_context.hpp"
@@ -62,19 +61,17 @@ public:
   ASIO_DECL void ensure_poller_started();
 
 private:
-  // Single-in-flight, self-perpetuating CQ poller. Each cycle uses a fresh IOCP
-  // overlapped op (allocated in arm_poller), so only one is ever outstanding --
-  // GetResults is serialized. On completion it drains+dispatches the CQ and
-  // re-arms; owner == nullptr (io_context shutdown) frees without re-arming.
+  // Single-in-flight, self-perpetuating member poller. OVERLAPPED state is reset
+  // before each re-arm, avoiding a heap allocation per notification cycle.
   class nd_poll_wc_op final : public asio::detail::operation {
   public:
     using base_type = asio::detail::operation;
-    struct Handler {};
-    ASIO_DEFINE_HANDLER_PTR(nd_poll_wc_op);
 
     explicit nd_poll_wc_op(nd_io_completion_service* svc)
         : base_type(&nd_poll_wc_op::do_complete), svc_(svc) {
     }
+
+    void reset_overlapped() noexcept { reset(); }
 
   private:
     ASIO_DECL static void do_complete(void* owner, base_type* base,
@@ -88,14 +85,14 @@ private:
 
   ASIO_DECL void poll_and_dispatch(void* owner);
 
-  // Arm (or re-arm) the single poller: allocate a fresh overlapped op and request
-  // an IOCP completion notification for the next CQ event.
+  // Arm (or re-arm) the reusable poller and request an IOCP notification.
   ASIO_DECL void arm_poller();
 
   asio::detail::win_iocp_io_context& scheduler_;
   nd2_completion_queue_ptr cq_;
   unique_handle_t cq_handle_;
   std::vector<native_wc_t> wc_buf_;
+  nd_poll_wc_op poller_{this};
   std::atomic<bool> poller_started_{false};
 };
 

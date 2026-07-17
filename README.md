@@ -93,16 +93,16 @@ std::array<char, 256> request{};                                    // receives 
 auto [ec, conn, request_len] =
     co_await listener.async_get_connection(asio::buffer(request), nothrow);  // -> a connector
 
-rdma_queue_pair qp(io);
-co_await conn.async_accept(qp, nothrow);                            // QP created during accept (no reply pd)
-// (to send reply pd: co_await conn.async_accept(qp, asio::buffer(reply), nothrow);)
+auto [accept_ec, qp] = co_await conn.async_accept(io, nothrow);     // move-accept returns a bound QP
+// (to send reply pd: conn.async_accept(io, asio::buffer(reply), nothrow))
 // ... qp.async_recv / qp.async_send ...
 ```
 
 ### Poll mode (manual completion queue)
 
-Create a standalone `rdma_completion_queue`, bind the queue pair to it with the
-**`(cq)` constructor -- no `io_context`** -- and reap data-plane completions yourself with
+Create a standalone `rdma_completion_queue`, bind a client queue pair with the
+**`(cq)` constructor -- no `io_context`** -- or have server move-accept return one with
+`conn.async_accept(cq, ...)`, then reap data-plane completions yourself with
 `cq.poll()` / `cq.poll_one()`. With a non-`io_context`-bound completion token (a callback or
 `use_future`, *not* `use_awaitable`), the handler fires **inline on the thread that calls
 `poll()`**, so the data plane never touches an `io_context`. The control-plane handshake
@@ -162,7 +162,7 @@ Include `rdma/rdma.hpp`. All names live in `namespace asio::rdma`.
 | `use_device(io, device, config = {})` | Install the per-`io_context` completion service for `device`; sets the operating config. Returns `void`; share one `device` across multiple `io_context`s by calling it on each |
 | `rdma_device_ptr` | Handle to a device (from `get_first_available_device`) |
 | `rdma_memory_region` | RAII memory region; `slice()` / `cslice()` (or `asio::rdma::buffer(mr[, off, n])`) produce value-semantic `const_buffer` / `mutable_buffer` (`{addr, len, lkey}`); `remote_addr(off, n)` -- `{addr, rkey}` to advertise a sub-range to a peer |
-| `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, request, reply)` -- `(ec, reply_len)` (or no-reply `async_connect(qp, ep, request)` -- `(ec)`) / `async_accept(qp, reply)` -- `(ec)` (or no-reply `async_accept(qp)`) / `disconnect()` (sync) |
+| `rdma_connector<tcp>` | Control plane: `open(port_space)` / `async_connect(qp, ep, request, reply)` -- `(ec, reply_len)` / move-accept `async_accept(io_or_cq, reply)` -- `(ec, queue_pair)`; the legacy `async_accept(qp, reply)` overload remains available / `disconnect()` (sync) |
 | `rdma_listener<tcp>` | Server: `open(port_space)` / `bind(port)` / `listen` / `async_get_connection(request)` -- `(ec, connector, request_len)` (recv the client's request pd) / `cancel()` (abort pending get; listener stays reusable) |
 | `rdma_queue_pair` | Data plane: `async_send` / `async_recv` / `async_read` / `async_write`. Binds to a completion mechanism: `rdma_queue_pair(io)` = event-driven; `rdma_queue_pair(cq)` = poll-mode (io_context-free data plane). `bind()` (deferred) / `is_bound()` / `bound_type()` -- `completion_mode` |
 | `rdma_completion_queue` | Standalone poll-mode CQ; `poll()` / `poll_one()` |
@@ -191,7 +191,8 @@ co_await qp.async_recv(scatter, token);    // scatter the recv across two MRs
 A single buffer is a 1-element sequence, so the plain `qp.async_send(mr.cslice(...))` spelling is
 unchanged. Posting more segments than the device's `max_send_sge` / `max_recv_sge` is rejected
 before it reaches the HCA with `rdma_errc::too_many_sge` (a clean library error, not a raw
-HW failure). The local SGE only ever uses `lkey`; for RDMA read/write the **remote** target is a
+HW failure). A segment or aggregate operation larger than the native 32-bit completion/SGE
+limit is rejected with `rdma_errc::buffer_too_large`. The local SGE only ever uses `lkey`; for RDMA read/write the **remote** target is a
 separate `rdma_remote_addr_t` carrying the peer's `rkey` (from its `mr.remote_addr(off, n)`).
 
 ### Private data (connect/accept)
@@ -206,12 +207,14 @@ auto [ec, reply_len] = co_await conn.async_connect(qp, ep, asio::buffer(req),
                                                    asio::buffer(reply), token);
 // server: receive the client's request, then send a reply
 auto [ec, conn, request_len] = co_await lis.async_get_connection(asio::buffer(req), token);
-co_await conn.async_accept(qp, asio::buffer(reply), token);
+auto [accept_ec, qp] = co_await conn.async_accept(io, asio::buffer(reply), token);
 ```
 
 Notes:
 - **Don't need the received pd?** Use the convenience overloads: `async_connect(qp, ep, request, token)`
-  (completion `void(ec)`, no `reply_len`) and `async_accept(qp, token)` (send no reply).
+  (completion `void(ec)`, no `reply_len`) and `async_accept(io_or_cq, token)` (send no reply).
+- Move-accept is a control-plane operation: its callback is driven by the connector's
+  `io_context`; the supplied `io_context` or CQ selects only the returned QP's data-plane route.
 - Each direction is independent -- one side may send while the other sends nothing (pass `{}`).
 - **The received length is rdma_cm's transport-padded length, not the sender's exact length**
   (the receiver gets a fixed zero-filled field). If you need the exact length, frame it yourself

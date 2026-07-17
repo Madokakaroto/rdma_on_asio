@@ -93,6 +93,36 @@ void test_connector_open() {
   std::cout << "[PASS] connector open\n";
 }
 
+void test_accept_on_registered_but_unopened_connector() {
+  asio::io_context io;
+  auto device = first_device();
+  asio::error_code ec;
+  rdma::use_device(io, device, rdma::nd_config_t{}, ec);
+  if (ec) {
+    std::cout << "[SKIP] unopened accept guard: " << ec.message() << "\n";
+    return;
+  }
+
+  rdma::nd_completion_queue cq(device);
+  ec = asio::error::operation_aborted;
+  assert(cq.poll(ec) == 0);
+  assert(!ec);
+  ec = asio::error::operation_aborted;
+  assert(cq.poll_one(ec) == 0);
+  assert(!ec);
+  rdma::nd_queue_pair qp(cq);
+  rdma::nd_connector<tcp> connector(io);
+  bool called = false;
+  connector.async_accept(qp, [&](asio::error_code accept_ec) {
+    called = true;
+    ec = accept_ec;
+  });
+  io.run();
+  assert(called);
+  assert(ec == rdma::rdma_errc::invalid_handle);
+  std::cout << "[PASS] accept rejects registered but unopened connector\n";
+}
+
 void compile_only_async_surface(bool run) {
   if (!run) {
     return;
@@ -130,6 +160,7 @@ int main() {
     test_open_without_use_device_fails();
     test_listener_open_bind_listen();
     test_connector_open();
+    test_accept_on_registered_but_unopened_connector();
     compile_only_async_surface(false);
     std::cout << "\nAll nd_connector/listener tests passed.\n";
     return 0;

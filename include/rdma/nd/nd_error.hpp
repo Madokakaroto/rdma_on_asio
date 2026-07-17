@@ -74,6 +74,20 @@ ASIO_DECL std::error_code make_error_code(nd_errc e);
 ASIO_DECL std::error_code make_system_error_code(int e);
 
 ASIO_DECL void throw_error(std::error_code const& ec);
+
+namespace detail {
+
+inline asio::error_code completion_status_to_error(HRESULT status) {
+  if (status == ND_SUCCESS) {
+    return {};
+  }
+  if (status == ND_CANCELED) {
+    return asio::error::operation_aborted;
+  }
+  return make_nd_error_code(status);
+}
+
+}  // namespace detail
 }
 
 namespace std {

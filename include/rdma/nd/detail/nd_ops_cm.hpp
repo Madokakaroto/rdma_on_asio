@@ -5,10 +5,10 @@
 #include "rdma/nd/nd_types.hpp"
 #include "rdma/nd/nd_error.hpp"
 
-// interfaces simular with rdma-cm
+// Interfaces similar to rdma_cm.
 namespace asio::rdma::detail {
 
-// conncetor interfaces
+// Connector interfaces.
 ASIO_DECL IND2Connector* create_connector(IND2Adapter* adapter,
                                           HANDLE overlapped_handle,
                                           asio::error_code& ec);

@@ -102,10 +102,13 @@ void ibv_io_completion_service::ibv_poll_wc_op::do_complete(
   o->svc_->on_poll_complete(owner, o->completed_);
 }
 
-// Drain the CQ, resolving each work completion to its verbs op.
+// Drain at most a bounded number of CQ batches, resolving each work completion
+// to its verbs op.
 void ibv_io_completion_service::poll_into(
     asio::detail::op_queue<rdma_verbs_op_base>& out) {
   int n = 0;
+  constexpr int max_batches_per_turn = 4;
+  int batches = 0;
   do {
     n = verbs_ops::poll_cq(cq_.get(), static_cast<int>(wc_buf_.size()),
                            wc_buf_.data());
@@ -114,7 +117,9 @@ void ibv_io_completion_service::poll_into(
         out.push(op);
       }
     }
-  } while (n > 0);
+    ++batches;
+  } while (n == static_cast<int>(wc_buf_.size()) &&
+           batches < max_batches_per_turn);
 }
 
 // Arm (or re-arm) the single poller. To close the post-before-notify race (a WR

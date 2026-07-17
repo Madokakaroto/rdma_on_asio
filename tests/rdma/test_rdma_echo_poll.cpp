@@ -3,7 +3,7 @@
 //   - The control plane (connect / accept / disconnect over rdma_cm / ND) runs on
 //     an io_context, as always.
 //   - The data plane runs against a user-owned standalone completion_queue. The
-//     queue pair is bound to it with rdma_queue_pair(cq) -- note: NO io_context.
+//     move-accept binds the returned queue pair to it -- note: NO io_context.
 //   - A dedicated thread spins cq.poll(). Data-plane ops use as_tuple(use_future);
 //     the handler that sets the future fires INLINE on the poll thread inside
 //     cq.poll() (the QP uses system_executor for poll-mode completions), so the
@@ -20,6 +20,7 @@
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <utility>
 #include <cstring>
 
 #include "asio/io_context.hpp"
@@ -77,11 +78,10 @@ void run_server(asio::io_context& io_ctx, rdma::rdma_device_ptr const& device,
   listener.listen();
   std::cout << "RDMA_CTEST_READY role=server port=" << port << std::endl;
 
-  // Standalone CQ declared before the connector so it outlives the QP, which is
-  // owned by the connection and torn down when `conn` is destroyed.
+  // Standalone CQ declared before the connector so it outlives the returned QP.
   rdma::rdma_completion_queue cq(device);
   rdma::rdma_connector<tcp> conn(io_ctx);  // filled by async_get_connection
-  rdma::rdma_queue_pair qp(cq);            // poll-mode QP: bound to cq, no io
+  rdma::rdma_queue_pair qp;
 
   // --- control plane: get connection (fill form, on the io_context) ---
   std::array<char, 256> req_pd_buf{};
@@ -102,12 +102,21 @@ void run_server(asio::io_context& io_ctx, rdma::rdma_device_ptr const& device,
   // --- control plane: accept (on the io_context) ---
   asio::error_code accept_ec;
   std::string reply_pd = "server-hello";
-  conn.async_accept(qp, asio::buffer(reply_pd),
-                    [&](asio::error_code ec) { accept_ec = ec; });
+  conn.async_accept(
+      cq, asio::buffer(reply_pd),
+      [&](asio::error_code ec, rdma::rdma_queue_pair accepted_qp) {
+        accept_ec = ec;
+        qp = std::move(accepted_qp);
+      });
   io_ctx.run();
   io_ctx.restart();
   if (accept_ec) {
     std::cerr << "[server] accept failed: " << accept_ec.message() << "\n";
+    return;
+  }
+  if (!qp.is_bound() || qp.native_handle() == nullptr ||
+      qp.bound_type() != rdma::completion_mode::poll) {
+    std::cerr << "[server] move-accept returned an unusable poll QP\n";
     return;
   }
   std::cout << "[server] connection accepted\n";

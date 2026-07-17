@@ -19,18 +19,22 @@ template <typename Handler, typename IoExecutor>
 class nd_accept_op final : public nd_op_base {
 private:
   std::atomic<connect_state>* state_;
+  bool started_ = false;
   Handler handler_;
   asio::detail::handler_work<Handler, IoExecutor> work_;
 
 public:
   ASIO_DEFINE_HANDLER_PTR(nd_accept_op);
-  nd_accept_op(IND2Connector* conncetor, std::atomic<connect_state>* state,
+  nd_accept_op(IND2Connector* connector, std::atomic<connect_state>* state,
                Handler& handler, const IoExecutor& io_ex)
-      : nd_op_base(conncetor, &nd_op_base::default_process,
+      : nd_op_base(connector, &nd_op_base::default_process,
                    &nd_accept_op::do_complete)
       , state_(state)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {}
+
+  Handler& completion_handler() noexcept { return handler_; }
+  void mark_started() noexcept { started_ = true; }
 
 private:
   static void do_complete(void* owner, asio::detail::operation* base,
@@ -40,9 +44,9 @@ private:
 
    nd_accept_op* o = static_cast<nd_accept_op*>(base);
 
-   if (owner && !ec && o->state_) {
+   if (owner && o->started_ && !ec && o->state_) {
      o->state_->store(connect_state::connected, std::memory_order_release);
-   } else if (owner && ec == asio::error::operation_aborted && o->state_) {
+   } else if (owner && o->started_ && ec && o->state_) {
      o->state_->store(connect_state::closed, std::memory_order_release);
    }
 

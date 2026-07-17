@@ -10,6 +10,7 @@
 #include "asio/io_context.hpp"
 #include "rdma/ibv/ibv_queue_pair.hpp"
 #include "rdma/ibv/detail/ibv_service_connector.hpp"
+#include "rdma/detail/move_accept_handler.hpp"
 
 namespace asio::rdma::detail {
 
@@ -181,6 +182,61 @@ public:
   template <typename AcceptToken>
   auto async_accept(ibv_queue_pair& qp, AcceptToken&& token) {
     return async_accept(qp, asio::const_buffer{},
+                        std::forward<AcceptToken>(token));
+  }
+
+  template <typename AcceptToken>
+  auto async_accept(asio::io_context& qp_io,
+                    asio::const_buffer outgoing_private_data,
+                    AcceptToken&& token) {
+    return asio::async_initiate<
+        AcceptToken, void(asio::error_code, ibv_queue_pair)>(
+        [this, outgoing_private_data](auto handler, asio::io_context* target) {
+          ibv_queue_pair qp;
+          asio::error_code bind_ec;
+          qp.bind(*target, bind_ec);
+          using adapter_type = detail::move_accept_handler<
+              ibv_queue_pair, std::decay_t<decltype(handler)>>;
+          adapter_type adapter{std::move(qp), std::move(handler)};
+          auto io_ex = impl_.get_executor();
+          impl_.get_service().async_move_accept(
+              impl_.get_implementation(), bind_ec, outgoing_private_data,
+              adapter, io_ex);
+        },
+        token, &qp_io);
+  }
+
+  template <typename AcceptToken>
+  auto async_accept(asio::io_context& qp_io, AcceptToken&& token) {
+    return async_accept(qp_io, asio::const_buffer{},
+                        std::forward<AcceptToken>(token));
+  }
+
+  template <typename AcceptToken>
+  auto async_accept(ibv_completion_queue& cq,
+                    asio::const_buffer outgoing_private_data,
+                    AcceptToken&& token) {
+    return asio::async_initiate<
+        AcceptToken, void(asio::error_code, ibv_queue_pair)>(
+        [this, outgoing_private_data](auto handler,
+                                     ibv_completion_queue* target) {
+          ibv_queue_pair qp;
+          asio::error_code bind_ec;
+          qp.bind(*target, bind_ec);
+          using adapter_type = detail::move_accept_handler<
+              ibv_queue_pair, std::decay_t<decltype(handler)>>;
+          adapter_type adapter{std::move(qp), std::move(handler)};
+          auto io_ex = impl_.get_executor();
+          impl_.get_service().async_move_accept(
+              impl_.get_implementation(), bind_ec, outgoing_private_data,
+              adapter, io_ex);
+        },
+        token, &cq);
+  }
+
+  template <typename AcceptToken>
+  auto async_accept(ibv_completion_queue& cq, AcceptToken&& token) {
+    return async_accept(cq, asio::const_buffer{},
                         std::forward<AcceptToken>(token));
   }
 

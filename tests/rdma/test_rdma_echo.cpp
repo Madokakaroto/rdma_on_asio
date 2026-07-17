@@ -50,11 +50,15 @@ asio::awaitable<void> run_server(asio::io_context& io_ctx,
   std::cout << "[server] connection request; client private data: \""
             << pd_view(asio::buffer(req_pd_buf.data(), req_pd_len)) << "\"\n";
 
-  rdma::rdma_queue_pair qp(io_ctx);
   std::string reply_pd = "server-hello";
-  auto [ec_accept] = co_await conn.async_accept(qp, asio::buffer(reply_pd), use_nothrow);
+  auto [ec_accept, qp] =
+      co_await conn.async_accept(io_ctx, asio::buffer(reply_pd), use_nothrow);
   if (ec_accept) {
     std::cerr << "[server] accept failed: " << ec_accept.message() << "\n";
+    co_return;
+  }
+  if (!qp.is_bound() || qp.native_handle() == nullptr) {
+    std::cerr << "[server] move-accept returned an unusable queue pair\n";
     co_return;
   }
   std::cout << "[server] connection accepted\n";

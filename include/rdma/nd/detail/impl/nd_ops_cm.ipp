@@ -5,10 +5,10 @@
 
 #include "asio/detail/push_options.hpp"
 
-// interfaces simular with rdma-cm
+// Interfaces similar to rdma_cm.
 namespace asio::rdma::detail {
 
-// conncetor interfaces
+// Connector interfaces.
 IND2Connector* create_connector(IND2Adapter* adapter,
                                 HANDLE overlapped_handle,
                                 asio::error_code& ec) {

@@ -66,10 +66,10 @@ private:
   asio::detail::handler_work<Handler, IoExecutor> work_;
 
 public:
-  nd_connect_op(IND2Connector* conncetor, std::atomic<connect_state>* state,
+  nd_connect_op(IND2Connector* connector, std::atomic<connect_state>* state,
                 asio::mutable_buffer reply, Handler& handler,
                 const IoExecutor& io_ex)
-      : nd_connect_op_base(conncetor, state, reply,
+      : nd_connect_op_base(connector, state, reply,
                            &nd_connect_op::do_complete)
       , handler_(ASIO_MOVE_CAST(Handler)(handler))
       , work_(handler_, io_ex) {}
@@ -81,10 +81,14 @@ private:
    asio::error_code ec = result_ec;
    nd_connect_op* o = static_cast<nd_connect_op*>(base);
 
-   // resume the operation for the pending steps
-   auto const complete_status = o->resume_process(owner, ec);
-   if (complete_status != status_t::completed) {
-     return;
+   // owner == nullptr is scheduler shutdown/destruction. The connector service
+   // may already have released its COM object, so destruction must only free
+   // the operation and must never advance Connect -> CompleteConnect.
+   if (owner) {
+     auto const complete_status = o->resume_process(owner, ec);
+     if (complete_status != status_t::completed) {
+       return;
+     }
    }
 
    if (owner && ec && o->state_) {

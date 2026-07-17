@@ -18,7 +18,7 @@ inline result_type post_send(native_qp_t* qp, void* request_context,
   return hr;
 }
 
-// poset recv
+// Post receive.
 inline result_type post_recv(native_qp_t* qp, void* request_context,
                              native_sge_t* sge_list, size_type sge_count,
                              asio::error_code& ec) {
@@ -92,12 +92,12 @@ ASIO_DECL native_qp_t* create_qp(native_pd_t* pd,
                                  asio::error_code& ec);
 
 /// memory region ops
-ASIO_DECL ULONG to_native_access_flag(mr_acccess_flag_t access_flag,
+ASIO_DECL ULONG to_native_access_flag(mr_access_flag_t access_flag,
                                       int extra_access_flag);
 
 // register memory region
 ASIO_DECL native_mr_t* reg_mr(native_pd_t* pd, void* addr, size_t length,
-                              mr_acccess_flag_t access_flag,
+                              mr_access_flag_t access_flag,
                               int extra_access_flag, asio::error_code& ec);
 
 // deregister memory region
